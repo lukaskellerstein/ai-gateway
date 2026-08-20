@@ -1,0 +1,14 @@
+# Live values. Only .env.example is tracked, and it must never carry a real value.
+.env
+.envrc
+
+# Credentials of any kind, in case one is ever written here by hand.
+*.key
+*.pem
+.agent-token
+
+# Machine-local Claude Code overrides. settings.json IS tracked; this one never is
+# — it is where a gateway key would land if one were ever put in an `env` block.
+.claude/settings.local.json
+
+.DS_Store

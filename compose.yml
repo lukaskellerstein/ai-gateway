@@ -1,0 +1,124 @@
+# =============================================================================
+# ai-gateway — the machine-wide LLM gateway
+# Works with BOTH `podman compose up -d` and `docker compose up -d`.
+#
+# Derived from ~/Projects/Github/lukaskellerstein/ai-agent-platform/deploy/compose,
+# reduced to what a GLOBAL gateway owns. Two services, and each is load-bearing:
+#   litellm    the OpenAI-compatible endpoint every project on this machine calls
+#   postgres   virtual keys, spend logs and budget ceilings. Not published.
+#
+# WHAT WAS DELIBERATELY LEFT OUT
+#   mlflow — a trace store is a PROJECT's system of record, not the machine's.
+#     Two projects sharing one experiment namespace makes "did this get better"
+#     ambiguous, which is the one question a trace store exists to answer. So
+#     `success_callback` in litellm/config.yaml is empty: a project that wants
+#     tracing runs its own MLflow and traces client-side, or adds a callback here
+#     pointing at its own server.
+#   qdrant / nats / temporal / prometheus — none of them is a gateway concern.
+#     The platform stack parks them behind profiles; this repo does not carry
+#     definitions for services it does not run.
+#   A custom litellm image — the platform builds one only to add `mlflow-skinny`
+#     for its callback. With no callback, the stock image is the whole story, and
+#     `up -d` needs no build step. Reintroduce ./litellm/Dockerfile the day a
+#     callback needs a package the base image lacks.
+#
+# LMStudio runs NATIVELY on the host (Apple-Silicon GPU); containers reach it at
+# host.containers.internal (Podman) / host.docker.internal (Docker). See .env.
+#
+# HOST PORT 24000 — a third band, chosen so this stack coexists with both project
+# stacks rather than racing them for a port:
+#   mlflow-tutorial    holds 4000, 5432, 5555, 3000, 6333/4, 7233, 8080, 9090
+#   ai-agent-platform  holds the 1xxxx band (14000, 15000, ...)
+#   ai-gateway         2xxxx — litellm 4000 -> 24000
+# The failure this avoids is not a bind error, which is loud and obvious. It is
+# the SILENT one: a health probe against localhost:4000 that another project's
+# gateway answers, going green against a service from a different stack. Container-
+# internal ports are unchanged — on the compose network nothing can collide.
+# =============================================================================
+
+# Every container becomes `ai-gateway-<service>-N`. Without this, compose names the
+# project after this directory, which on a machine running several stacks says
+# nothing about who owns what.
+name: ai-gateway
+
+services:
+  # ---------------------------------------------------------------------------
+  # Postgres — the gateway's own store: virtual keys, teams, spend logs.
+  #
+  # NO PUBLISHED HOST PORT, deliberately. Only litellm connects to it, over the
+  # compose network. Publishing it buys nothing and guarantees a collision (5432
+  # is mlflow-tutorial's). For a shell: `podman compose exec postgres psql -U postgres`.
+  #
+  # The `litellm` database comes from POSTGRES_DB below — no init.sql needed for a
+  # single-database stack. LiteLLM applies its own migrations on first startup.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: docker.io/postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: litellm
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d litellm"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # ---------------------------------------------------------------------------
+  # LiteLLM proxy — one OpenAI-compatible endpoint (also /v1/messages) for every
+  # provider. http://localhost:24000, admin UI at /ui.
+  # ---------------------------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    ports:
+      - "24000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    extra_hosts:
+      # Lets the container reach LMStudio on the host under Docker (Podman adds
+      # host.containers.internal automatically; this covers both).
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
+    environment:
+      # The ADMINISTRATIVE credential: it mints virtual keys and has no spending
+      # ceiling of its own. Callers get a budgeted virtual key, never this.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master}
+      # REQUIRED, not optional. Without it the proxy boots in no-DB mode: completions
+      # keep working while `/key/generate` fails with {"error":"No connected db."} —
+      # the worst failure mode for a budget guardrail, because callers then proceed
+      # uncapped and nothing looks broken.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/litellm
+      # store_prompts_in_spend_logs (config.yaml) truncates each stored string at
+      # 2048 chars by default, which clips agent transcripts mid-run.
+      MAX_STRING_LENGTH_PROMPT_IN_DB: "100000"
+      # LMStudio on the host (native). Overridable in .env.
+      LM_STUDIO_API_BASE: ${LM_STUDIO_API_BASE:-http://host.containers.internal:1234/v1}
+      # Hosted providers — needed by the priced aliases (`cheap`, `standard`, `frontier`).
+      # Blank in .env on this machine: ~/Projects/.envrc already exports the real values
+      # from ~/.secrets/secrets.enc.yaml, and compose's shell environment wins over the
+      # .env file. See .env.example.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    healthcheck:
+      # /health/liveliness is unauthenticated — it answers without the master key,
+      # which /health does not. urllib rather than curl: the base image ships python
+      # and is not guaranteed to ship curl.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # First boot runs the LiteLLM schema migrations against an empty database.
+      start_period: 60s
+
+volumes:
+  postgres_data:
