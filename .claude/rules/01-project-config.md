@@ -55,17 +55,21 @@ Callers name an **alias**, never a model — the model behind an alias is expect
 to change. `litellm/config.yaml` is the authority; `README.md` has the table.
 
 - **Tiers** — pick one per call: `local`, `cheap`, `standard`, `frontier`.
-- **Roles** — asked for by *shape*, not price point: `embed`, `uncensored`.
+- **Roles** — asked for by *shape*, not price point: `embed`, `uncensored`,
+  `local-31b` (the dense 31B on the host GPU — `standard`'s weights, run here).
 - **Not vocabulary**: `cheap-free` and `standard-hf` are fallback targets only.
-  Do not tell a caller to use them.
+  Do not tell a caller to use them. `local-31b` looks like one of these and is
+  not — it is a name callers are meant to use.
 
 Two properties of this config that look like bugs and are not:
 
 - **`local` is not guaranteed to stay local.** It falls back
   `local → cheap-free → cheap` when LMStudio is unreachable, landing on the same
   weights at OpenRouter. A "free" session can therefore accrue real spend.
-  `uncensored` is the one alias with **no fallback**, deliberately — it fails
-  rather than routing a prompt to a hosted model that would see it and refuse.
+  `uncensored` and `local-31b` are the aliases with **no fallback**, deliberately
+  — `uncensored` fails rather than routing a prompt to a hosted model that would
+  see it and refuse; `local-31b` fails so that the name always means "on this
+  machine, free" (its hosted twin is simply `standard`, for callers who want it).
 - **`local` is shadow-priced** — free on this machine but carrying its
   OpenRouter twin's rate, so budget ceilings can actually trip. Anything summing
   `/spend/logs` must say whether it is reporting money billed or the cost of the

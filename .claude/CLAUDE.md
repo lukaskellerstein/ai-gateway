@@ -47,8 +47,9 @@ command): skip step 2. State what you'll do and proceed.
   bind error but the silent one: a health probe against `localhost:4000` that
   `mlflow-tutorial`'s or `ai-agent-platform`'s gateway answers, going green.
 - **Callers name aliases, never models.** `local` / `cheap` / `standard` /
-  `frontier` are tiers; `embed` / `uncensored` are roles. `cheap-free` and
-  `standard-hf` are fallback targets and **not** part of that vocabulary.
+  `frontier` are tiers; `embed` / `uncensored` / `local-31b` are roles.
+  `cheap-free` and `standard-hf` are fallback targets and **not** part of that
+  vocabulary — `local-31b` has the same shape of name and *is* vocabulary.
 - **`local` is not guaranteed to stay local** — it falls back to OpenRouter when
   LMStudio is down, so a "free" session can accrue real spend. It is also
   *shadow-priced*, so budget ceilings still apply to it.

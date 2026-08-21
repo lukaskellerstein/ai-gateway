@@ -24,11 +24,38 @@ aliases (`local`, `cheap`, `standard`, `frontier`) rather than raw model ids.
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `1` | beta headers a non-Anthropic backend does not implement |
 | `CLAUDE_CODE_ATTRIBUTION_HEADER` | `0` | drops the attribution header |
 | `API_TIMEOUT_MS` | `3600000` all-local, `600000` mixed | how long Claude Code waits before hanging up. The default expires while a local model is still reading the prompt — § *A local model is slow*. **One global value**, so a mixed config gives cloud calls the same patience |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `253952` all-local, `245760` mixed | the alias's real input window. Without it Claude Code assumes **200000** for every alias here and both the status line and auto-compact are wrong — § *The context window Claude Code assumes*. **One global value** like the timeout, so set it to the window of the alias the main loop runs on and prefer the smaller number in a mixed config |
 
 **Set all three model variables, every time.** Leave one unset and Claude Code sends the
 real Claude model id for that slot — the gateway has no such alias and answers
 `Invalid model name passed in model=claude-...`, which looks like a broken proxy and is
 just an unmapped slot.
+
+## The context window Claude Code assumes
+
+Claude Code carries a table of Anthropic model ids and their windows. An alias is not in
+it, so it falls back to **200000** and the status line reports `82k/200k` for a model whose
+real window is 253952 — the same number auto-compact fires against, so a quarter of the
+window this gateway paid a GPU for goes unused.
+
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` replaces that assumption. It is honoured **only for model
+ids that do not start with `claude-`**, which every alias here satisfies — set it in a
+first-party session and it is silently ignored, so it is safe to leave in a shell profile.
+
+The value is the alias's `max_input_tokens` from `litellm/config.yaml`, not its context
+length: the window minus the output reserve, `262144 - 8192 = 253952` for the two LMStudio
+routes. `GET /model/info` is the authority if the config has moved on.
+
+> [!warning]
+> **Never pick the `[1m]` variant in `/model`.** It appends `[1m]` to the alias — the
+> status line then reads `local[1m]` and claims a **1.0M** window. That number is
+> fabricated: Claude Code tests the name for `[1m]` before it consults anything else and
+> returns 1000000 unconditionally, so `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is never read and
+> auto-compact will not fire until four times what the gateway can accept. LiteLLM's
+> `enable_pre_call_checks` catches the overflow and `context_window_fallbacks` routes it to
+> `frontier` — so an "offline" session becomes a paid OpenAI one, the same failure the
+> `local` callout below describes, reached a different way. Pick the plain alias and the
+> status line reads `254.0k`, which is the truth.
 
 ## Get a key first
 
@@ -108,7 +135,8 @@ takes that traffic off the network entirely.
   "ANTHROPIC_DEFAULT_HAIKU_MODEL": "local",
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
   "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-  "API_TIMEOUT_MS": "600000"
+  "API_TIMEOUT_MS": "600000",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "245760"
 }
 ```
 
@@ -122,8 +150,14 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL="local" \
 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
 CLAUDE_CODE_ATTRIBUTION_HEADER=0 \
 API_TIMEOUT_MS=600000 \
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=245760 \
 claude
 ```
+
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` is `standard`'s window, not `frontier`'s, for the same
+reason the timeout is 10 minutes: one global value, and the sonnet slot is what the main
+loop runs on here. Switching to `/model opus` mid-session therefore undercounts
+`frontier` — the safe direction, since it compacts early rather than overflowing.
 
 `API_TIMEOUT_MS` is 10 minutes here, not the 60 minutes of an all-local config. Only the `haiku`
 slot is local in this layout, and background calls carry small prompts — the multi-minute
@@ -133,9 +167,10 @@ variable is global, a longer value would also be how long you wait on a wedged c
 ### `local` — LMStudio, offline, free
 
 `google/gemma-4-26b-a4b` on the host GPU. Free, private, and the 262144-token window is
-the largest of any local model here — which matters more for Claude Code than for
-anything else, because its system prompt plus tool schemas cost tens of thousands of
-tokens before you type a word. That was the pain point in the earlier course notes
+the largest of any local model here — 253952 of it input, once the 8192-token output
+reserve is taken off, which is the number `CLAUDE_CODE_MAX_CONTEXT_TOKENS` wants. That
+matters more for Claude Code than for anything else, because its system prompt plus tool
+schemas cost tens of thousands of tokens before you type a word. That was the pain point in the earlier course notes
 ("main painpoint is limited context size"); a 26B MoE at full context removes it.
 
 **Tool calling verified working, 2026-08-20.** A `/v1/messages` request carrying one tool
@@ -157,7 +192,8 @@ Read the LMStudio warning below before assuming this works.
   "ANTHROPIC_DEFAULT_HAIKU_MODEL": "local",
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
   "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-  "API_TIMEOUT_MS": "3600000"
+  "API_TIMEOUT_MS": "3600000",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "253952"
 }
 ```
 
@@ -171,6 +207,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL="local" \
 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
 CLAUDE_CODE_ATTRIBUTION_HEADER=0 \
 API_TIMEOUT_MS=3600000 \
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=253952 \
 claude
 ```
 
@@ -186,10 +223,34 @@ for anything long-running.
 > paid one. The budget cap on your key is the guardrail; `GET /spend/logs` is how you
 > notice.
 
+### `local-31b` — LMStudio, denser, never leaves the machine
+
+`google/gemma-4-31b` on the host GPU: the same weights `standard` serves from OpenRouter,
+run here instead. Same 262144 window as `local`, so configure it identically — `"local-31b"`
+in the three model variables, `API_TIMEOUT_MS=3600000`, and the same
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS=253952`.
+
+Two reasons to reach for it over `local`:
+
+- **It is dense, not MoE.** `local` is a 26B with ~4B active parameters per token;
+  this is 31B with all of them active. Better answers on hard prompts, and slower for the
+  same reason — expect the ~100 tok/s prompt-processing floor measured on the other 31B
+  below, not `local`'s speed. Its own hand-load is mandatory: it is a *different model*.
+- **It cannot become a paid call.** `local` falls back to OpenRouter when LMStudio is
+  down; this one has no chain at all and simply fails. For a session that must not leave
+  the machine — or must not spend — it is the honest choice, and the callout under `local`
+  above does not apply here.
+
+**Tool calling not yet verified on this alias.** `local` and `uncensored` are both
+verified with dates; this route is new and carries no such claim. Same gemma-4 family and
+the same `require_parameters`-free local path, so it is expected to behave like the other
+two — but expected is not verified.
+
 ### `uncensored` — LMStudio, abliterated, no safety net
 
 `gemma-4-31b-it-abliterated`, same 262144 window. Configure it exactly like `local` with
-`"uncensored"` in the three model variables and the same `API_TIMEOUT_MS=3600000`.
+`"uncensored"` in the three model variables and the same `API_TIMEOUT_MS=3600000` and
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS=253952` — the window and the output reserve are identical.
 
 **Tool calling verified working, 2026-08-21.** A `/v1/messages` request carrying one tool
 schema returned `stop_reason: "tool_use"` and a structured block
@@ -268,12 +329,13 @@ Load the model behind the alias you are actually about to use — they are diffe
 
 ```bash
 lms load google/gemma-4-26b-a4b        --context-length 262144 --parallel 1 --gpu max  # local
+lms load google/gemma-4-31b            --context-length 262144 --parallel 1 --gpu max  # local-31b
 lms load gemma-4-31b-it-abliterated    --context-length 262144 --parallel 1 --gpu max  # uncensored
 lms ps --json    # the source of truth, not the UI
 ```
 
-262144 is the maximum both models advertise; `curl -s localhost:1234/api/v0/models` reports
-`max_context_length` per model if you need to confirm after a swap.
+262144 is the maximum all three models advertise; `curl -s localhost:1234/api/v0/models`
+reports `max_context_length` per model if you need to confirm after a swap.
 
 A JIT-loaded model also gets a 1 h TTL while a hand-loaded one gets none — so a session
 that worked this morning can fail this afternoon with nothing changed.
@@ -312,6 +374,8 @@ patiently finishes a response nobody is listening for.
 | Runs a step or two, executes nothing, exits 0 | tool calls returned as text by the wrong OpenRouter provider | the provider pin in `litellm/config.yaml` — check it is intact |
 | Your env vars appear to do nothing | `.claude/settings.json` `env` block overrides them | remove the block, or put the values in it |
 | `local` session shows non-zero spend | LMStudio was down; the fallback chain ran | expected — see the callout above |
+| Status line reads `200k` on any alias | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` unset, so Claude Code assumed 200000 | set it, § *The context window Claude Code assumes* |
+| Status line reads `1.0M`, model shows `<alias>[1m]` | the `[1m]` variant was picked in `/model`; it forces 1000000 and suppresses `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `/model` → the plain alias. Overflow past 253952 otherwise falls through to paid `frontier` |
 
 Every request lands in the admin UI's Logs tab at <http://localhost:24000/ui>, prompt and
 response included (`store_prompts_in_spend_logs`). When something is wrong, look there

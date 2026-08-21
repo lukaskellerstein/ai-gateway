@@ -1,5 +1,6 @@
 # LiteLLM gateway. Call aliases, never model names: tiers local/cheap/standard/frontier,
-# roles embed + uncensored. cheap-free and standard-hf are fallback targets only.
+# roles embed + uncensored + local-31b. cheap-free and standard-hf are fallback targets
+# only — local-31b carries a suffix but is NOT one of those, it is a name to call.
 #
 # LMStudio routes assume a hand load at full context — a JIT load comes back at 8192 with
 # a 1h TTL, and the max_input_tokens below are then a lie. `lms ps --json` is the truth:
@@ -9,7 +10,7 @@
 # (titles, summaries) at once; at --parallel 4 they split one GPU four ways and a 1-token
 # request measured 34 s while big prompts sat behind it. Serialising is faster end to end.
 #
-# The 3600 s `timeout` on the two LMStudio chat routes is the same fact from the other
+# The 3600 s `timeout` on the three LMStudio chat routes is the same fact from the other
 # side. Prompt processing on this machine measures ~100 tok/s (17.6k tokens in 173 s), so
 # an agent-scale prompt needs 5-15 MINUTES before its first token and the full 253952-token
 # window needs ~42. LiteLLM's 600 s default expires mid-prompt; LMStudio then reports
@@ -36,6 +37,27 @@ model_list:
       max_tokens: 4096                   # default, not a cap; guards runaway generations
       timeout: 3600                      # see the LMStudio timeout note in the header
     model_info:                          # context − output reserve, on every route below
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # The dense 31B, unablated — `standard`'s exact weights, run here instead of at
+  # OpenRouter. Slower than `local` (31B dense vs a 26B MoE with ~4B active: every token
+  # goes through every parameter), so it is a name you pick deliberately, not a default.
+  #
+  # Absent from both fallback maps, but for a DIFFERENT reason than `uncensored` below:
+  # the hosted twin would answer this one fine — it is `standard`. The point is that
+  # `local-31b` should always mean "these weights, on this machine, free". A caller who
+  # wants the cloud twin asks for `standard` and knows they are paying for it.
+  - model_name: local-31b
+    litellm_params:
+      model: lm_studio/google/gemma-4-31b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000014   # shadow price: mirrors `standard`, the hosted twin
+      output_cost_per_token: 0.0000004
+      max_tokens: 4096                   # shared with reasoning tokens; too low returns empty content
+      timeout: 3600                      # see the LMStudio timeout note in the header
+    model_info:
       max_input_tokens: 253952
       max_output_tokens: 8192
 
@@ -132,7 +154,8 @@ litellm_settings:
 
   # On error. `local` leads to its own cloud twin, so the common hop changes where a
   # request ran, not what ran — but it reaches a PRICED route, so budget the key.
-  # `uncensored` and `embed` are absent by design, not by oversight.
+  # `local-31b`, `uncensored` and `embed` are absent by design, not by oversight — the
+  # reason differs per alias and is stated above each one.
   fallbacks:
     - {"local": ["cheap-free", "cheap"]}
     - {"cheap-free": ["cheap"]}

@@ -27,7 +27,7 @@ flowchart LR
         litellm <--> pg
     end
 
-    lms["LMStudio — native on this host<br/>Apple-Silicon GPU · :1234<br/><b>local · embed · uncensored</b>"]
+    lms["LMStudio — native on this host<br/>Apple-Silicon GPU · :1234<br/><b>local · local-31b · embed · uncensored</b>"]
     or["OpenRouter<br/><b>cheap · standard · cheap-free</b>"]
     oai["OpenAI<br/><b>frontier</b>"]
     hf["HuggingFace<br/><b>standard-hf</b>"]
@@ -69,17 +69,21 @@ Call these names, never a model name — the model behind an alias is expected t
 | Alias | Runs on | Price / 1M tokens | Context in / out | On failure |
 |:--|:--|:--|:--|:--|
 | `local` | LMStudio, `google/gemma-4-26b-a4b` | free (shadow-priced $0.12 / $0.35) | 253952 / 8192 | → `cheap-free` → `cheap` |
+| `local-31b` | LMStudio, `google/gemma-4-31b` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
 | `cheap` | OpenRouter, `google/gemma-4-26b-a4b-it` | $0.12 / $0.35 | 245760 / 16384 | → `standard` → `frontier` |
 | `standard` | OpenRouter, `google/gemma-4-31b-it` | $0.14 / $0.40 | 245760 / 16384 | → `standard-hf` → `frontier` |
 | `frontier` | OpenAI, `gpt-5.4-mini` | LiteLLM's built-in rate | provider default | → `standard` |
 | `embed` | LMStudio, `text-embedding-nomic-embed-text-v1.5` | free | 2048 | none |
 | `uncensored` | LMStudio, `gemma-4-31b-it-abliterated` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
 
-The first four are tiers — pick one per call. `embed` and `uncensored` are roles: you ask
-for them because you need that *shape* of model, not that price point.
+`local`, `cheap`, `standard` and `frontier` are tiers — pick one per call. `local-31b`,
+`embed` and `uncensored` are roles: you ask for them because you need that *shape* of
+model, not that price point — an embedding, abliterated weights, or the dense 31B kept on
+this machine.
 
 `cheap-free` and `standard-hf` also exist and are **not** part of that vocabulary — they
-are fallback targets only. Every number above, and the reasoning behind it, is in
+are fallback targets only. `local-31b` wears the same kind of suffix and is the exception:
+it is a name to call. Every number above, and the reasoning behind it, is in
 [`litellm/config.yaml`](litellm/config.yaml).
 
 ```bash
@@ -102,11 +106,12 @@ flowchart LR
     standard -->|2| frontier
     frontier --> standard
 
+    local31b["local-31b<br/>LMStudio"]
     uncensored["uncensored<br/>LMStudio"]
     embed["embed<br/>LMStudio"]
 
     classDef terminal stroke-dasharray: 4 3
-    class uncensored,embed terminal
+    class local31b,uncensored,embed terminal
 ```
 
 Two consequences that look like bugs and are not:
@@ -118,6 +123,10 @@ Two consequences that look like bugs and are not:
 - **`uncensored` has no chain at all.** A hosted twin would both refuse the request and
   see a prompt that was chosen to stay on this machine, so it fails instead. `embed` is
   likewise terminal.
+- **`local-31b` has no chain either, for a different reason.** Its hosted twin *is*
+  `standard` and would answer perfectly well — the omission is so that this name always
+  means "these weights, on this machine, free". Want the cloud twin, knowingly? Call
+  `standard`. It is the one local alias that cannot surprise you with spend.
 
 Separately, a request that *overflows* its window falls to `frontier` rather than down the
 chain above — `frontier` is the only larger window here.
@@ -188,7 +197,7 @@ ordering is the whole design.
 | Variable | Default | Used by |
 |:--|:--|:--|
 | `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential; mints keys, no ceiling |
-| `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | `local`, `embed`, `uncensored`. Docker: `host.docker.internal` |
+| `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | `local`, `local-31b`, `embed`, `uncensored`. Docker: `host.docker.internal` |
 | `OPENROUTER_API_KEY` | *(blank by design)* | `cheap`, `standard`, `cheap-free` |
 | `OPENAI_API_KEY` | *(blank by design)* | `frontier` |
 | `HF_TOKEN` | *(blank by design)* | `standard-hf` |
@@ -211,9 +220,13 @@ Load the model behind the alias you are about to use; they are different models:
 
 ```bash
 lms load google/gemma-4-26b-a4b      --context-length 262144 --parallel 1 --gpu max  # local
+lms load google/gemma-4-31b          --context-length 262144 --parallel 1 --gpu max  # local-31b
 lms load gemma-4-31b-it-abliterated  --context-length 262144 --parallel 1 --gpu max  # uncensored
 lms ps --json    # the source of truth, not the UI
 ```
+
+262144 is the maximum all three advertise. They are three separate models on one GPU —
+load the one you are about to call rather than all of them.
 
 `--parallel 1` is deliberate, and it is the flag most likely to be "improved" wrongly. An
 agent client fires its main turn and its background calls (titles, summaries) at once; at
