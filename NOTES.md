@@ -11,6 +11,14 @@ Conventions here follow
 What changes for this gateway: **port 24000**, and the model names are this repo's
 aliases (`local`, `cheap`, `standard`, `frontier`) rather than raw model ids.
 
+> [!warning]
+> **Port 24000, not 25000.** The stack also runs an MLflow AI Gateway on `25000` serving
+> the same alias names, and Claude Code **cannot** use it: MLflow's Anthropic passthrough
+> is only available for endpoints whose provider is Anthropic, and every alias here is an
+> OpenAI-protocol endpoint. Pointing `ANTHROPIC_BASE_URL` at `25000` answers
+> `Unsupported passthrough endpoint '/anthropic/v1/messages' for OpenAI provider`
+> (verified 2026-08-26). Everything below is about LiteLLM on 24000.
+
 ## The variables
 
 | Variable | Value | Why |
@@ -166,9 +174,12 @@ variable is global, a longer value would also be how long you wait on a wedged c
 
 ### `local` — LMStudio, offline, free
 
-`google/gemma-4-26b-a4b` on the host GPU. Free, private, and the 262144-token window is
-the largest of any local model here — 253952 of it input, once the 8192-token output
-reserve is taken off, which is the number `CLAUDE_CODE_MAX_CONTEXT_TOKENS` wants. That
+`google/gemma-4-26b-a4b-qat` on the host GPU — the quantisation-aware-trained build, for
+the reason given under `local-31b` below; the plain `google/gemma-4-26b-a4b` is also still
+on disk and is no longer what this alias points at. Free, private, and its 262144-token
+window is the largest here, matched but not beaten by the other full-window routes —
+253952 of it input, once the 8192-token output reserve is taken off, which is the number
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` wants. That
 matters more for Claude Code than for anything else, because its system prompt plus tool
 schemas cost tens of thousands of tokens before you type a word. That was the pain point in the earlier course notes
 ("main painpoint is limited context size"); a 26B MoE at full context removes it.
@@ -225,8 +236,13 @@ for anything long-running.
 
 ### `local-31b` — LMStudio, denser, never leaves the machine
 
-`google/gemma-4-31b` on the host GPU: the same weights `standard` serves from OpenRouter,
-run here instead. Same 262144 window as `local`, so configure it identically — `"local-31b"`
+`google/gemma-4-31b-qat` on the host GPU: the model `standard` serves from OpenRouter, run
+here instead — specifically the quantisation-aware-trained build, which is 1.04 GB smaller
+than the plain Q4_K_M one and holds up better at 4 bits, since the quantisation error is
+learned around during training rather than applied afterwards. If you have muscle memory
+for `lms load google/gemma-4-31b`, that is now the wrong model: the plain build is still on
+disk and loading it gives you weights this alias no longer points at.
+Same 262144 window as `local`, so configure it identically — `"local-31b"`
 in the three model variables, `API_TIMEOUT_MS=3600000`, and the same
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=253952`.
 
@@ -241,10 +257,10 @@ Two reasons to reach for it over `local`:
   the machine — or must not spend — it is the honest choice, and the callout under `local`
   above does not apply here.
 
-**Tool calling not yet verified on this alias.** `local` and `uncensored` are both
-verified with dates; this route is new and carries no such claim. Same gemma-4 family and
-the same `require_parameters`-free local path, so it is expected to behave like the other
-two — but expected is not verified.
+**Tool calling verified working, 2026-08-23**, on the QAT build this alias now points at.
+A `/v1/messages` request carrying one tool schema returned `stop_reason: "tool_use"` and a
+structured `{"name":"get_weather","input":{"city":"Prague"}}` block. Like `local` and
+`uncensored` it emits a `thinking` block first.
 
 ### `uncensored` — LMStudio, abliterated, no safety net
 
@@ -266,11 +282,97 @@ Two things differ from `local`, and both matter:
   every token goes through all of them. The ~100 tok/s prompt-processing figure below was
   measured on *this* model — treat it as the floor, not the average.
 
-> **`uncensored` never falls back, by design.** Every other alias has a chain;
-> `litellm/config.yaml` leaves this one out on purpose, because the hosted twin would both
+> **`uncensored` never falls back, by design.** So does no other LMStudio route except
+> `local` — but the reason here is its own: `litellm/config.yaml` leaves this one out
+> deliberately, because the hosted twin would both
 > refuse the request and see a prompt that was chosen to stay on this machine. The
 > consequence is that any failure here is terminal — there is no second route to soften it,
 > which is why a timeout on this alias surfaces as a bare `API Error`.
+
+### `local-12b` / `local-4b` / `local-3b` / `local-2b` / `local-qwen` / `reasoning` / `creative` — the rest of LMStudio
+
+Seven more local aliases, all configured the same way as `local`: the alias name in the
+three model variables and `API_TIMEOUT_MS=3600000`. Only the context number moves.
+
+| Alias | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Why you would pick it |
+|:--|:--|:--|
+| `local-12b` | `253952` | the 31B's family at a third of the weights — the one to try when `local-31b` is too slow to iterate against |
+| `local-4b` | `122880` | the Gemma ladder's bottom rungs. **Smaller window** — the E builds cap at 131072, not 262144 |
+| `local-3b` | `253952` | loads in seconds and barely touches the GPU; a different vendor (Ministral), so a useful second opinion |
+| `local-2b` | `122880` | as `local-4b`, smaller again — and note it is the *larger file* of the two-vs-three-billion pair |
+| `local-qwen` | `253952` | a 27B from outside the Gemma family, tool-trained and vision-capable, on the full window |
+| `reasoning` | `253952` | thinks before answering, and shows its work |
+| `creative` | `122880` | long-form prose. **Note the smaller window** — this model's is 131072, not 262144 |
+
+**Tool calling verified working on `local-3b` and `local-qwen`, 2026-08-23.** A
+`/v1/messages` request carrying one tool schema returned `stop_reason: "tool_use"` and a
+structured `{"name":"get_weather","input":{"city":"Prague"}}` block from each. The other
+five returned proper structured `tool_calls` over the OpenAI route on the same date, which
+is strong evidence but is *not* the `/v1/messages` path Claude Code actually drives — so
+they carry no dated claim here yet.
+
+Three things worth knowing before you point a session at one of these:
+
+- **`local-3b`, `local-4b` and `local-2b` are tiny.** They call tools correctly, which is
+  not the same as being able to hold an agent loop together. Treat them as fast helpers for
+  narrow, well-scoped work — classification, extraction, a quick rewrite — not as drivers
+  for a long session.
+- **`reasoning`, `local-qwen` and `creative` spend output budget on thinking**, so all
+  three carry `max_tokens: 8192` in the config where the others carry 4096. A trivial
+  puzzle already cost `reasoning` 325 reasoning tokens, and `local-qwen` spent 59 of 65
+  completion tokens on "17×23". If any of them ever returns empty content with no error,
+  that cap is the first thing to look at — `local-12b` reasons too, on 4096.
+- **`local-qwen` is named for its family, not its size.** `local-27b` would have been the
+  ladder-shaped name and would have been ambiguous: `reasoning` is *also* a 27B Qwen. If
+  you are reaching for this alias it is because you want a non-Gemma answer, which is what
+  the name now says.
+
+None of the seven has a fallback chain, so like `local-31b` and `uncensored` they fail
+outright rather than reaching for a hosted model. That is the point of the names.
+
+### `unsloth-31b` / `unsloth-26b` — the same weights, the other engine
+
+Configured exactly like `local`: the alias in the three model variables,
+`API_TIMEOUT_MS=3600000`, and `CLAUDE_CODE_MAX_CONTEXT_TOKENS=253952` for both. What
+differs is not the model, it is what runs it — Unsloth Studio on port 8888 rather than
+LMStudio on 1234. `unsloth-31b` is `local-31b`'s weights and `unsloth-26b` is `local`'s.
+
+Three things to know before pointing a session at one:
+
+- **Unsloth needs a key and the gateway needs it too.** `UNSLOTH_API_KEY` must be in the
+  shell that ran `podman compose up -d`, or the alias 401s on 24000 and does not exist at
+  all on 25000.
+- **One model at a time.** `Settings → API → Model auto-switch` must be on, or the first
+  call returns `400 No model loaded`. With it on, switching between the two aliases unloads
+  one and loads the other — measured at **10.1 s** and **4.4 s** on 2026-08-27, because the
+  file is in the page cache after the first read. Cheap enough to ignore in normal use; it
+  is one long pause at the start of a session, not a cost per switch.
+- **These weights reason here and do not reason in LMStudio** (verified 2026-08-27). Both
+  routes therefore carry `max_tokens: 8192`, like `reasoning` and `local-qwen`. A caller
+  that sets its own smaller ceiling gets empty content with `finish_reason: "length"` and
+  no error — the same trap as those two aliases, on weights that do not spring it under
+  LMStudio.
+
+**Tool calling and vision verified on BOTH, 2026-08-27**, over the OpenAI route on **both**
+gateways — a structured `tool_calls` reply, the tool result carried into a second turn, and
+an image described correctly. `tests/run_all.py --model unsloth-26b` and
+`--model unsloth-31b` each returned 6/6. As with most aliases here that is not the
+`/v1/messages` path Claude Code drives, so no dated claim is made about that route yet.
+
+Neither has a fallback chain, for the same reason `local-31b` does not: the name promises
+these weights, this engine, on this machine.
+
+### `embed` and `embed-hq` — the same model, two precisions
+
+Not Claude Code routes at all — they answer `/v1/embeddings` and return 768 dims each,
+free, on a 2048 window. The difference is the build: `embed` is Q4_K_M (84 MB), `embed-hq`
+is Q8_0 (146 MB).
+
+> [!warning]
+> **Their vectors are not interchangeable.** Quantisation moves where a text lands in the
+> space, so a query embedded through one and matched against an index built with the other
+> comes back with quietly worse neighbours — no error, nothing to notice after the fact.
+> Pick one alias per index and record which one alongside the index.
 
 ### `standard` / `cheap` — OpenRouter
 
@@ -328,14 +430,27 @@ problem.
 Load the model behind the alias you are actually about to use — they are different models:
 
 ```bash
-lms load google/gemma-4-26b-a4b        --context-length 262144 --parallel 1 --gpu max  # local
-lms load google/gemma-4-31b            --context-length 262144 --parallel 1 --gpu max  # local-31b
+lms load google/gemma-4-26b-a4b-qat    --context-length 262144 --parallel 1 --gpu max  # local
+lms load google/gemma-4-31b-qat        --context-length 262144 --parallel 1 --gpu max  # local-31b
+lms load google/gemma-4-12b-qat        --context-length 262144 --parallel 1 --gpu max  # local-12b
+lms load mistralai/ministral-3-3b      --context-length 262144 --parallel 1 --gpu max  # local-3b
+lms load qwen/qwen3.8-27b              --context-length 262144 --parallel 1 --gpu max  # local-qwen
+lms load thinkingcap-qwen3.6-27b       --context-length 262144 --parallel 1 --gpu max  # reasoning
 lms load gemma-4-31b-it-abliterated    --context-length 262144 --parallel 1 --gpu max  # uncensored
+
+# 131072 is the ceiling for these three, which is where their 122880 input limit comes from.
+lms load google/gemma-4-e4b            --context-length 131072 --parallel 1 --gpu max  # local-4b
+lms load google/gemma-4-e2b            --context-length 131072 --parallel 1 --gpu max  # local-2b
+lms load meta/muse-glimmer             --context-length 131072 --parallel 1 --gpu max  # creative
+
 lms ps --json    # the source of truth, not the UI
 ```
 
-262144 is the maximum all three models advertise; `curl -s localhost:1234/api/v0/models`
-reports `max_context_length` per model if you need to confirm after a swap.
+262144 is the maximum the first group advertises and 131072 the second's;
+`lms ls --json` reports `maxContextLength` per model, and
+`curl -s localhost:1234/api/v0/models` reports `max_context_length`, if you need to
+confirm after a swap. The two embedding routes need none of this — at 84 and 146 MB
+`embed` and `embed-hq` load in under a second, so JIT costs nothing.
 
 A JIT-loaded model also gets a 1 h TTL while a hand-loaded one gets none — so a session
 that worked this morning can fail this afternoon with nothing changed.
@@ -356,7 +471,7 @@ Two timeouts sit in front of it and **both** must be raised, or the shorter one 
 
 | Timeout | Default | Set it to |
 |:--|:--|:--|
-| LiteLLM, per route | 600 s — measured: two prompts were cancelled at 576 s and 590 s | already `timeout: 3600` on `local` and `uncensored` in `litellm/config.yaml` |
+| LiteLLM, per route | 600 s — measured: two prompts were cancelled at 576 s and 590 s | already `timeout: 3600` on every LMStudio chat route in `litellm/config.yaml` |
 | Claude Code, client side | shorter than a local agent turn | `API_TIMEOUT_MS=3600000` in the env block beside the `ANTHROPIC_*` vars |
 
 Raising only the gateway's changes nothing — Claude Code hangs up first, and the gateway

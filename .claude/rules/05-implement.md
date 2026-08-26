@@ -63,6 +63,45 @@ it came from.
   namespace makes "did this get better" ambiguous. A project that wants tracing
   runs its own MLflow and traces client-side.
 
+## `mlflow/seed_gateway.py` — the aliases, again
+
+The only code in this repo. It exists because MLflow's gateway has no config
+file: its endpoints live in the `mlflow` database and arrive over an API.
+
+- **It must keep reading `litellm/config.yaml`.** Writing a second alias list
+  here is the one change that breaks the whole point — the two gateways then
+  drift, and the drift is silent: an alias answers on 24000 and 404s on 25000
+  with nothing to say why.
+- **`fallback_config` is what activates a fallback chain.** A `FALLBACK` linkage
+  is stored, and shown in the UI, whether or not it is passed; the gateway only
+  wraps the primary in a fallback provider when the config object is there.
+  Removing it leaves a chain that looks right everywhere except in production.
+- **It stays idempotent.** compose runs it on every `up -d`, so a second run must
+  reuse, not duplicate. Secrets are the deliberate exception — they are rewritten
+  each run, which is how a rotated provider key reaches the gateway.
+- **A LiteLLM feature with no MLflow equivalent is documented, not faked.** The
+  list is in `README.md` § The second gateway. Adding a shim that half-implements
+  one is worse than the missing feature, because it reads as working.
+
+## `tests/` — the three call kinds, on both gateways
+
+Belongs here: one script per KIND of call, never per alias. `--model` already
+covers "the same test against a different alias", so a `04_local_qwen.py` would
+be a copy of an existing file with one string changed.
+
+- **A scenario never names a gateway.** It takes one and calls it. The whole
+  point is that the OpenAI client, the alias and the message body are identical
+  on 24000 and 25000 — a scenario that branches on `gateway.name` has stopped
+  testing that.
+- **`02_tools_call.py` checks `finish_reason` and the `tool_calls` structure**,
+  not the words in the reply. A model that emits raw-text tool syntax returns a
+  perfectly good-looking assistant message, and that is the failure the file
+  exists to catch.
+- **Its tools return fixed numbers.** A test that calls a market API cannot tell
+  "the gateway is broken" from "the market is closed".
+- `run_all.py` globs `NN_*.py`, so a new script needs no edit there. Keep the
+  numbered prefix.
+
 ## `README.md` and `NOTES.md`
 
 `README.md` is the front door: aliases, ports, starting it, minting a capped key.
@@ -83,9 +122,19 @@ ai-gateway/
 ├── .claude/            this contract
 ├── .env.example        tracked; the three provider keys are blank BY DESIGN
 ├── .gitignore
-├── compose.yml         two services, ports, healthchecks
+├── compose.yml         four services, ports, healthchecks
 ├── litellm/
 │   └── config.yaml     aliases, prices, fallback chains, provider pins
+├── mlflow/
+│   └── seed_gateway.py that config.yaml, applied to the MLflow AI Gateway
+├── postgres/
+│   └── init-databases.sh   CREATE DATABASE mlflow, on a fresh volume only
+├── tests/              a uv project: three call kinds x both gateways
+│   ├── common.py           the two base URLs, the client, the pass/fail printing
+│   ├── 01_simple_call.py   plain chat completion
+│   ├── 02_tools_call.py    tools, and the second turn that uses the result
+│   ├── 03_multimodal.py    an image plus a question
+│   └── run_all.py          every NN_*.py x every gateway, as a table
 ├── NOTES.md            connecting Claude Code to this gateway
 └── README.md           start here — aliases, keys, ports
 ```

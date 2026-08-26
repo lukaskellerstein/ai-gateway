@@ -37,15 +37,30 @@ command): skip step 2. State what you'll do and proceed.
 
 ## ai-gateway at a glance
 
-- **Two containers, `podman compose` or `docker compose`** — `litellm` published
-  on **`localhost:24000`** (admin UI at `/ui`) and `postgres`, **not published**,
-  holding virtual keys, spend logs and budget ceilings.
-- **No application code.** The entire repo is `compose.yml` +
-  `litellm/config.yaml` + docs. Every change is a config change, and both images
-  are stock — there is no build step.
-- **Port `24000` is deliberate**, a 2xxxx band. The failure it avoids is not a
-  bind error but the silent one: a health probe against `localhost:4000` that
-  `mlflow-tutorial`'s or `ai-agent-platform`'s gateway answers, going green.
+- **Four containers, `podman compose` or `docker compose`** — `litellm` published
+  on **`localhost:24000`** (admin UI at `/ui`), `postgres`, **not published**,
+  holding virtual keys, spend logs and budget ceilings, `mlflow` published on
+  **`localhost:25000`**, and `mlflow-seed`, a one-shot that exits.
+- **Two gateways, one vocabulary.** `mlflow` serves the SAME alias names through
+  the MLflow AI Gateway, so the two can be compared without changing a caller's
+  vocabulary. **LiteLLM stays primary** — it is what every project calls, and the
+  only one with virtual keys, spend logs and budget ceilings. MLflow has no key
+  at all.
+- **Almost no application code.** The repo is `compose.yml` +
+  `litellm/config.yaml` + docs + **one script**, `mlflow/seed_gateway.py`. That
+  script exists because MLflow has no config file to mount: its endpoints live in
+  the database and arrive over an API. It reads `litellm/config.yaml` rather than
+  holding a second list, which is what stops the two gateways drifting. All three
+  images are stock — there is no build step.
+- **`tests/` is the only other code, and the only manifest.** A `uv` project
+  (Python 3.12, `openai` + `python-dotenv`) with three scripts — plain call,
+  tools, multimodal — each run against **both** gateways through the real OpenAI
+  client: `cd tests && uv sync && uv run run_all.py`. Default alias `local-3b`,
+  the smallest route that is both vision-capable and tool-trained.
+- **Ports `24000` and `25000` are deliberate**, a 2xxxx band. The failure they
+  avoid is not a bind error but the silent one: a health probe against
+  `localhost:4000` that `mlflow-tutorial`'s or `ai-agent-platform`'s gateway
+  answers, going green. `mlflow-tutorial` holds `5555` for its own MLflow.
 - **Callers name aliases, never models.** `local` / `cheap` / `standard` /
   `frontier` are tiers; `embed` / `uncensored` / `local-31b` are roles.
   `cheap-free` and `standard-hf` are fallback targets and **not** part of that
@@ -56,9 +71,20 @@ command): skip step 2. State what you'll do and proceed.
 - **LMStudio runs natively on the host and must be hand-loaded.** A JIT load does
   not inherit the flags: a model loaded at 262144 context comes back at 8192 with
   a 1 h TTL. `lms ps --json` is the source of truth, not the UI.
+- **Unsloth Studio is the SECOND local engine**, native on the host at
+  `127.0.0.1:8888`, serving `unsloth-31b` and `unsloth-26b` — the same weights as
+  `local-31b` and `local`, so the two engines can be compared by changing only
+  the alias. Three things differ from LMStudio: it **requires** `UNSLOTH_API_KEY`
+  (every route 401s without it, `/v1/models` included), it serves **one model at
+  a time** and swaps on demand only because `Settings → API → Model auto-switch`
+  is on, and it turns **reasoning on** for weights LMStudio runs without it —
+  which is why both `unsloth-*` routes carry `max_tokens: 8192`. Its truth is
+  `GET /v1/status`, and that needs the key.
 - **Health**: `curl -fsS http://localhost:24000/health/liveliness` → `I'm alive!`
   It is the only unauthenticated route; `/health` needs the master key. First
-  boot takes ~60 s for LiteLLM's schema migrations.
+  boot takes ~60 s for LiteLLM's schema migrations. MLflow's own probe is
+  `curl -fsS http://localhost:25000/health` → `OK`, and `mlflow-seed` showing as
+  **exited (0)** is its finished state, not a failure.
 - **No secrets live here.** Provider keys arrive from `~/.secrets/secrets.enc.yaml`
   via `~/Projects/.envrc`, and compose's shell environment wins over `.env` — so
   those three lines in `.env` stay blank on purpose.
@@ -79,6 +105,12 @@ These actions are pre-approved. Run them yourself when the situation calls for i
   `/v1/chat/completions` or `/v1/messages`. Calling a **free** alias (`local`,
   `embed`, `uncensored`) to check something is always fine; a priced one costs
   money, so keep it to one short call.
+- `curl` against `http://localhost:25000`: `/health`, `/version`, and completions
+  through `/gateway/mlflow/v1/chat/completions` or
+  `/gateway/openai/v1/embeddings`. The same rule applies — a **free** alias is
+  always fine, a priced one costs money.
+- `cd tests && uv sync && uv run run_all.py` — and any single script in there.
+  Same rule as `curl`: a **free** alias is always fine, a priced one costs money.
 - `lms ps --json`, `lms status` — reading what LMStudio currently has loaded.
 - `podman compose exec postgres psql -U postgres -d litellm -c "SELECT ..."` —
   **`SELECT` only**. Anything that writes is a mutation and belongs below.
@@ -92,8 +124,12 @@ restate them here.
 
 ### Pre-approved mutations
 
-- Editing `compose.yml`, `litellm/config.yaml`, `README.md`, `NOTES.md`,
-  `.env.example` and anything under `.claude/` **in this repo**.
+- Editing `compose.yml`, `litellm/config.yaml`, `mlflow/seed_gateway.py`,
+  `postgres/init-databases.sh`, `README.md`, `NOTES.md`, `.env.example` and
+  anything under `.claude/` or `tests/` **in this repo**.
+- Re-running the seed: `podman compose up -d`, or the same script with
+  `--reset`, which rebuilds endpoints from `litellm/config.yaml`. It creates
+  nothing that costs money.
 - `podman compose up -d`, `podman compose restart litellm`, and
   `podman compose down` **without `-v`** — the stack is laptop-local and
   restarting it costs a minute, not data.
@@ -117,8 +153,16 @@ restate them here.
 - **`lms load` / `lms unload`** on the host. It occupies the GPU and can evict a
   model another session is mid-request against — and several Claude Code sessions
   run on this machine at once.
-- **Changing the published port off `24000`**, or publishing `postgres`. Both
-  re-enter the collision this repo's port band exists to avoid.
+- **Changing the published ports off `24000` / `25000`**, or publishing
+  `postgres`. All three re-enter the collision this repo's port band exists to
+  avoid — `5000` and `5555` are taken by `mlflow-tutorial`.
+- **`seed_gateway.py --prune`**, or dropping the `mlflow` database. `--prune`
+  deletes MLflow endpoints that `litellm/config.yaml` no longer names, including
+  any a person made by hand in the UI, and the `gateway/*` traces lose the
+  endpoint they belong to.
+- **Changing `MLFLOW_CRYPTO_KEK_PASSPHRASE` on a stack that has already run.**
+  Every stored provider credential was encrypted under the old value and stops
+  decrypting — and it surfaces as an auth error at call time, not at startup.
 - Setting the `local` alias's `*_cost_per_token` to `0`. It stops shadow-pricing
   and silently disables every budget ceiling for local traffic.
 - `git push`, `git push --force`, branch deletes — **never commit unless the user

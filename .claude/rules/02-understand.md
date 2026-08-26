@@ -13,8 +13,9 @@ description: "Step 1: Understand — read code, ask questions, identify gaps bef
   a symbol — where defined, who implements, who calls. It is deferred, so
   `ToolSearch("select:LSP")` comes first or it cannot be called at all. Absent
   from the list means this repo did not opt in: use `grep`.
-  [`lsp.md`](lsp.md). This repo contains no Python, TypeScript or Go, so no
-  `lsp-*` plugin is enabled and `LSP` will not be there.
+  [`lsp.md`](lsp.md). This repo holds exactly one Python file
+  (`mlflow/seed_gateway.py`) and no `lsp-*` plugin is enabled for it, so `LSP`
+  will not be there — use `grep`.
 - Ask clarifying questions if requirements are ambiguous
 - Identify gaps in the current design and opportunities for improvement
 - Understand the requirement completely before proceeding

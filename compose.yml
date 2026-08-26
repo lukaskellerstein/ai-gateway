@@ -3,17 +3,26 @@
 # Works with BOTH `podman compose up -d` and `docker compose up -d`.
 #
 # Derived from ~/Projects/Github/lukaskellerstein/ai-agent-platform/deploy/compose,
-# reduced to what a GLOBAL gateway owns. Two services, and each is load-bearing:
-#   litellm    the OpenAI-compatible endpoint every project on this machine calls
-#   postgres   virtual keys, spend logs and budget ceilings. Not published.
+# reduced to what a GLOBAL gateway owns. Four services, and each is load-bearing:
+#   litellm      the OpenAI-compatible endpoint every project on this machine calls
+#   postgres     virtual keys, spend logs and budget ceilings. Not published.
+#   mlflow       the SAME aliases through the MLflow AI Gateway, for comparison
+#   mlflow-seed  a one-shot that copies litellm/config.yaml into mlflow. Exits.
+#
+# TWO GATEWAYS, ONE VOCABULARY. LiteLLM stays the primary endpoint: it is what
+# every project calls and the only one with virtual keys, spend logs and budget
+# ceilings. MLflow serves the same alias names so the two can be compared on one
+# machine — swap the base URL, keep the model name. `mlflow-seed` reads LiteLLM's
+# own config.yaml rather than a second list, so the two cannot drift apart.
+#
+# The MLflow here is a GATEWAY, not a trace store for other projects. It traces
+# what passes through ITS OWN endpoints and nothing else. `success_callback` in
+# litellm/config.yaml stays empty for the original reason: two projects sharing
+# one experiment namespace makes "did this get better" ambiguous, which is the
+# one question a trace store exists to answer. A project that wants tracing runs
+# its own MLflow and traces client-side.
 #
 # WHAT WAS DELIBERATELY LEFT OUT
-#   mlflow — a trace store is a PROJECT's system of record, not the machine's.
-#     Two projects sharing one experiment namespace makes "did this get better"
-#     ambiguous, which is the one question a trace store exists to answer. So
-#     `success_callback` in litellm/config.yaml is empty: a project that wants
-#     tracing runs its own MLflow and traces client-side, or adds a callback here
-#     pointing at its own server.
 #   qdrant / nats / temporal / prometheus — none of them is a gateway concern.
 #     The platform stack parks them behind profiles; this repo does not carry
 #     definitions for services it does not run.
@@ -21,15 +30,19 @@
 #     for its callback. With no callback, the stock image is the whole story, and
 #     `up -d` needs no build step. Reintroduce ./litellm/Dockerfile the day a
 #     callback needs a package the base image lacks.
+#   A custom mlflow image — the stock one already ships psycopg2 and cryptography
+#     (checked on ghcr.io/mlflow/mlflow:latest, MLflow 3.15.1), which is every
+#     package the Postgres backend and the gateway's encrypted secrets need. So
+#     this stack still has NO build step.
 #
 # LMStudio runs NATIVELY on the host (Apple-Silicon GPU); containers reach it at
 # host.containers.internal (Podman) / host.docker.internal (Docker). See .env.
 #
-# HOST PORT 24000 — a third band, chosen so this stack coexists with both project
-# stacks rather than racing them for a port:
+# HOST PORTS 24000 AND 25000 — a third band, chosen so this stack coexists with
+# both project stacks rather than racing them for a port:
 #   mlflow-tutorial    holds 4000, 5432, 5555, 3000, 6333/4, 7233, 8080, 9090
 #   ai-agent-platform  holds the 1xxxx band (14000, 15000, ...)
-#   ai-gateway         2xxxx — litellm 4000 -> 24000
+#   ai-gateway         2xxxx — litellm 4000 -> 24000, mlflow 5000 -> 25000
 # The failure this avoids is not a bind error, which is loud and obvious. It is
 # the SILENT one: a health probe against localhost:4000 that another project's
 # gateway answers, going green against a service from a different stack. Container-
@@ -49,8 +62,10 @@ services:
   # compose network. Publishing it buys nothing and guarantees a collision (5432
   # is mlflow-tutorial's). For a shell: `podman compose exec postgres psql -U postgres`.
   #
-  # The `litellm` database comes from POSTGRES_DB below — no init.sql needed for a
-  # single-database stack. LiteLLM applies its own migrations on first startup.
+  # TWO databases live here. `litellm` comes from POSTGRES_DB below; `mlflow` comes
+  # from postgres/init-databases.sh, because POSTGRES_DB takes exactly one name.
+  # Both servers apply their own migrations on first startup, and neither can see
+  # the other's tables.
   # ---------------------------------------------------------------------------
   postgres:
     image: docker.io/postgres:17
@@ -68,6 +83,10 @@ services:
       retries: 15
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the `mlflow` database. Postgres runs this ONLY when it initialises
+      # an empty data directory, so on a volume that already exists it does
+      # nothing — the file itself carries the one-liner for that case.
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
 
   # ---------------------------------------------------------------------------
   # LiteLLM proxy — one OpenAI-compatible endpoint (also /v1/messages) for every
@@ -102,6 +121,15 @@ services:
       MAX_STRING_LENGTH_PROMPT_IN_DB: "100000"
       # LMStudio on the host (native). Overridable in .env.
       LM_STUDIO_API_BASE: ${LM_STUDIO_API_BASE:-http://host.containers.internal:1234/v1}
+      # Unsloth Studio on the host (native), the second local runtime. It binds
+      # 127.0.0.1 exactly as LMStudio does, and reaches the containers the same
+      # way — verified from inside this container, 2026-08-26.
+      #
+      # UNLIKE LMStudio it needs a key: every route answers `401 Not
+      # authenticated` without one. It is a personal credential, so it arrives
+      # from the shell and the line in .env stays blank — see .env.example.
+      UNSLOTH_API_BASE: ${UNSLOTH_API_BASE:-http://host.containers.internal:8888/v1}
+      UNSLOTH_API_KEY: ${UNSLOTH_API_KEY:-}
       # Hosted providers — needed by the priced aliases (`cheap`, `standard`, `frontier`).
       # Blank in .env on this machine: ~/Projects/.envrc already exports the real values
       # from ~/.secrets/secrets.enc.yaml, and compose's shell environment wins over the
@@ -120,5 +148,109 @@ services:
       # First boot runs the LiteLLM schema migrations against an empty database.
       start_period: 60s
 
+  # ---------------------------------------------------------------------------
+  # MLflow — the SAME aliases, through the MLflow AI Gateway.
+  # http://localhost:25000, UI at / and the gateway under /gateway.
+  #
+  # The gateway IS the tracking server: there is no second process, and a config
+  # change needs no restart. That is also why it cannot be configured by a file —
+  # its endpoints live in the `mlflow` database and arrive over an API, which is
+  # what mlflow-seed below is for.
+  #
+  # Call it exactly like LiteLLM, with one URL changed:
+  #   POST http://localhost:25000/gateway/mlflow/v1/chat/completions
+  #   {"model": "local-3b", "messages": [...]}
+  # ---------------------------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    command:
+      - mlflow
+      - server
+      # A SQL backend is required: the gateway cannot run on a file store at all.
+      - --backend-store-uri
+      - postgresql://postgres:postgres@postgres:5432/mlflow
+      - --default-artifact-root
+      - mlflow-artifacts:/
+      - --artifacts-destination
+      - /mlartifacts
+      - --serve-artifacts
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+    ports:
+      - "25000:5000"
+    volumes:
+      - mlflow_artifacts:/mlartifacts
+    extra_hosts:
+      # THE SERVER dials LMStudio, not the caller — so the local aliases resolve
+      # host.containers.internal inside THIS container.
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
+    environment:
+      # MLflow 3.x rejects an unknown Host header with 403 "Invalid Host header -
+      # possible DNS rebinding attack detected". Requests from the host pass by
+      # default; a caller inside the compose network addressing `mlflow:5000` does
+      # not, and 0.0.0.0:5000 is the SERVER CALLING ITSELF, which is easy to miss
+      # because nobody configures it. Only /health and /version are exempt, so the
+      # container looks perfectly healthy while every in-stack call is refused.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow:5000,localhost:5000,localhost:25000,127.0.0.1:5000,127.0.0.1:25000,0.0.0.0:5000"
+      # LiteLLM carries `timeout: 3600` on each LMStudio route; MLflow has one
+      # global figure and defaults to 300 s. Prompt processing on this machine
+      # measures ~100 tok/s, so an agent-scale prompt needs 5-15 MINUTES before
+      # its first token — at 300 s the gateway gives up mid-prompt.
+      MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS: "3600"
+      # Wraps the key that encrypts the stored provider credentials. Blank is
+      # supported: MLflow then uses a built-in passphrase and says so in the log.
+      # Set it and NEVER change it — the existing secrets stop decrypting, and the
+      # fix is to re-run mlflow-seed, which rewrites them.
+      MLFLOW_CRYPTO_KEK_PASSPHRASE: ${MLFLOW_CRYPTO_KEK_PASSPHRASE:-}
+    healthcheck:
+      # /health is one of the two routes exempt from the Host header check above.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # First boot runs the MLflow schema migrations against an empty database.
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # mlflow-seed — copies litellm/config.yaml into the MLflow gateway, then exits.
+  #
+  # A CONTAINER THAT EXITS IS THE EXPECTED STATE. `compose ps` shows it as exited
+  # with code 0 once it has run; `compose logs mlflow-seed` is the record of what
+  # it built. It runs again on every `up -d` and is idempotent.
+  #
+  # It reads LiteLLM's own file instead of holding a second list, which is what
+  # keeps the two gateways serving the same names. Add an alias to
+  # litellm/config.yaml, run `up -d`, and MLflow has it too.
+  # ---------------------------------------------------------------------------
+  mlflow-seed:
+    image: ghcr.io/mlflow/mlflow:latest
+    restart: "no"
+    depends_on:
+      mlflow: { condition: service_healthy }
+    command: ["python", "/app/seed_gateway.py", "/app/litellm-config.yaml"]
+    volumes:
+      - ./mlflow/seed_gateway.py:/app/seed_gateway.py:ro
+      - ./litellm/config.yaml:/app/litellm-config.yaml:ro
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      # The same values LiteLLM gets. This container never calls a provider;
+      # it only resolves `os.environ/...` out of config.yaml and hands the result
+      # to MLflow, which stores it encrypted. A name missing here is the silent
+      # failure: seed_gateway.py skips the alias with "no API key in the
+      # environment" and MLflow simply never gets that endpoint.
+      LM_STUDIO_API_BASE: ${LM_STUDIO_API_BASE:-http://host.containers.internal:1234/v1}
+      UNSLOTH_API_BASE: ${UNSLOTH_API_BASE:-http://host.containers.internal:8888/v1}
+      UNSLOTH_API_KEY: ${UNSLOTH_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+
 volumes:
   postgres_data:
+  mlflow_artifacts:

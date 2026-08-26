@@ -11,4 +11,8 @@
 # — it is where a gateway key would land if one were ever put in an `env` block.
 .claude/settings.local.json
 
+# tests/ is a uv project. The lockfile IS tracked; the environment it builds is not.
+.venv/
+__pycache__/
+
 .DS_Store
