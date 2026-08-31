@@ -11,16 +11,24 @@ description: "Reference: Technology stack — LiteLLM proxy + Postgres under com
   **inside** the MLflow image with no manifest of its own, and `tests/`, a `uv`
   project with `pyproject.toml` and a lockfile that runs on the host.
 - **Framework**: LiteLLM proxy, `ghcr.io/berriai/litellm:main-stable`, run with
-  `--config /app/config.yaml --port 4000 --num_workers 1`. It exposes the
-  OpenAI-compatible routes **and** `/v1/messages`, which is what lets Claude Code
-  drive any alias here.
+  `--config /app/config/config.<models>.<engine>.yaml --port 4000 --num_workers 1`,
+  the two words coming from `.env`. It exposes the OpenAI-compatible routes **and**
+  `/v1/messages`, which is what lets Claude Code drive any alias here. The config
+  is composed at load time: LiteLLM's `include:` extends `model_list` across files
+  and replaces every other key, so `settings.yaml` plus one to three engine
+  fragments become one config. It does **not** recurse into a nested `include:`.
 - **Second gateway**: the MLflow AI Gateway, `ghcr.io/mlflow/mlflow:latest`
   (3.15.1), run as `mlflow server` on `25000`. It serves the **same alias names**
   through `/gateway/mlflow/v1/chat/completions`. The gateway *is* the tracking
   server: no second process, and no restart when its configuration changes —
-  which is also why it has no config file. `mlflow/seed_gateway.py`, run by the
-  one-shot `mlflow-seed` service, reads `litellm/config.yaml` and writes the same
-  aliases in through the API.
+  which is also why it has no config file. Its alias list is therefore PYTHON:
+  `mlflow/<models>/<engine>.py`, chosen by `mlflow/seed.py` and run by the one-shot
+  `mlflow-seed` service, writing the endpoints in through the API. Nothing there
+  reads anything in `litellm/` — the two gateways are independent by design, and
+  the cost is that an alias is added in two places.
+- **Which services run at all** is compose's own `COMPOSE_PROFILES`: both gateways
+  carry profiles (`litellm` / `mlflow`, plus `all` on both), `postgres` carries
+  none. An empty `.env` therefore starts postgres alone.
 - **Data**: Postgres 17 (`docker.io/postgres:17`), volume `postgres_data`, two
   databases. `litellm` holds virtual keys, teams, spend logs and budget ceilings;
   `mlflow` holds gateway endpoints, encrypted provider secrets and traces. Both
@@ -32,8 +40,9 @@ description: "Reference: Technology stack — LiteLLM proxy + Postgres under com
 
 | Provider | Reaches | Used by |
 |:--|:--|:--|
-| **LMStudio** | native on the host, port 1234, via `host.containers.internal` / `host.docker.internal` | every `local-*` alias plus `local-qwen`, `reasoning`, `creative`, `uncensored`, `embed`, `embed-hq` — from **both** gateways |
-| **Unsloth Studio** | native on the host, port 8888, same two hostnames. **Needs `UNSLOTH_API_KEY`** | `unsloth-31b`, `unsloth-26b` — from **both** gateways |
+| **LMStudio** | native on the host, port 1234, via `host.containers.internal` / `host.docker.internal` | all 12 `lms-*` aliases — the size ladder, `lms-qwen`, `lms-uncensored`, `lms-reasoning`, `lms-creative`, `lms-embed`, `lms-embed-hq` — from **both** gateways |
+| **Unsloth Studio** | native on the host, port 8888, same two hostnames. **Needs `UNSLOTH_API_KEY`** | `unsloth-31b`, `unsloth-26b`, `unsloth-embed` — from **both** gateways |
+| **Ollama** | native on the host, port 11434, same two hostnames. Ignores the key | `ollama-31b`, `ollama-26b`, `ollama-4b`, `ollama-embed` — from **both** gateways |
 | **OpenRouter** | `OPENROUTER_API_KEY` | `cheap`, `standard`, `cheap-free` |
 | **OpenAI** | `OPENAI_API_KEY` | `frontier` |
 | **HuggingFace** | `HF_TOKEN` | `standard-hf` (fallback target only) |
@@ -75,7 +84,7 @@ then unloads whatever it was holding to make room.
 ## Scripting & Automation
 
 - Default: **`curl` + `python3 -c`** for one-off gateway calls — that is what
-  `README.md` and `NOTES.md` already use, and it needs nothing installed.
+  `README.md` already uses, and it needs nothing installed.
 - Shell scripts only for trivial one-liners. A tool a *project* wants belongs in
   that project, or in mac-setup's `apps/` — not here.
 - **`tests/` is the one exception, and it is deliberate.** A repeatable check of
@@ -91,6 +100,7 @@ then unloads whatever it was holding to make room.
 - **One formatter per filetype.** Biome owns the JS/TS family; prettier and
   eslint are not installed. Python formats with the ruff CLI chain. Neither
   applies here — see `09-code-quality.md` for what this repo's filetypes get,
-  which is close to nothing.
+  which is close to nothing. The YAML fragments and composed configs are
+  hand-formatted for the same reason: nothing on this machine formats YAML.
 - Tools run only where the repo carries their config file — see
   `rules/09-code-quality.md`.
