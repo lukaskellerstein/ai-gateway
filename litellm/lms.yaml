@@ -1,0 +1,93 @@
+# LMStudio (port 1234) — the whole config for this engine.
+#
+# ONE ENGINE RUNS AT A TIME. `GATEWAY_ENGINE=lms` in .env points compose at THIS file, and
+# the aliases below are then the entire vocabulary the gateway serves. To serve a different
+# engine, change that word and `docker compose up -d` again.
+#
+# THIS FILE IS SELF-CONTAINED. It includes settings.yaml for the three settings blocks and
+# declares its own aliases. There is no fragment/composed split and no generated config —
+# what you read here is what LiteLLM loads.
+#
+# THREE THINGS ABOUT LMSTUDIO, and the first one causes most "the gateway is broken" reports:
+#
+#   IT MUST BE HAND-LOADED. LMStudio JIT-loads a model that is not resident, and a JIT load
+#   does NOT inherit hand-load flags — the model comes back at 8192 context with a 1 h TTL,
+#   so max_input_tokens below becomes a lie and a long prompt fails for no visible reason.
+#   A session that worked this morning fails this afternoon with nothing changed.
+#   `lms ps --json` is the truth, not the UI:
+#
+#     lms load google/gemma-4-e4b        --context-length 131072 --parallel 1 --gpu max
+#     lms load google/gemma-4-26b-a4b-qat --context-length 262144 --parallel 1 --gpu max
+#
+#   `--parallel 1` IS DELIBERATE and is the flag most likely to be "improved" wrongly. An
+#   agent client fires its main turn and its background calls at once; at --parallel 4 they
+#   split one GPU four ways and everything slows together — a 1-token request measured 34 s
+#   while large prompts sat in front of it.
+#
+#   THE KEY IS ANY STRING. LMStudio never checks it, unlike Unsloth.
+
+include:
+  - settings.yaml
+
+model_list:
+  # Gemma 4 E4B — "effective" 4B, the small chat route. Its window is 131072, not the 262144
+  # the larger Gemma builds carry, which is where the 122880 below comes from. Tools AND
+  # vision both work: small here means few parameters, not a cut-down feature set, which is
+  # why tests/ defaults to this row.
+  - model_name: lms-4b
+    litellm_params:
+      model: lm_studio/google/gemma-4-e4b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"              # LMStudio accepts any string
+      input_cost_per_token: 0.00000012    # shadow price, so budget ceilings still trip
+      output_cost_per_token: 0.00000035
+      max_tokens: 4096                    # IT REASONS — 65 of 70 completion tokens on a
+                                          # one-word prompt, 2026-08-28. 4096 clears that
+                                          # comfortably; 20 returned empty content
+      timeout: 3600                       # see the timeout note in settings.yaml
+    model_info:
+      max_input_tokens: 122880            # 131072 − the 8192 output reserve
+      max_output_tokens: 8192
+
+  # Gemma 4 26B A4B QAT — the large chat route, and the flagship local model. A 26B mixture
+  # of experts with ~4B active per token, so it answers at roughly small-model speed while
+  # holding a large model's knowledge.
+  #
+  # QAT means quantisation-aware trained, not quantised after the fact: the 4-bit error is
+  # learned around during training, so this sits closer to full precision than its label
+  # suggests. `unsloth-26b`, `ollama-26b` and `openrouter-26b` are the same weights on other
+  # engines — change GATEWAY_ENGINE and re-run tests/ to compare them.
+  #
+  # It does NOT emit a reasoning block, while `unsloth-26b` on the identical weights does
+  # (verified 2026-08-27). Thinking is decided per MODEL AND ENGINE, so never assume.
+  - model_name: lms-26b
+    litellm_params:
+      model: lm_studio/google/gemma-4-26b-a4b-qat
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012
+      output_cost_per_token: 0.00000035
+      max_tokens: 4096                    # a default, not a cap; guards runaway generations
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952            # 262144 − the 8192 output reserve
+      max_output_tokens: 8192
+
+  # nomic-embed-text v1.5 at 768 dimensions, the Q4_K_M build at 84 MB. It loads in under a
+  # second and needs none of the hand-load care the chat routes do.
+  #
+  # EMBEDDING VECTORS DO NOT MIX ACROSS MODELS OR BUILDS. Every engine here serves the same
+  # nomic v1.5 at 768 dims in a DIFFERENT build — this is Q4_K_M, `unsloth-embed` is Q8_0,
+  # `ollama-embed` is F16 (measured 2026-08-31, `lms ls --json` and `ollama show`), and
+  # `openai-embed` is a different model at 1536 dims entirely. Quantisation moves where a
+  # text lands in the space, so an index built with one alias and queried with another
+  # returns quietly worse neighbours and never errors. Record which alias built each index.
+  - model_name: lms-embed
+    litellm_params:
+      model: lm_studio/text-embedding-nomic-embed-text-v1.5
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0             # free, stated so it cannot read as unpriced
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 2048

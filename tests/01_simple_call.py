@@ -1,11 +1,11 @@
 """Test 1 — a plain chat completion through the OpenAI client.
 
 The smallest thing that can work: no tools, no images. It proves the alias is
-registered, the route reaches LMStudio, and a multi-turn conversation survives
-the trip.
+registered, the route reaches whichever engine is selected, and a multi-turn
+conversation survives the trip.
 
     uv run 01_simple_call.py
-    uv run 01_simple_call.py --gateway litellm --model lms-qwen
+    uv run 01_simple_call.py --gateway litellm --model lms-26b
 """
 
 import sys

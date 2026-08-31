@@ -1,0 +1,91 @@
+# OpenRouter — the whole config for this engine. IT SPENDS REAL MONEY.
+#
+# ONE ENGINE RUNS AT A TIME. `GATEWAY_ENGINE=openrouter` in .env points compose at THIS file,
+# and the aliases below are then the entire vocabulary the gateway serves. Choosing this word
+# is the act that makes spend possible — with `lms`, `unsloth` or `ollama` selected instead,
+# nothing in the running gateway can bill anyone.
+#
+# THIS FILE IS SELF-CONTAINED: it includes settings.yaml for the three settings blocks and
+# declares its own aliases.
+#
+# THE ENGINE IS IN THE NAME, exactly as it is for the three local ones. `openrouter-26b` says
+# who answers and therefore who bills you. There is no capability name — `cheap` and
+# `standard` existed here until 2026-08-31 and were renamed for that reason: a caller reading
+# `cheap` cannot tell it is not free.
+#
+# IT NEEDS A KEY, and the key is personal, so it arrives from the shell and the line in .env
+# stays blank. With no key LiteLLM keeps the alias and answers 401 at call time, while the
+# MLflow seed skips the endpoint entirely — so the same name 401s on 24000 and 404s on 25000.
+#
+# OPENROUTER IS A BROKER, NOT A MODEL HOST. One model id is served by several upstream
+# providers and OpenRouter load-balances between them, so two calls to one alias can run on
+# two different backends with different tokenisers, different tool support and different
+# quirks. `require_parameters: true` drops any provider that cannot honour the parameters
+# sent — in practice, the ones that would silently ignore `tools`. It also means the BUILD is
+# never pinned: OpenRouter does not say which quantisation an upstream provider serves, so
+# `openrouter-26b` against `lms-26b` is never a clean build-for-build comparison.
+
+include:
+  - settings.yaml
+
+model_list:
+  # Gemma 4 26B A4B — the same weights `lms-26b`, `unsloth-26b` and `ollama-26b` run locally,
+  # so this is the cloud half of the comparison those aliases make: the same model, on
+  # hardware you do not own and do not have to keep loaded.
+  #
+  # $0.07 in / $0.34 out per 1M tokens, read from GET /api/v1/models on 2026-08-31. Those are
+  # REAL prices, not the shadow prices the local routes carry: a budget ceiling on a key
+  # holding this alias is protecting actual money.
+  - model_name: openrouter-26b
+    litellm_params:
+      model: openrouter/google/gemma-4-26b-a4b-it
+      api_key: os.environ/OPENROUTER_API_KEY
+      input_cost_per_token: 0.00000007   # $0.07 / 1M, live figure 2026-08-31
+      output_cost_per_token: 0.00000034  # $0.34 / 1M
+      max_tokens: 4096                   # it reasons — see note 3 in settings.yaml
+      timeout: 600                       # NOT the 3600 the local routes use: a hosted
+                                         # provider silent for 10 minutes is broken, not
+                                         # busy loading 20 GB from disk
+      extra_body:
+        provider:
+          require_parameters: true       # drop providers that cannot honour `tools`
+    model_info:
+      max_input_tokens: 245760           # 262144 − a 16384 output reserve
+      max_output_tokens: 16384
+
+  # THE FREE TIER. Same 26B weights, $0.00 both directions — OpenRouter rate-limits it rather
+  # than charging, so it is the one route here that cannot cost anything. Treat it as a
+  # courtesy, not a service: the limit is per account and shared with everything that key
+  # touches. A 429 from this alias is normal, and it is what you get instead of a bill.
+  #
+  # THE PIN BELOW IS LOAD-BEARING FOR ANY AGENT RUN, AND REMOVING IT FAILS SILENTLY.
+  # OpenRouter load-balances the free tier across providers, and one of them advertises tool
+  # support but returns tool calls as RAW TEXT under agent-scale prompts —
+  # `<|tool_call>call:write_todos{...}` in the content, with `tool_calls` absent. Nothing
+  # errors. The agent sees an ordinary assistant message carrying no tool calls, executes
+  # nothing, and exits cleanly, which reads as "the model chose not to act".
+  #
+  # `order: ["google-ai-studio"]` names the provider that does it correctly, and
+  # `allow_fallbacks: false` stops OpenRouter routing round it when that provider is busy —
+  # WITHOUT WHICH THE PIN DOES NOTHING, because being busy is exactly when it would reroute.
+  # The cost of the pair is a 429 when Google AI Studio is at its limit, and that is the
+  # intended trade: a visible failure over an invisible one.
+  #
+  # MLFLOW CANNOT EXPRESS THIS PIN — it has no equivalent of extra_body — so this alias is
+  # deliberately absent from mlflow/openrouter.py and 404s on 25000. See that file's header.
+  - model_name: openrouter-free
+    litellm_params:
+      model: openrouter/google/gemma-4-26b-a4b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      input_cost_per_token: 0            # free, stated so it cannot read as unpriced
+      output_cost_per_token: 0
+      max_tokens: 4096
+      timeout: 600
+      extra_body:
+        provider:
+          require_parameters: true
+          order: ["google-ai-studio"]    # the provider that returns STRUCTURED tool calls
+          allow_fallbacks: false         # without this the pin is advisory, not binding
+    model_info:
+      max_input_tokens: 229376           # 262144 − a 32768 output reserve
+      max_output_tokens: 32768

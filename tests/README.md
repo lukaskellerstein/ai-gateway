@@ -39,16 +39,15 @@ Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
 | Flag | Default | Meaning |
 |:--|:--|:--|
 | `--gateway litellm\|mlflow\|both` | `both` | which gateway to drive |
-| `--model <alias>` | `lms-4b` | the alias to call. Also settable with `AI_GATEWAY_TEST_MODEL` |
+| `--model <alias>` | follows `GATEWAY_ENGINE` | the alias to call — see below. Also settable with `AI_GATEWAY_TEST_MODEL` |
 | `--verbose` (`run_all.py` only) | off | stream each script's output instead of capturing it |
 
 ## Reasoning aliases and `MAX_TOKENS`
 
 `common.py` sends `max_tokens=2048` on every call, and that number is load-bearing.
-Every `unsloth-*` and `ollama-*` route, and several in the full config —
-spend the same allowance on a reasoning block before writing a word. Run out
-mid-thought and the reply is **empty**, with `finish_reason: "length"` and no
-error at all.
+Every `unsloth-*` and `ollama-*` route, and `lms-4b` too, spends the same
+allowance on a reasoning block before writing a word. Run out mid-thought and the
+reply is **empty**, with `finish_reason: "length"` and no error at all.
 
 `answer_of()` names that case rather than reporting a bare "empty content":
 
@@ -63,36 +62,44 @@ at `stop`, not at the ceiling.
 
 ## Why the default alias follows `GATEWAY_ENGINE`
 
-`lms-4b`, `unsloth-4b` and `ollama-4b` are the same model on the three engines, and
-they are the one chat route present in **both alias lists on both gateways** — the
-starter list (`litellm/starter/<engine>.yaml`, `mlflow/starter/<engine>.py`) and the
-full one. `common.py` reads `GATEWAY_ENGINE` and picks the matching one, so a fresh
-clone runs the suite with no arguments whichever engine it serves.
+**One engine runs at a time**, so the aliases of every other engine are not in the
+config at all. A fixed `lms-4b` default would therefore fail with "model not found"
+on a perfectly healthy stack serving Ollama.
 
-A fixed `lms-4b` default would fail with "model not found" on a stack that names a
-single engine, because the other engines' aliases are then not in the config at all.
+`common.py` reads `GATEWAY_ENGINE` and picks that engine's small chat route —
+`lms-4b`, `unsloth-4b`, `ollama-4b` or `openrouter-26b`. Each is the one alias on its
+engine that is both vision- and tool-capable, which all three scripts need from a
+single loaded model.
+
+**An unrecognised engine is an error, not a fallback.** `all` used to be valid and is
+exactly the value people still have written down; defaulting quietly produced
+"Invalid model name passed in model=lms-4b" from a healthy stack, which reads as a
+broken gateway rather than a stale `.env`. `openai` maps to nothing on purpose —
+`gpt-5.4-mini` has no vision, so `03_multimodal.py` cannot pass against it.
+
 `AI_GATEWAY_TEST_MODEL` overrides the choice permanently; `--model` for one run.
 
 The gateway list follows `COMPOSE_PROFILES` the same way: a stack running only
 MLflow gets three rows, not six, instead of three connection errors against 24000.
 
-It is also vision-capable and tool-trained, so all three scripts work on one loaded
-model. **LMStudio must have it loaded** — `lms ps --json` is the truth, not the
-LMStudio UI. A JIT load comes back at 8192 context with a 1 h TTL.
+**On LMStudio the model must be loaded first** — `lms ps --json` is the truth, not
+the LMStudio UI. A JIT load comes back at 8192 context with a 1 h TTL. Ollama loads
+on demand and needs none of this.
 
 ```bash
 lms load google/gemma-4-e4b --context-length 131072 --parallel 1 --gpu max
 ```
 
-## The same test on the other two engines
+## The same test on another engine
 
-With `GATEWAY_ENGINE=all` the config carries one chat alias per engine, so the suite
-doubles as an engine comparison — same scripts, same prompts, one string changed:
+The suite doubles as an engine comparison, but only one engine is served at a time —
+so it is a restart between runs, not a second `--model`:
 
 ```bash
-uv run run_all.py --model lms-4b        # LMStudio
-uv run run_all.py --model unsloth-4b    # Unsloth Studio
-uv run run_all.py --model ollama-4b     # Ollama
+# in .env: GATEWAY_ENGINE=lms      then  docker compose up -d
+uv run run_all.py
+# in .env: GATEWAY_ENGINE=ollama   then  docker compose up -d
+uv run run_all.py
 ```
 
 Verified 2026-08-27, both gateways: **6/6 on each of the three**.
@@ -134,8 +141,8 @@ so it picks the new file up with no edit.
 - **`/v1/messages`**, the Anthropic route. It exists on LiteLLM only, and the
   OpenAI client cannot speak it. The root `README.md` covers driving it from
   Claude Code.
-- **Embeddings.** `lms-embed` and `lms-embed-hq` need a different route on MLflow
+- **Embeddings.** Every `*-embed` alias needs a different route on MLflow
   (`/gateway/openai/v1/embeddings`), not the chat one these scripts share.
-- **Fallback chains.** Both fallback maps in `litellm/settings.yaml` are commented
-  out today, so there is nothing to prove.
+- **Fallback chains.** No alias has one, on either gateway, so there is nothing to
+  prove.
 - **Budgets and virtual keys.** LiteLLM only, and `README.md` has the `curl`.

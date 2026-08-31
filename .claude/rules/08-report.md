@@ -1,11 +1,8 @@
----
-description: "Step 5: Report — summarize what was done, tested, and documented"
----
-
 # Step 5: Report
 
-Provide a short summary to the user:
+Short summary:
 
-- What was implemented
-- What was tested and what you observed (screenshots, logs, test output)
-- Whether spec and feature documentation were updated (or why they were skipped)
+- what changed
+- what you tested, and what you **observed** — logs, output, exact responses
+- whether `README.md` was updated, or why it did not need to be
+- anything you left open, and anything still not put back

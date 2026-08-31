@@ -32,23 +32,55 @@ IMAGE_PATH = Path(__file__).resolve().parent / "test_image.png"
 load_dotenv(REPO_ROOT / ".env", override=False)
 
 # THE DEFAULT ALIAS FOLLOWS THE ENGINE THE STACK IS SERVING. `GATEWAY_ENGINE` in
-# .env holds `lms`, `unsloth`, `ollama` or `all`, and with a single engine named
-# the other engines' aliases are not in the config at all — so a fixed `lms-4b`
-# default would fail with "model not found" on a perfectly healthy stack.
+# .env names ONE engine, and the aliases of every other engine are not in the config
+# at all — so a fixed `lms-4b` default would fail with "model not found" on a
+# perfectly healthy stack.
 #
-# The chosen names are the E4B row: the ONE model this repo carries on all three
-# engines, present in BOTH lists on BOTH gateways. Small, and vision- AND
-# tool-capable, which the whole set of scripts here needs. Override for a one-off
-# run with --model, or permanently with AI_GATEWAY_TEST_MODEL.
+# The chosen names are the small chat route on each engine: the one alias per engine
+# that is both VISION- and TOOL-capable, which is what all three scripts here need
+# from a single loaded model. Override for a one-off run with --model, or
+# permanently with AI_GATEWAY_TEST_MODEL.
+#
+# `openai` MAPS TO NOTHING ON PURPOSE. gpt-5.4-mini has no vision, so
+# 03_multimodal.py cannot pass against it, and a default that always fails one of
+# three scripts reads as a broken gateway. Pass --model openai-mini explicitly and
+# expect that script to fail.
 DEFAULT_MODEL_BY_ENGINE = {
-    "all": "lms-4b",
     "lms": "lms-4b",
     "unsloth": "unsloth-4b",
     "ollama": "ollama-4b",
+    "openrouter": "openrouter-26b",
+    "openai": None,  # no vision; see above
 }
-DEFAULT_MODEL = os.environ.get("AI_GATEWAY_TEST_MODEL") or DEFAULT_MODEL_BY_ENGINE.get(
-    os.environ.get("GATEWAY_ENGINE", "all"), "lms-4b"
-)
+
+
+def _default_model() -> str:
+    """The scenario alias for whichever engine `.env` names.
+
+    AN UNRECOGNISED ENGINE IS AN ERROR, NOT A FALLBACK. Quietly defaulting to
+    `lms-4b` was worse than failing: it produced "Invalid model name passed in
+    model=lms-4b" from a perfectly healthy stack serving a different engine, which
+    reads as a broken gateway rather than a stale `.env`. `all` used to be valid
+    and is exactly the value people still have written down.
+    """
+    engine = os.environ.get("GATEWAY_ENGINE", "lms").strip()
+    if engine not in DEFAULT_MODEL_BY_ENGINE:
+        raise SystemExit(
+            f"GATEWAY_ENGINE is {engine!r}, which is not an engine this repo serves.\n"
+            f"  It must be one of: {', '.join(DEFAULT_MODEL_BY_ENGINE)}.\n"
+            "  One engine at a time — a list and the old `all` are no longer accepted.\n"
+            "  Fix .env, or pass --model to choose an alias directly."
+        )
+    if DEFAULT_MODEL_BY_ENGINE[engine] is None:
+        raise SystemExit(
+            f"GATEWAY_ENGINE is {engine!r}, which has no alias that passes every scenario "
+            "here:\n  gpt-5.4-mini has no vision, so 03_multimodal.py cannot pass.\n"
+            "  Pass --model openai-mini explicitly and expect that one to fail."
+        )
+    return DEFAULT_MODEL_BY_ENGINE[engine]
+
+
+DEFAULT_MODEL = os.environ.get("AI_GATEWAY_TEST_MODEL") or _default_model()
 
 # LMStudio prompt processing measures ~100 tok/s on this machine, so a large
 # prompt needs minutes before its first token — the same fact that puts
@@ -56,12 +88,12 @@ DEFAULT_MODEL = os.environ.get("AI_GATEWAY_TEST_MODEL") or DEFAULT_MODEL_BY_ENGI
 # that silently retries hides the failure it exists to find.
 REQUEST_TIMEOUT_SECONDS = 3600.0
 
-# One allowance for every script, and it has to clear a REASONING block. Several
-# aliases here — `lms-reasoning`, `lms-qwen`, `lms-creative`, and both `unsloth-*` —
-# spend this same budget on thinking before they write a word. A model that runs
-# out mid-thought returns EMPTY content with `finish_reason: "length"` and raises
-# nothing, which reads as a broken alias. 150 was not enough for a one-sentence
-# answer about an image (verified 2026-08-27 on `unsloth-26b`).
+# One allowance for every script, and it has to clear a REASONING block. Both
+# `unsloth-*` chat routes, both `ollama-*` ones and `lms-4b` spend this same budget
+# on thinking before they write a word. A model that runs out mid-thought returns
+# EMPTY content with `finish_reason: "length"` and raises nothing, which reads as a
+# broken alias. 150 was not enough for a one-sentence answer about an image
+# (verified 2026-08-27 on `unsloth-26b`).
 #
 # Raising it costs nothing when the model does not need it: generation stops at
 # `stop`, not at the ceiling.
