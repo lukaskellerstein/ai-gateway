@@ -29,7 +29,7 @@ One at a time:
 ```bash
 uv run 01_simple_call.py                            # both gateways
 uv run 02_tools_call.py --gateway litellm
-uv run 03_multimodal.py --gateway mlflow --model local-qwen
+uv run 03_multimodal.py --gateway mlflow --model ollama-4b
 ```
 
 Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
@@ -39,13 +39,13 @@ Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
 | Flag | Default | Meaning |
 |:--|:--|:--|
 | `--gateway litellm\|mlflow\|both` | `both` | which gateway to drive |
-| `--model <alias>` | `local-3b` | the alias to call. Also settable with `AI_GATEWAY_TEST_MODEL` |
+| `--model <alias>` | `lms-4b` | the alias to call. Also settable with `AI_GATEWAY_TEST_MODEL` |
 | `--verbose` (`run_all.py` only) | off | stream each script's output instead of capturing it |
 
 ## Reasoning aliases and `MAX_TOKENS`
 
 `common.py` sends `max_tokens=2048` on every call, and that number is load-bearing.
-Several aliases — `reasoning`, `local-qwen`, `creative`, and **both `unsloth-*`** —
+Every `unsloth-*` and `ollama-*` route, and several in the full config —
 spend the same allowance on a reasoning block before writing a word. Run out
 mid-thought and the reply is **empty**, with `finish_reason: "length"` and no
 error at all.
@@ -61,32 +61,51 @@ Raise MAX_TOKENS in common.py.
 Raising the ceiling costs nothing when a model does not need it — generation stops
 at `stop`, not at the ceiling.
 
-## Why `local-3b` is the default
+## Why the default alias follows `GATEWAY_ENGINE`
 
-It is the smallest route that is both vision-capable and tool-trained, so all
-three scripts work on one loaded model. **LMStudio must have it loaded** —
-`lms ps --json` is the truth, not the LMStudio UI. Any other alias means a JIT
-load of many gigabytes, and a JIT load comes back at 8192 context with a 1 h TTL.
+`lms-4b`, `unsloth-4b` and `ollama-4b` are the same model on the three engines, and
+they are the one chat route present in **both alias lists on both gateways** — the
+starter list (`litellm/starter/<engine>.yaml`, `mlflow/starter/<engine>.py`) and the
+full one. `common.py` reads `GATEWAY_ENGINE` and picks the matching one, so a fresh
+clone runs the suite with no arguments whichever engine it serves.
+
+A fixed `lms-4b` default would fail with "model not found" on a stack that names a
+single engine, because the other engines' aliases are then not in the config at all.
+`AI_GATEWAY_TEST_MODEL` overrides the choice permanently; `--model` for one run.
+
+The gateway list follows `COMPOSE_PROFILES` the same way: a stack running only
+MLflow gets three rows, not six, instead of three connection errors against 24000.
+
+It is also vision-capable and tool-trained, so all three scripts work on one loaded
+model. **LMStudio must have it loaded** — `lms ps --json` is the truth, not the
+LMStudio UI. A JIT load comes back at 8192 context with a 1 h TTL.
 
 ```bash
-lms load mistralai/ministral-3-3b --context-length 262144 --parallel 1 --gpu max
+lms load google/gemma-4-e4b --context-length 131072 --parallel 1 --gpu max
 ```
 
-## Testing an Unsloth alias
+## The same test on the other two engines
 
-`--model unsloth-26b` and `--model unsloth-31b` run the same three scripts against
-the second local engine. Two extra requirements:
+With `GATEWAY_ENGINE=all` the config carries one chat alias per engine, so the suite
+doubles as an engine comparison — same scripts, same prompts, one string changed:
+
+```bash
+uv run run_all.py --model lms-4b        # LMStudio
+uv run run_all.py --model unsloth-4b    # Unsloth Studio
+uv run run_all.py --model ollama-4b     # Ollama
+```
+
+Verified 2026-08-27, both gateways: **6/6 on each of the three**.
+
+Two extra requirements for the Unsloth one, and both fail quietly:
 
 1. **`UNSLOTH_API_KEY` must be in the shell** that ran `podman compose up -d`, or
    LiteLLM 401s and MLflow never got the endpoint at all.
 2. **`Settings → API → Model auto-switch` must be on**, or the first call returns
-   `400 No model loaded`. With it on, a call to `unsloth-31b` unloads `unsloth-26b`
-   and loads 17 GB first. It shows up as one slow row and then nothing: in the
-   `unsloth-31b` run below, `01_simple_call.py` on litellm took **10.1 s** and every
-   later row 1.8–4.2 s.
-
-Verified 2026-08-27, both gateways: **6/6 on `unsloth-26b`** and **6/6 on
-`unsloth-31b`** — plain call, tools and multimodal on each.
+   `400 No model loaded`. With it on, the first call unloads whatever was there and
+   reads the new weights from disk, which shows up as one slow row and then nothing.
+   Note that this covers the embedder too: `unsloth-embed` and `unsloth-4b` evict
+   each other.
 
 ## The two gateways
 
@@ -113,9 +132,10 @@ so it picks the new file up with no edit.
 ## What is NOT tested here
 
 - **`/v1/messages`**, the Anthropic route. It exists on LiteLLM only, and the
-  OpenAI client cannot speak it. `NOTES.md` covers driving it from Claude Code.
-- **Embeddings.** `embed` and `embed-hq` need a different route on MLflow
+  OpenAI client cannot speak it. The root `README.md` covers driving it from
+  Claude Code.
+- **Embeddings.** `lms-embed` and `lms-embed-hq` need a different route on MLflow
   (`/gateway/openai/v1/embeddings`), not the chat one these scripts share.
-- **Fallback chains.** Both fallback maps in `litellm/config.yaml` are commented
+- **Fallback chains.** Both fallback maps in `litellm/settings.yaml` are commented
   out today, so there is nothing to prove.
 - **Budgets and virtual keys.** LiteLLM only, and `README.md` has the `curl`.

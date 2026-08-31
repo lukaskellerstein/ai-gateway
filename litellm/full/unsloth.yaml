@@ -1,0 +1,115 @@
+# Unsloth Studio (port 8888) — THE FULL FRAGMENT. Four aliases: three chat, one embedder.
+#
+# A FRAGMENT IS NOT A CONFIG. It carries `model_list` and nothing else; the composed files
+# `config.full.unsloth.yaml` and `config.full.all.yaml` include it alongside settings.yaml,
+# which holds the settings blocks, the pricing rules and the timeout note.
+#
+# THE SECOND LOCAL ENGINE: same GPU, same weights, different engine. `unsloth-31b` is
+# `lms-31b`'s twin, `unsloth-26b` is `lms-26b`'s and `unsloth-4b` is `lms-4b`'s, so a caller
+# can put the two engines side by side without changing anything but the alias. That
+# comparison is the only reason these exist.
+#
+# FIVE differences from every LMStudio route, each of which has bitten:
+#
+# 1. THE PREFIX IS `openai/`, NOT `unsloth/`. LiteLLM has no Unsloth provider. A provider
+#    prefix here means "speaks the OpenAI protocol", and api_base is the only thing
+#    separating this from api.openai.com — the same reasoning that makes every local
+#    endpoint in mlflow/ an `openai` provider.
+# 2. THE MODEL ID CARRIES A SLASH: `unsloth/gemma-4-31B-it-qat-GGUF` is the HuggingFace
+#    repo id, and it is what `GET /v1/models` returns. So the full strings below have TWO
+#    slashes and only the first one is the provider.
+# 3. IT NEEDS A KEY. LMStudio takes any string; Unsloth answers `401 Not authenticated` on
+#    every route, `/v1/models` included. The key is personal, so it arrives from the shell
+#    and .env stays blank. A blank key fails TWICE, differently: LiteLLM keeps the alias and
+#    401s at call time, while the MLflow seed skips the endpoint — so the same name 401s on
+#    24000 and 404s on 25000.
+# 4. NOTHING LOADS ON DEMAND UNLESS AUTO-SWITCH IS ON. Unsloth serves ONE model at a time.
+#    With `Settings > API > Model auto-switch` off, a request for a model that is not loaded
+#    returns 400 `No model loaded` — it does not queue and it does not load. With it on, a
+#    call to another alias here UNLOADS the current one and reads ~18 GB from disk first.
+#    That is why the timeout matters as much here as on the LMStudio routes.
+# 5. THESE WEIGHTS THINK HERE AND DO NOT THINK ON THEIR LMSTUDIO TWIN. Verified 2026-08-27:
+#    `unsloth-26b` returns a `reasoning_content` block that `lms-26b` — the identical
+#    gemma-4-26b-a4b-qat — does not. Unsloth reports the model as `supports_reasoning: true,
+#    reasoning_style: enable_thinking` and turns it on. So every chat route below carries
+#    `max_tokens: 8192`, not the 4096 their LMStudio twins use. At 60 tokens the reply was
+#    empty with `finish_reason: length` and the whole budget spent thinking; at 1000 it
+#    answered in 117. Read that as a fact about THESE WEIGHTS, not about the engines — see
+#    note 3 in settings.yaml.
+
+model_list:
+  - model_name: unsloth-31b
+    litellm_params:
+      model: openai/unsloth/gemma-4-31B-it-qat-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000014   # shadow price: mirrors `standard`, as `lms-31b` does
+      output_cost_per_token: 0.0000004   # — same weights, so the same rate
+      max_tokens: 8192                   # reasoning + reply share this; see note 5 above
+      timeout: 3600                      # see the timeout note in settings.yaml; a cold
+                                         # auto-switch load adds ~17 GB of disk read on top
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  - model_name: unsloth-26b
+    litellm_params:
+      model: openai/unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000012   # shadow price: mirrors `cheap`, as `lms-26b` does
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                   # reasoning + reply share this; see note 5 above
+      timeout: 3600
+    model_info:
+      # 262144 − the 8192 output reserve, read from Unsloth's own GET /v1/status
+      # with the model loaded (context_length 262144), not copied from the twin.
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # `lms-4b`'s twin, and the third leg of the E4B row — the one size this repo carries on
+  # all three engines, which is why the STARTER list uses it. Its window is 131072 like
+  # `lms-4b`'s and `ollama-4b`'s, not the 262144 the two blocks above assume.
+  #
+  # QAT here, like every other Unsloth and LMStudio route and unlike Ollama's plain
+  # `gemma4:e4b` tag — so `unsloth-4b` against `lms-4b` isolates the engine cleanly, while
+  # either against `ollama-4b` also moves the quantisation.
+  - model_name: unsloth-4b
+    litellm_params:
+      model: openai/unsloth/gemma-4-E4B-it-qat-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000012   # shadow price: no hosted twin, so `cheap`'s rate
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                   # reasoning + reply share this; see note 5 above
+      timeout: 3600
+    model_info:
+      max_input_tokens: 122880           # 131072 − the same 8192 output reserve
+      max_output_tokens: 8192
+
+  # The embedding role on the second engine, so all three engines serve BOTH chat and
+  # embeddings. Verified 2026-08-27: POST /v1/embeddings on 8888 answers 200 with 768
+  # dimensions, and GET /v1/status reports context_length 2048 with it loaded.
+  #
+  # It is the SAME nomic build as `lms-embed-hq` — the Q8_0 "-Embedding" repo, which Unsloth
+  # finds because it indexes the LMStudio model folder. That is the point: it is the
+  # embedding half of the engine comparison the chat routes above already make, so
+  # `lms-embed-hq` vs `unsloth-embed` isolates the engine and nothing else. Against
+  # `lms-embed` (Q4_K_M) it is build AND engine.
+  #
+  # ONE MODEL AT A TIME SPANS CHAT AND EMBEDDINGS, and this is the trap. Calling this alias
+  # UNLOADS `unsloth-26b` or `unsloth-31b`, and the next chat call swaps it back — verified
+  # 2026-08-27, /v1/status dropped to context_length 2048 straight after an embeddings call.
+  # So a retrieval loop that alternates embed and chat on THIS engine pays a model swap
+  # every single call. LMStudio and Ollama both hold the embedder alongside a chat model and
+  # do not. Use lms-embed or ollama-embed inside such a loop and keep unsloth-embed for
+  # measuring the engine.
+  - model_name: unsloth-embed
+    litellm_params:
+      model: openai/second-state/Nomic-embed-text-v1.5-Embedding-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0             # free, stated so it cannot read as unpriced
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 2048              # context_length from Unsloth's GET /v1/status

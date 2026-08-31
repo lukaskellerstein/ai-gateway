@@ -54,7 +54,7 @@ defect. Two facts behind it:
 
 - **Nothing on this machine formats YAML**, marker or no marker — biome has no
   YAML parser and prettier is not installed. `compose.yml` and
-  `litellm/config.yaml` are hand-formatted, and the editor gives them schema
+  `litellm/config.*.yaml` are hand-formatted, and the editor gives them schema
   hints (`yaml-language-server`) and nothing more.
 - **Markdown opts in per repo** via a `.markdownlint-cli2.yaml`; there is no
   global one. This repo has not opted in.

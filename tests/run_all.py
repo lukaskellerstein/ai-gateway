@@ -6,7 +6,7 @@ the other inside a single row — and "which of the two is broken" is the first
 question worth answering.
 
     uv run run_all.py
-    uv run run_all.py --model local-qwen
+    uv run run_all.py --model lms-qwen
     uv run run_all.py --gateway mlflow --verbose
 """
 

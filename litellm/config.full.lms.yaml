@@ -1,0 +1,24 @@
+# COMPOSED CONFIG — the FULL list, LMSTUDIO only. Twelve aliases, about 70 GB of models.
+#
+#   ladder   lms-31b  lms-26b  lms-12b  lms-4b  lms-3b  lms-2b
+#   roles    lms-qwen  lms-uncensored  lms-reasoning  lms-creative
+#   embed    lms-embed  lms-embed-hq
+#
+# compose loads exactly ONE file from this directory, and its name is two words from `.env`:
+#
+#   config.${GATEWAY_MODELS:-starter}.${GATEWAY_ENGINE:-all}.yaml
+#
+# so this file is what you get from:
+#
+#   GATEWAY_MODELS=full
+#   GATEWAY_ENGINE=lms
+#
+# NOTHING IS DECLARED HERE. The aliases are in full/lms.yaml and the settings blocks are in
+# settings.yaml; this file only names them. Edit those, not this one.
+#
+# Every model must be present in LMStudio before its alias will answer, hand-loaded at full
+# context — full/lms.yaml carries the `lms load` line and the reason.
+
+include:
+  - settings.yaml
+  - full/lms.yaml

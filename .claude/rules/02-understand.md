@@ -13,9 +13,9 @@ description: "Step 1: Understand — read code, ask questions, identify gaps bef
   a symbol — where defined, who implements, who calls. It is deferred, so
   `ToolSearch("select:LSP")` comes first or it cannot be called at all. Absent
   from the list means this repo did not opt in: use `grep`.
-  [`lsp.md`](lsp.md). This repo holds exactly one Python file
-  (`mlflow/seed_gateway.py`) and no `lsp-*` plugin is enabled for it, so `LSP`
-  will not be there — use `grep`.
+  [`lsp.md`](lsp.md). This repo holds Python in exactly one place outside `tests/`
+  (`mlflow/`, eight files) and no `lsp-*` plugin is enabled for it, so `LSP` will
+  not be there — use `grep`.
 - Ask clarifying questions if requirements are ambiguous
 - Identify gaps in the current design and opportunities for improvement
 - Understand the requirement completely before proceeding
@@ -29,7 +29,7 @@ description: "Step 1: Understand — read code, ask questions, identify gaps bef
   curl -sX POST http://localhost:24000/v1/chat/completions \
     -H "Authorization: Bearer ${AI_GATEWAY_KEY:-sk-litellm-master}" \
     -H 'Content-Type: application/json' \
-    -d '{"model":"local","messages":[{"role":"user","content":"hi"}]}'
+    -d '{"model":"lms-26b","messages":[{"role":"user","content":"hi"}]}'
   ```
 
   Every request also lands in the admin UI's Logs tab at
@@ -38,14 +38,21 @@ description: "Step 1: Understand — read code, ask questions, identify gaps bef
 
 ## Before blaming this repo
 
-Three things outside `compose.yml` and `litellm/config.yaml` cause most of what
-looks like a gateway bug. Rule each out first:
+Four things outside `compose.yml` and the alias lists cause most of what looks
+like a gateway bug. Rule each out first:
+
+0. **`.env` is asking for something else.** Three words decide what runs —
+   `COMPOSE_PROFILES` (which gateway), `GATEWAY_MODELS` (which list),
+   `GATEWAY_ENGINE` (which engine). A port that refuses the connection, or an
+   alias that 404s on both gateways, is usually one of those words rather than a
+   fault: `podman compose ps` and `curl /model/info` say which. `.env` itself is
+   denied to you — ask the user what is in it.
 
 1. **LMStudio was JIT-loaded.** A JIT load does not inherit hand-load flags — a
    model hand-loaded at 262144 context comes back at 8192, with a 1 h TTL. A
    session that worked this morning fails this afternoon with nothing changed.
    `lms ps --json` is the source of truth, **not** the LMStudio UI.
-2. **The alias fell back.** `local` routes to OpenRouter when LMStudio is down.
+2. **The alias fell back.** `lms-26b` routes to OpenRouter when LMStudio is down.
    Non-zero spend on a "free" alias is this, and it is expected behaviour.
 3. **A provider key is missing from the shell.** `OPENROUTER_API_KEY`,
    `OPENAI_API_KEY` and `HF_TOKEN` are blank in `.env` **on purpose** and arrive

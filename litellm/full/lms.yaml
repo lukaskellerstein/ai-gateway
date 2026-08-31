@@ -1,0 +1,264 @@
+# LMStudio (port 1234) — THE FULL FRAGMENT. Twelve aliases: a size ladder, four roles and
+# two embedders. About 70 GB of the ~90 GB the full list asks for across all three engines.
+#
+# A FRAGMENT IS NOT A CONFIG. It carries `model_list` and nothing else, and LiteLLM never
+# loads it directly. The composed files include it:
+#
+#   config.full.lms.yaml   settings.yaml + this file
+#   config.full.all.yaml   settings.yaml + this file + the other two engines
+#
+# The settings blocks, the pricing rules, the timeout reasoning and the reasoning-token trap
+# are in settings.yaml, once. This file holds what is true of LMSTUDIO and of these models.
+#
+# THE LADDER IS lms-31b / lms-26b / lms-12b / lms-4b / lms-3b / lms-2b, and the roles are
+# lms-qwen, lms-uncensored, lms-reasoning, lms-creative, lms-embed and lms-embed-hq. Only
+# `lms-4b` and `lms-embed` also appear in the starter list — everything else is here alone.
+#
+# EVERY ROUTE HERE ASSUMES A HAND LOAD AT FULL CONTEXT. A JIT load comes back at 8192 with a
+# 1 h TTL, and the max_input_tokens below are then a lie. `lms ps --json` is the truth:
+#   lms load <model> --context-length 262144 --parallel 1 --gpu max
+# 262144 for most; the three routes declaring 122880 input (lms-4b, lms-2b, lms-creative)
+# cap at 131072 instead. `lms ls --json` → maxContextLength is the per-model figure.
+#
+# `--parallel 1` on purpose. An agent client fires the main turn and its background calls
+# (titles, summaries) at once; at --parallel 4 they split one GPU four ways and a 1-token
+# request measured 34 s while big prompts sat behind it. Serialising is faster end to end.
+#
+# THE KEY IS ANY STRING. LMStudio never checks it, unlike Unsloth.
+#
+# The engines SHARE ONE GPU. Loading a 31B here does not evict Unsloth's or Ollama's model,
+# it just leaves less room. Read `lms ps --json`, Unsloth's `GET /v1/status` AND `ollama ps`
+# before blaming a slow reply on the gateway.
+
+model_list:
+  # The 26B MoE with ~4B active — the fast default of the ladder.
+  - model_name: lms-26b
+    litellm_params:
+      model: lm_studio/google/gemma-4-26b-a4b-qat
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012   # shadow price: mirrors `cheap`
+      output_cost_per_token: 0.00000035
+      max_tokens: 4096                   # default, not a cap; guards runaway generations
+      timeout: 3600                      # see the timeout note in settings.yaml
+    model_info:                          # context − output reserve, on every route below
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # The dense 31B, unablated — `standard`'s exact weights, run here instead of at
+  # OpenRouter. Slower than `lms-26b` (31B dense vs a 26B MoE with ~4B active: every token
+  # goes through every parameter), so it is a name you pick deliberately, not a default.
+  #
+  # Absent from both fallback maps, but for a DIFFERENT reason than `lms-uncensored` below:
+  # the hosted twin would answer this one fine — it is `standard`. The point is that
+  # `lms-31b` should always mean "these weights, on this machine, free". A caller who
+  # wants the cloud twin asks for `standard` and knows they are paying for it.
+  # QAT — quantisation-aware trained, not quantised after the fact. The 4-bit error is
+  # learned around during training rather than introduced at the end, so this sits closer
+  # to full precision than its Q4_0 label suggests, and closer than the Q4_K_M build it
+  # replaced despite Q4_K_M being the more elaborate scheme. It is also 1.04 GB smaller
+  # (18.85 vs 19.89 GB) — real, but the lesser reason: at the 262144 context this route
+  # assumes, the KV cache is identical between the two builds, so 1.04 GB is the whole
+  # saving and it does not grow with the window.
+  - model_name: lms-31b
+    litellm_params:
+      model: lm_studio/google/gemma-4-31b-qat
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000014   # shadow price: mirrors `standard`, the hosted twin
+      output_cost_per_token: 0.0000004
+      max_tokens: 4096                   # shared with reasoning tokens; too low returns empty content
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # The rungs below `lms-31b`. Same Gemma 4 family, same 262144 window, a fraction of the
+  # weights — these are the names to reach for when the 31B's minutes-per-prompt cost more
+  # than its extra quality is worth. This one is QAT too, for the reason given on
+  # `lms-31b` above.
+  - model_name: lms-12b
+    litellm_params:
+      model: lm_studio/google/gemma-4-12b-qat
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012   # shadow price: no hosted twin, so `cheap`'s rate
+      output_cost_per_token: 0.00000035  # stands in — see settings.yaml
+      max_tokens: 4096                   # shared with reasoning tokens; too low returns empty content
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # 3 GB, so it loads in seconds and leaves most of the GPU free for something else. For
+  # classification, routing, extraction and the other high-volume short calls where the
+  # 26B's throughput is the constraint rather than its reasoning. Tools and vision, full
+  # window — small here means few parameters, not a cut-down feature set.
+  - model_name: lms-3b
+    litellm_params:
+      model: lm_studio/mistralai/ministral-3-3b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012   # shadow price: deliberately over-stated, as above
+      output_cost_per_token: 0.00000035
+      max_tokens: 4096
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # The Gemma 4 E pair — "effective" 4B and 2B, and the only chat routes here whose window
+  # is 131072 rather than 262144, which is why their numbers differ from every block above.
+  #
+  # On the two figures you would check first they lose to `lms-3b`: e4b is 6.86 GB on disk
+  # against Ministral's 2.99, e2b is 4.37 GB — LARGER than the 3B it nominally sits below —
+  # and both carry half the context. They earn a name for the one thing Ministral cannot
+  # give, which is a Gemma-family answer at this size. Reach for them when the question is
+  # whether a prompt survives shrinking *within* the family the rest of this ladder uses;
+  # reach for `lms-3b` when you want a genuinely different vendor's opinion.
+  #
+  # `lms-4b` is also the one chat alias present in BOTH lists on BOTH gateways, which is
+  # why tests/ defaults to it. Keep it in the starter fragment or a fresh clone breaks.
+  - model_name: lms-4b
+    litellm_params:
+      model: lm_studio/google/gemma-4-e4b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012   # shadow price: no hosted twin, so `cheap`'s rate
+      output_cost_per_token: 0.00000035
+      max_tokens: 4096                   # IT REASONS — 65 of 70 completion tokens on a
+                                         # one-word prompt, 2026-08-28; 20 returned empty
+      timeout: 3600
+    model_info:
+      max_input_tokens: 122880           # 131072 − the same 8192 output reserve
+      max_output_tokens: 8192
+
+  - model_name: lms-2b
+    litellm_params:
+      model: lm_studio/google/gemma-4-e2b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012   # shadow price: deliberately over-stated, as above
+      output_cost_per_token: 0.00000035
+      max_tokens: 4096
+      timeout: 3600
+    model_info:
+      max_input_tokens: 122880           # 131072 − the same 8192 output reserve
+      max_output_tokens: 8192
+
+  # The non-Gemma opinion at the top of the ladder: Qwen3.8 27B, tool-trained and
+  # vision-capable, on the same 262144 window as the Gemma routes.
+  #
+  # Named by family and not by rung, deliberately. `lms-27b` would be the ladder-shaped
+  # name and it would be ambiguous: `lms-reasoning` below is *also* a 27B Qwen, so a size
+  # name would describe two different routes equally well. The reason to reach for this one
+  # is the family, so the family is what the name says.
+  #
+  # It emits a reasoning block like `lms-reasoning` does, hence 8192 rather than 4096: asked
+  # for 17×23 it spent 59 of 65 completion tokens thinking (verified 2026-08-23). On 4096 a
+  # real prompt hits the cap mid-thought and returns empty content with no error at all.
+  - model_name: lms-qwen
+    litellm_params:
+      model: lm_studio/qwen/qwen3.8-27b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000014   # shadow price: nearest sourced rate, `standard`'s
+      output_cost_per_token: 0.0000004   # (27B here against that 31B)
+      max_tokens: 8192                   # reasoning + reply share this; see above
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # Abliterated weights. Absent from both fallback maps ON PURPOSE: a hosted twin would
+  # refuse the request and would see prompts chosen to stay on this machine.
+  - model_name: lms-uncensored
+    litellm_params:
+      model: lm_studio/gemma-4-31b-it-abliterated
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000014   # shadow price: mirrors `standard`, the unablated model
+      output_cost_per_token: 0.0000004
+      max_tokens: 4096                   # shared with reasoning tokens; too low returns empty content
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # A role, not a rung: this one emits a reasoning block before its answer. `max_tokens` is
+  # 8192 where every other chat route here carries 4096, because reasoning tokens are drawn
+  # from the SAME allowance as the reply — a thinking model that hits the cap mid-thought
+  # returns empty content and no error, which reads as a broken alias rather than a low cap.
+  - model_name: lms-reasoning
+    litellm_params:
+      model: lm_studio/thinkingcap-qwen3.6-27b
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000014   # shadow price: nearest sourced rate, `standard`'s
+      output_cost_per_token: 0.0000004   # (27B here against that 31B)
+      max_tokens: 8192                   # reasoning + reply share this; see above
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # A role: long-form prose at 28B, and the only non-Gemma, non-Qwen route here.
+  #
+  # It is the one model whose LMStudio metadata says tool use was never trained in
+  # (`trainedForToolUse: false` in `lms ls --json`) — and yet a single-tool request returns
+  # a proper structured tool_call, finish_reason `tool_calls`, verified 2026-08-23. Treat
+  # the flag as a statement about training, not about the runtime: LMStudio applies its own
+  # tool template regardless. What stays UNVERIFIED is whether that holds up under an agent
+  # loop's many-tool, many-turn prompts, which is where an untrained model degrades to
+  # raw-text tool syntax — the silent failure that empties an agent run. Prose is what this
+  # alias is for; if you drive an agent with it, confirm tool_calls on that workload first.
+  #
+  # Its window is 131072, half what the Gemma routes carry, which is why the numbers below
+  # differ from every other block: 131072 − the same 8192 output reserve.
+  - model_name: lms-creative
+    litellm_params:
+      model: lm_studio/meta/muse-glimmer
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000014   # shadow price: nearest sourced rate, `standard`'s
+      output_cost_per_token: 0.0000004
+      max_tokens: 8192                   # it reasons AND writes long-form; 4096 is where
+                                         # those two together start truncating the prose
+      timeout: 3600
+    model_info:
+      max_input_tokens: 122880
+      max_output_tokens: 8192
+
+  # --- The embedding pair on this engine -------------------------------------------
+  # Both are nomic-embed-text v1.5 at 768 dimensions on a 2048 window. `lms-embed` is the
+  # Q4_K_M build at 84 MB; `lms-embed-hq` is Q8_0 at 146 MB, more fidelity per vector. Both
+  # are free and both load in under a second, so the choice is purely accuracy against
+  # memory.
+  #
+  # VECTORS FROM THE TWO ARE NOT INTERCHANGEABLE, and this is the only way to get it wrong.
+  # Quantisation moves where a text lands in the space, so a query embedded with one and
+  # matched against an index built with the other returns subtly worse neighbours — nothing
+  # errors, the results are just quietly less relevant, which is close to undetectable after
+  # the fact. Pick ONE alias per index, and record which one alongside the index.
+  #
+  # `lms-embed-hq` is the same build `unsloth-embed` serves, so that pair isolates the
+  # engine and nothing else.
+  - model_name: lms-embed
+    litellm_params:
+      model: lm_studio/text-embedding-nomic-embed-text-v1.5
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0             # free, stated so it cannot read as unpriced
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 2048
+
+  - model_name: lms-embed-hq
+    litellm_params:
+      model: lm_studio/text-embedding-nomic-embed-text-v1.5-embedding
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0             # free, stated so it cannot read as unpriced
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 2048

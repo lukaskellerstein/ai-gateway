@@ -41,8 +41,9 @@ The steps below still apply.
 
 ```bash
 podman compose config >/dev/null          # compose file parses and interpolates
+podman compose config --services          # WHICH services COMPOSE_PROFILES starts
 podman compose up -d
-podman compose ps -a                      # postgres, litellm, mlflow -> healthy
+podman compose ps -a                      # every service its profile names -> healthy
                                           # mlflow-seed -> Exited (0), which is DONE
 curl -fsS http://localhost:24000/health/liveliness      # -> "I'm alive!"
 curl -fsS http://localhost:25000/health                 # -> OK
@@ -63,13 +64,39 @@ curl -sX POST http://localhost:24000/v1/chat/completions \
 ```
 
 > [!warning]
-> **A 200 does not prove the request went where you think.** `local` falls back
-> to OpenRouter when LMStudio is down, so a "local" test can pass entirely on a
-> hosted model. Confirm the actual provider in the Logs tab at
-> <http://localhost:24000/ui>, or check `lms ps --json` first.
+> **A 200 does not prove the model you think answered.** Every alias names its
+> engine, so the route is unambiguous — but LMStudio JIT-loads a model that is not
+> resident, at 8192 context, and answers a short test prompt perfectly well.
+> Check `lms ps --json` (or Unsloth's `GET /v1/status`, or `ollama ps`) first, and
+> confirm the request in the Logs tab at <http://localhost:24000/ui>. If you
+> uncomment the cloud tiers, `lms-26b → cheap-free → cheap` goes live again and a
+> "local" test can then pass entirely on a hosted model.
 
-**If you touched `litellm/config.yaml`, prove the SAME alias on both gateways.**
-`mlflow-seed` copies that file, so a change there is a change to two services:
+**If you touched either list, prove it on the STARTER one too.** The starter
+fragments are what a fresh clone runs, so a change that only works under
+`GATEWAY_MODELS=full` is broken for everyone else. Bring the stack up with the
+variable unset and check `/model/info` returns the six starter aliases before you
+report.
+
+**If you touched anything that selects a config — `compose.yml`, a composed
+`config.*.yaml`, `mlflow/seed.py` — prove more than one combination.** The three
+words are independent, so one working stack proves one cell of a 2 x 4 x 3 grid.
+At minimum: one single-engine run (`/model/info` returns that engine's aliases and
+nothing else) and one single-gateway run (`COMPOSE_PROFILES=mlflow` → 25000 serves,
+24000 refuses the connection, `compose ps` shows no `litellm` container).
+
+```bash
+COMPOSE_PROFILES=mlflow GATEWAY_MODELS=full GATEWAY_ENGINE=ollama podman compose up -d
+```
+
+**Then put the stack back the way you found it**, with the same three words it had
+when you started.
+
+**If you touched an alias list, prove the SAME alias on BOTH gateways.** This is
+the check that matters most since 2026-08-28: the two gateways hold SEPARATE
+lists — `litellm/<models>/<engine>.yaml` and `mlflow/<models>/<engine>.py` — and
+neither reads the other, so an edit to one side alone is a silent drift that only
+a call to 25000 can catch:
 
 ```bash
 curl -sX POST http://localhost:25000/gateway/mlflow/v1/chat/completions \
@@ -94,7 +121,7 @@ the ceiling is real:
 curl -sX POST http://localhost:24000/key/generate \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"models":["local"],"max_budget":0.01,"duration":"1h"}'
+  -d '{"models":["lms-26b"],"max_budget":0.01,"duration":"1h"}'
 ```
 
 A `{"error":"No connected db."}` here means the proxy booted without
@@ -114,7 +141,7 @@ is the configured state, not a broken tool — how to read the output is in
 [`machine-tools.md`](machine-tools.md), and the fix route, if one is ever wanted,
 is `/lint-format-lsp` in mac-setup.
 
-**Documentation-only changes** (`README.md`, `NOTES.md`): state explicitly why no
+**Documentation-only changes** (`README.md`): state explicitly why no
 runtime test is needed. But if you changed a **command or a claim** in either
 file, run it — a wrong `curl` in the README is the failure this repo's docs exist
 to prevent.
@@ -123,8 +150,8 @@ to prevent.
 
 If a test fails: fix the issue, then retest. Repeat until all DoD items pass. If
 you hit a problem you repeatedly cannot resolve, ask the user for help rather
-than reporting partial success. `README.md` and `NOTES.md` both carry
-troubleshooting tables — check them before inventing a diagnosis.
+than reporting partial success. `README.md` carries a troubleshooting table —
+check it before inventing a diagnosis.
 
 Leave the stack in the state you found it. If it was down before you started,
 `podman compose down` when you are finished.

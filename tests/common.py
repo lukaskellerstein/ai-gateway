@@ -31,19 +31,33 @@ IMAGE_PATH = Path(__file__).resolve().parent / "test_image.png"
 # compose resolves the shell environment before this file.
 load_dotenv(REPO_ROOT / ".env", override=False)
 
-# `local-3b` and not `local`: it is the small route, so a cold LMStudio JIT-loads
-# 3 GB rather than 19, and it is vision- AND tool-capable, which the whole set of
-# scripts here needs. Override for a one-off run with --model.
-DEFAULT_MODEL = os.environ.get("AI_GATEWAY_TEST_MODEL", "local-3b")
+# THE DEFAULT ALIAS FOLLOWS THE ENGINE THE STACK IS SERVING. `GATEWAY_ENGINE` in
+# .env holds `lms`, `unsloth`, `ollama` or `all`, and with a single engine named
+# the other engines' aliases are not in the config at all — so a fixed `lms-4b`
+# default would fail with "model not found" on a perfectly healthy stack.
+#
+# The chosen names are the E4B row: the ONE model this repo carries on all three
+# engines, present in BOTH lists on BOTH gateways. Small, and vision- AND
+# tool-capable, which the whole set of scripts here needs. Override for a one-off
+# run with --model, or permanently with AI_GATEWAY_TEST_MODEL.
+DEFAULT_MODEL_BY_ENGINE = {
+    "all": "lms-4b",
+    "lms": "lms-4b",
+    "unsloth": "unsloth-4b",
+    "ollama": "ollama-4b",
+}
+DEFAULT_MODEL = os.environ.get("AI_GATEWAY_TEST_MODEL") or DEFAULT_MODEL_BY_ENGINE.get(
+    os.environ.get("GATEWAY_ENGINE", "all"), "lms-4b"
+)
 
 # LMStudio prompt processing measures ~100 tok/s on this machine, so a large
 # prompt needs minutes before its first token — the same fact that puts
-# `timeout: 3600` on every LMStudio route in litellm/config.yaml. Retries are off
-# because a test that silently retries hides the failure it exists to find.
+# `timeout: 3600` on every chat route in litellm/. Retries are off because a test
+# that silently retries hides the failure it exists to find.
 REQUEST_TIMEOUT_SECONDS = 3600.0
 
 # One allowance for every script, and it has to clear a REASONING block. Several
-# aliases here — `reasoning`, `local-qwen`, `creative`, and both `unsloth-*` —
+# aliases here — `lms-reasoning`, `lms-qwen`, `lms-creative`, and both `unsloth-*` —
 # spend this same budget on thinking before they write a word. A model that runs
 # out mid-thought returns EMPTY content with `finish_reason: "length"` and raises
 # nothing, which reads as a broken alias. 150 was not enough for a one-sentence
@@ -141,8 +155,25 @@ def parse_args(description: str) -> argparse.Namespace:
     return parser.parse_args()
 
 
+def running_gateways() -> list[str]:
+    """The gateways this `.env` actually starts, from compose's own COMPOSE_PROFILES.
+
+    A stack brought up with `COMPOSE_PROFILES=mlflow` has no LiteLLM at all, and
+    driving 24000 there produces a connection error that says nothing about the
+    change being tested. Unset means "not configured": every gateway is tried and
+    the health check in run_all.py reports whichever is down.
+    """
+    profiles = {word.strip() for word in os.environ.get("COMPOSE_PROFILES", "").split(",") if word.strip()}
+    if not profiles:
+        return list(GATEWAYS)
+    chosen = [name for name in GATEWAYS if name in profiles or "all" in profiles]
+    return chosen or list(GATEWAYS)
+
+
 def selected(name: str) -> list[Gateway]:
-    return list(GATEWAYS.values()) if name == "both" else [GATEWAYS[name]]
+    if name != "both":
+        return [GATEWAYS[name]]
+    return [GATEWAYS[chosen] for chosen in running_gateways()]
 
 
 def run(scenario: Callable[[Gateway, str], str], description: str) -> int:

@@ -1,0 +1,24 @@
+# COMPOSED CONFIG — the FULL list, UNSLOTH only. Four aliases, about 40 GB of models.
+#
+#   chat     unsloth-31b  unsloth-26b  unsloth-4b
+#   embed    unsloth-embed
+#
+# compose loads exactly ONE file from this directory, and its name is two words from `.env`:
+#
+#   config.${GATEWAY_MODELS:-starter}.${GATEWAY_ENGINE:-all}.yaml
+#
+# so this file is what you get from:
+#
+#   GATEWAY_MODELS=full
+#   GATEWAY_ENGINE=unsloth
+#
+# NOTHING IS DECLARED HERE. The aliases are in full/unsloth.yaml and the settings blocks are
+# in settings.yaml; this file only names them. Edit those, not this one.
+#
+# TWO THINGS BITE ON THIS ENGINE ALONE. Every route needs UNSLOTH_API_KEY in the shell that
+# ran `up -d`, and Unsloth serves ONE model at a time — chat and the embedder evict each
+# other, so a retrieval loop pays a swap per call. full/unsloth.yaml has the detail.
+
+include:
+  - settings.yaml
+  - full/unsloth.yaml

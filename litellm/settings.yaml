@@ -1,0 +1,192 @@
+# LiteLLM gateway — THE SETTINGS, and the notes that are true of every alias.
+#
+# NO ALIAS LIVES HERE. This file carries the three settings blocks and nothing else, and
+# every composed config includes it exactly once. The aliases live in the fragments:
+#
+#   starter/lms.yaml   starter/unsloth.yaml   starter/ollama.yaml
+#   full/lms.yaml      full/unsloth.yaml      full/ollama.yaml
+#
+# HOW A CONFIG IS BUILT. compose does not mount a fragment. It mounts this whole directory
+# at /app/config and points LiteLLM at ONE composed file whose name is two words from `.env`:
+#
+#   config.${GATEWAY_MODELS:-starter}.${GATEWAY_ENGINE:-all}.yaml
+#
+# Each composed file is a short `include:` list — this file, plus one to three fragments.
+# LiteLLM merges an included file key by key: a LIST is extended, anything else is replaced.
+# So three fragments contribute three `model_list` blocks that become one, while the three
+# settings blocks below arrive once and stay whole.
+#
+# A COMPOSED FILE NEVER INCLUDES ANOTHER COMPOSED FILE. LiteLLM does not recurse: a nested
+# `include:` is merged as data and then deleted, so the settings would silently vanish and
+# the proxy would boot with NO master key. Include this file and fragments, nothing else.
+#
+# ---------------------------------------------------------------------------------
+# THE OTHER GATEWAY HAS ITS OWN LIST AND DOES NOT READ ANY OF THIS. MLflow's endpoints live
+# in mlflow/<models>/<engine>.py — Python, because MLflow has no config file at all. So AN
+# ALIAS IS TWO EDITS, one per gateway. Add it on one side only and the name answers on 24000
+# and 404s on 25000, with nothing in either log to say why.
+#
+# ADDING A MODEL is a FIVE-part edit, and skipping any part is a bug that hides:
+#   1. the model_list entry, in the fragment for ITS engine and ITS list
+#   2. its price — an unpriced route logs $0, which makes a budget ceiling a no-op
+#   3. its max_input_tokens — with enable_pre_call_checks on, this is what catches an
+#      over-long prompt before it reaches the model
+#   4. THE MATCHING Endpoint(...) in mlflow/<models>/<engine>.py — the other gateway's list
+#   5. the alias table in README.md — a route nobody documents is a route nobody calls
+#
+# EVERY ALIAS NAMES ITS ENGINE. `lms-*` is LMStudio, `unsloth-*` is Unsloth Studio,
+# `ollama-*` is Ollama. There is deliberately no engine-neutral name: one existed, it hid
+# which engine answered, and it was removed. Keep the convention when you add one.
+#
+# ---------------------------------------------------------------------------------
+# THREE FACTS THAT APPLY TO EVERY FRAGMENT, so they are written here once.
+#
+# 1. THE 3600 s TIMEOUT ON EVERY CHAT ROUTE. Prompt processing on this machine measures
+#    ~100 tok/s (17.6k tokens in 173 s), so an agent-scale prompt needs 5-15 MINUTES before
+#    its first token and a full 253952-token window needs ~42. LiteLLM's 600 s default
+#    expires mid-prompt; LMStudio then reports `Engine protocol predict request failed:
+#    fetch failed` — its engine socket torn down, not a bad request — which maps to a 400,
+#    and a 400 is never retried. Raise it in step with the client's own timeout
+#    (API_TIMEOUT_MS for Claude Code), or the client gives up first and the patience is
+#    wasted. Hosted routes keep the default: an hour is right for a local GPU grinding and
+#    wrong for a hung HTTP call to OpenRouter.
+#
+# 2. PRICES ARE STATED EXPLICITLY, because LiteLLM's cost map knows none of these models and
+#    an unpriced route logs $0 — which makes a virtual key's budget ceiling a no-op. Local
+#    routes are therefore SHADOW-PRICED: free to run, carrying a cloud twin's rate so a
+#    ceiling still trips. Anything summing /spend/logs must say whether it reports money
+#    billed or the cost of the same workload on the cloud twin.
+#
+#    Several local routes have no hosted twin to mirror, so their shadow price reuses the
+#    nearest rate that IS sourced, rounded UP rather than down. A shadow price exists only
+#    to make ceilings trip: pricing a 3B at a 26B's rate burns a budget faster than reality,
+#    which is visible and correctable, while pricing it under reality silently disables the
+#    guardrail. Err in the direction you can see.
+#
+# 3. REASONING TOKENS COME OUT OF max_tokens, AND WHICH ROUTES THINK IS DECIDED PER MODEL,
+#    NOT PER ENGINE. A route that hits the cap mid-thought returns EMPTY content with
+#    finish_reason "length" and raises no error at all. Two measurements that refuse the
+#    tidy story that only Unsloth and Ollama think:
+#      - 2026-08-28, `lms-4b` on LMSTUDIO: 65 of 70 completion tokens were reasoning, and at
+#        max_tokens 20 the content came back empty.
+#      - 2026-08-27, `lms-26b` on LMStudio: NO reasoning block, while `unsloth-26b` — the
+#        identical gemma-4-26b-a4b-qat — produced one.
+#    Treat EVERY chat route as capable of thinking and keep max_tokens generous.
+#
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+# ---------------------------------------------------------------------------------
+
+litellm_settings:
+  success_callback: []                    # tracing is a project's job, not the gateway's
+  drop_params: true                       # forward what the model understands, drop the rest
+  turn_off_message_logging: false         # pinned: either one flipped empties every stored request
+  redact_messages_in_exceptions: false
+
+  # NO ALIAS HAS A FALLBACK CHAIN, on either gateway. Every alias names one engine, and a hop
+  # to a different engine — or to a hosted model — would destroy the only comparison these
+  # names exist to make. `lms-26b` is the single deliberate exception and its chain is
+  # commented out below with the routes it points at.
+  #
+  # MLFLOW CAN EXPRESS A CHAIN AND EXPRESSES NONE. Each Endpoint(...) in mlflow/ takes a
+  # `fallbacks=[...]` list and every one leaves it empty, matching this file. Uncomment a
+  # chain here and uncomment the matching one there, or the two gateways behave differently
+  # under exactly the failure a chain exists to survive.
+  #
+  # # On error. `lms-26b` leads to its own cloud twin, so the common hop changes where a
+  # # request ran, not what ran — but it reaches a PRICED route, so budget the key.
+  # fallbacks:
+  #   - {"lms-26b": ["cheap-free", "cheap"]}
+  #   - {"cheap-free": ["cheap"]}
+  #   - {"cheap": ["standard", "frontier"]}
+  #   - {"standard": ["standard-hf", "frontier"]}
+  #   - {"frontier": ["standard"]}
+  #
+  # # On overflow. Short because `frontier` is the only larger window here.
+  # context_window_fallbacks:
+  #   - {"lms-26b": ["frontier"]}
+  #   - {"cheap-free": ["frontier"]}
+  #   - {"cheap": ["frontier"]}
+  #   - {"standard": ["frontier"]}
+
+router_settings:
+  enable_pre_call_checks: true            # off (the default), every max_input_tokens is inert
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Needs DATABASE_URL. The prompt lands in the `proxy_server_request` column, NOT in
+  # `messages` — that one looks obvious and stays "{}" for chat completions.
+  store_prompts_in_spend_logs: true
+
+# ---------------------------------------------------------------------------------
+# THE HOSTED TIERS — cloud, priced, and COMMENTED OUT. They live here rather than in a
+# fragment because they belong to no engine: GATEWAY_ENGINE selects which LOCAL engine
+# answers, and these three are what you reach for when none of them should.
+#
+# NOTHING IN THIS REPO CAN ACCRUE SPEND WHILE THEY STAY COMMENTED. Uncommenting them brings
+# `lms-26b -> cheap-free -> cheap` back to life if you also uncomment the fallback map
+# above, at which point a stopped LMStudio silently turns a free session into a paid one.
+#
+# To turn them on: uncomment the `model_list:` key below together with the routes you want,
+# put the provider keys in your shell or in `.env`, and add the matching Endpoint(...) to
+# every mlflow/<models>/<engine>.py you run — or accept that 25000 does not serve them.
+#
+# model_list:
+#   - model_name: cheap                     # $0.12 / $0.35 per 1M tokens
+#     litellm_params:
+#       model: openrouter/google/gemma-4-26b-a4b-it
+#       api_key: os.environ/OPENROUTER_API_KEY
+#       input_cost_per_token: 0.00000012
+#       output_cost_per_token: 0.00000035
+#       max_tokens: 4096
+#       extra_body:
+#         provider:
+#           require_parameters: true        # skip OpenRouter providers that can't do tools
+#     model_info:
+#       max_input_tokens: 245760
+#       max_output_tokens: 16384
+#
+#   - model_name: standard                  # $0.14 / $0.40 per 1M tokens
+#     litellm_params:
+#       model: openrouter/google/gemma-4-31b-it
+#       api_key: os.environ/OPENROUTER_API_KEY
+#       input_cost_per_token: 0.00000014
+#       output_cost_per_token: 0.0000004
+#       max_tokens: 4096
+#       extra_body:
+#         provider:
+#           require_parameters: true
+#     model_info:
+#       max_input_tokens: 245760
+#       max_output_tokens: 16384
+#
+#   - model_name: frontier                  # unpriced here: already in LiteLLM's cost map
+#     litellm_params:
+#       model: openai/gpt-5.4-mini
+#       api_key: os.environ/OPENAI_API_KEY
+#
+#   - model_name: cheap-free
+#     litellm_params:
+#       model: openrouter/google/gemma-4-26b-a4b-it:free
+#       api_key: os.environ/OPENROUTER_API_KEY
+#       input_cost_per_token: 0
+#       output_cost_per_token: 0
+#       max_tokens: 4096
+#       extra_body:
+#         provider:
+#           require_parameters: true
+#           # LOAD-BEARING FOR AGENT RUNS. The other free-tier provider advertises tools but
+#           # returns raw-text tool calls under agent-scale prompts — nothing errors, the
+#           # agent just executes nothing. Must fail over to the paid twin, never sideways.
+#           order: ["google-ai-studio"]
+#           allow_fallbacks: false
+#     model_info:
+#       max_input_tokens: 229376
+#       max_output_tokens: 32768
+#
+#   - model_name: standard-hf               # $0.14 / $0.40 per 1M (Novita's catalog)
+#     litellm_params:
+#       model: huggingface/novita/google/gemma-4-31B-it
+#       api_key: os.environ/HF_TOKEN
+#       input_cost_per_token: 0.00000014
+#       output_cost_per_token: 0.0000004
+#       max_tokens: 4096

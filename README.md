@@ -1,613 +1,759 @@
 # ai-gateway
 
-The machine-wide LLM gateway: **one OpenAI-compatible endpoint** that every project
-on this laptop calls, so switching provider or model is a change *here* rather than in
-each repo.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![LiteLLM](https://img.shields.io/badge/LiteLLM-main--stable-6f42c1.svg)](https://github.com/BerriAI/litellm)
+[![MLflow](https://img.shields.io/badge/MLflow-3.15.1-0194e2.svg)](https://mlflow.org)
+[![Postgres](https://img.shields.io/badge/Postgres-17-336791.svg)](https://www.postgresql.org)
+[![compose](https://img.shields.io/badge/compose-docker%20%7C%20podman-2496ed.svg)](compose.yml)
+[![build step](https://img.shields.io/badge/build%20step-none-brightgreen.svg)](#quick-start)
 
-Four containers, and each is load-bearing:
+**One OpenAI-compatible endpoint in front of every model on your machine.**
 
-| Service | Host | Notes |
-|:--|:--|:--|
-| `litellm` | <http://localhost:24000> | **the endpoint every project calls**; admin UI at [`/ui`](http://localhost:24000/ui) |
-| `postgres` | *not published* | virtual keys, spend logs, budget ceilings |
-| `mlflow` | <http://localhost:25000> | the **same aliases** through the MLflow AI Gateway — § below |
-| `mlflow-seed` | *exits* | copies `litellm/config.yaml` into MLflow, then stops |
+Your projects call `http://localhost:24000` and ask for a name like `lms-4b` or `ollama-4b`.
+Which model that name points at is decided **here**, in this repo's config — so swapping a
+model is one edit here, not an edit in every project that calls it.
 
-Runs under both `podman compose` and `docker compose`. LMStudio runs **natively** on
-the host; both gateways reach it at `host.containers.internal` / `host.docker.internal`.
+It runs three local engines side by side — LMStudio, Unsloth Studio and Ollama — behind the
+same vocabulary, so you can compare them by changing one string. Out of the box it serves
+**six aliases**: one chat model and one embedder on each engine. Hosted providers
+(OpenRouter, OpenAI, HuggingFace) plug in the same way and ship commented out.
 
-## Architecture
+Three lines in `.env` decide what runs — **which gateway**, **which alias list**, **which
+engine** — and nothing else has to be edited to get a different stack.
+
+```bash
+cp .env.example .env
+docker compose up -d
+
+curl http://localhost:24000/v1/chat/completions \
+  -H "Authorization: Bearer sk-litellm-master" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"lms-4b","messages":[{"role":"user","content":"hi"}]}'
+```
+
+**Contents** — [What you get](#what-you-get) · [How it works](#how-it-works) ·
+[Quick start](#quick-start) · [The aliases](#the-aliases) · [Call it](#call-it) ·
+[Tests](#tests) · [Claude Code](#use-it-from-claude-code) ·
+[Budget-capped keys](#budget-capped-keys) · [Configuration](#configuration) ·
+[Load a model first](#load-a-model-first) · [The MLflow gateway](#the-mlflow-gateway) ·
+[Troubleshooting](#troubleshooting) · [Repository layout](#repository-layout) ·
+[Design decisions](#design-decisions) · [Contributing](#contributing)
+
+---
+
+## What you get
+
+- **One endpoint, many models.** The OpenAI routes plus `/v1/messages` (the Anthropic
+  route), so the OpenAI SDK, the Anthropic SDK and Claude Code all reach the same models.
+- **Names instead of model ids.** Callers ask for `lms-4b`, not
+  `lm_studio/google/gemma-4-e4b`. Change the model, keep the name.
+- **Three local engines, one vocabulary.** `lms-4b`, `unsloth-4b` and `ollama-4b` are
+  the same weights on three engines. Change the alias, change nothing else.
+- **Spend limits that work on local models too.** Virtual keys carry a budget and an expiry.
+  Local routes are *shadow-priced*, so a ceiling still trips even though nothing is billed.
+- **Every request logged** — prompt and response — in the admin UI at
+  <http://localhost:24000/ui>.
+- **No build step.** All three images are stock. `up -d` is the whole install.
+
+> **The models below are examples, not the product.** They are what one machine happens to
+> have on disk. The alias names are the contract; edit the fragment for your engine —
+> [`litellm/starter/lms.yaml`](litellm/starter/lms.yaml) **and**
+> [`mlflow/starter/lms.py`](mlflow/starter/lms.py) — to point them at your own models, then
+> run `docker compose up -d` again. Each gateway owns its own list — see
+> [The MLflow gateway](#the-mlflow-gateway) for why, and what it costs.
+
+## How it works
 
 ```mermaid
 flowchart LR
-    callers["every project on this laptop<br/>Claude Code · scripts · notebooks"]
+    callers["your projects<br/>SDKs · scripts · Claude Code"]
 
     subgraph proj["compose project: ai-gateway"]
         direction TB
-        litellm["litellm<br/>berriai/litellm:main-stable<br/>24000 → 4000"]
-        mlf["mlflow<br/>mlflow/mlflow:latest<br/>25000 → 5000"]
-        seed["mlflow-seed<br/>reads litellm/config.yaml<br/>runs once, exits"]
-        pg[("postgres:17<br/>litellm: keys · spend · ceilings<br/>mlflow: endpoints · traces<br/>not published")]
+        litellm["<b>litellm</b><br/>the endpoint you call<br/>24000 → 4000"]
+        mlf["<b>mlflow</b><br/>same aliases, 2nd gateway<br/>25000 → 5000"]
+        seed["mlflow-seed<br/>runs mlflow/seed.py<br/>runs once, exits"]
+        pg[("<b>postgres</b><br/>keys · spend · ceilings<br/>not published")]
         litellm <--> pg
         mlf <--> pg
-        seed -->|"creates the same aliases"| mlf
+        seed -->|"the same aliases"| mlf
     end
 
-    lms["LMStudio — native on this host<br/>Apple-Silicon GPU · :1234<br/><b>local · local-31b · local-12b · local-4b · local-3b · local-2b</b><br/><b>local-qwen · reasoning · creative · uncensored</b><br/><b>embed · embed-hq</b>"]
-    uns["Unsloth Studio — native on this host<br/>same GPU · :8888 · needs a key<br/><b>unsloth-31b · unsloth-26b</b>"]
-    or["OpenRouter<br/><b>cheap · standard · cheap-free</b>"]
-    oai["OpenAI<br/><b>frontier</b>"]
-    hf["HuggingFace<br/><b>standard-hf</b>"]
+    lms["<b>LMStudio</b> · :1234<br/>lms-4b · lms-embed"]
+    uns["<b>Unsloth Studio</b> · :8888<br/>unsloth-4b · unsloth-embed"]
+    oll["<b>Ollama</b> · :11434<br/>ollama-4b · ollama-embed"]
+    cloud["OpenRouter · OpenAI · HuggingFace<br/><i>shipped commented out</i>"]
 
     callers -->|"/v1/chat/completions<br/>/v1/messages"| litellm
     callers -.->|"/gateway/mlflow/v1/chat/completions"| mlf
-    litellm -->|host.containers.internal| lms
-    litellm -->|host.containers.internal| uns
-    litellm --> or
-    litellm --> oai
-    litellm --> hf
-    mlf -->|host.containers.internal| lms
-    mlf -->|host.containers.internal| uns
+    litellm --> lms & uns & oll
+    litellm -.-> cloud
+    mlf --> lms & uns & oll
 
     classDef onhost stroke-width:3px
-    class lms,uns onhost
+    class lms,uns,oll onhost
 ```
 
-**Two local engines, one GPU.** `local*` is LMStudio, `unsloth*` is Unsloth Studio — the
-same weights behind `local-31b`/`local` and `unsloth-31b`/`unsloth-26b`, so a caller
-compares engines by changing the alias and nothing else. § Unsloth Studio.
+`litellm` is the endpoint every project calls. `postgres` holds the virtual keys, the spend
+logs and the budget ceilings, and publishes no port. `mlflow` serves the **same alias names**
+through the MLflow AI Gateway, so the two can be compared without changing a caller.
+`mlflow-seed` runs `mlflow/seed.py`, which writes MLflow's endpoints in over the API, and
+exits — **exited (0) is its finished state**, not a failure.
 
-A change here is a change to [`compose.yml`](compose.yml) or
-[`litellm/config.yaml`](litellm/config.yaml). All three images are stock, so `up -d` needs
-**no build step**. The one piece of code is
-[`mlflow/seed_gateway.py`](mlflow/seed_gateway.py), and it exists because MLflow has no
-config file to mount — § The second gateway.
+**Either gateway can be switched off.** `COMPOSE_PROFILES` in `.env` names the ones you want,
+and `postgres` always runs because both need it. `COMPOSE_PROFILES=mlflow` gives you 25000
+and no 24000 at all.
 
-## Start
+**Each gateway owns its own alias list**, and both are split the same way — one file per
+engine per list. LiteLLM reads YAML in `litellm/`; MLflow's endpoints are Python in
+`mlflow/`, which reads nothing from LiteLLM. So the `litellm` service and the whole
+`litellm/` directory can be deleted and the MLflow gateway still comes up and serves. The
+price is that **adding an alias is two edits, one per side**.
+
+The three local engines run **natively on the host**, not in containers: they need the GPU.
+The containers reach them at `host.containers.internal` / `host.docker.internal`, and
+`compose.yml` declares both so Docker and Podman behave the same.
+
+## Quick start
+
+You need `docker compose` or `podman compose`, and at least one local engine on the host —
+[LMStudio](https://lmstudio.ai), [Ollama](https://ollama.com) or
+[Unsloth Studio](https://unsloth.ai) — or a provider key and the hosted tiers uncommented.
 
 ```bash
-cp .env.example .env          # first time only; leave the provider keys blank
-podman compose up -d
+cp .env.example .env            # NOT optional — see below; the key lines stay blank on purpose
+docker compose up -d
+
 curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db":"connected"}
 curl -fsS http://localhost:25000/health             # -> OK
-podman compose logs mlflow-seed                     # what it built in MLflow
+docker compose logs mlflow-seed                     # what it built in MLflow
 ```
 
-First boot takes a minute: LiteLLM and MLflow each run schema migrations against an empty
-database, which is why both healthchecks have a 60 s `start_period`. "unhealthy" inside
-that window is expected.
+> **Copy `.env.example` first, or nothing but `postgres` starts.** The two gateways sit
+> behind compose profiles so either can be switched off, and a service with a profile does
+> not start until its profile is named. `.env.example` names both. For one command instead of
+> a permanent choice: `docker compose --profile litellm --profile mlflow up -d`.
 
-`mlflow-seed` shows as **exited (0)** in `compose ps`, and that is the finished state — it
-is a one-shot that runs after `mlflow` is healthy and stops.
+> Every command in this file says `docker compose`. **`podman compose` is a drop-in
+> replacement** — swap the word and nothing else changes. The stack was developed on Podman
+> and is tested on both; `compose.yml` avoids anything specific to either, and declares both
+> `host.docker.internal` and `host.containers.internal` for that reason.
 
-Prefer `readiness` over `liveliness` as a probe — both answer unauthenticated, but only
-`readiness` reports `"db":"connected"`, and a proxy that booted without a database still
-serves completions while `/key/generate` fails.
+First boot takes about a minute, because LiteLLM and MLflow each run schema migrations
+against an empty database — `unhealthy` inside the 60 s `start_period` is expected.
 
-## Aliases
+Use `/health/readiness` as your probe, not `/health/liveliness`. Both answer without a key,
+but only `readiness` reports `"db":"connected"` — and a proxy that booted without a database
+still serves completions while `/key/generate` fails.
 
-Call these names, never a model name — the model behind an alias is expected to change.
-
-| Alias | Runs on | Price / 1M tokens | Context in / out | On failure |
-|:--|:--|:--|:--|:--|
-| `local` | LMStudio, `google/gemma-4-26b-a4b-qat` | free (shadow-priced $0.12 / $0.35) | 253952 / 8192 | → `cheap-free` → `cheap` |
-| `local-31b` | LMStudio, `google/gemma-4-31b-qat` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
-| `local-12b` | LMStudio, `google/gemma-4-12b-qat` | free (shadow-priced $0.12 / $0.35) | 253952 / 8192 | **none, deliberately** |
-| `local-4b` | LMStudio, `google/gemma-4-e4b` | free (shadow-priced $0.12 / $0.35) | **122880** / 8192 | **none, deliberately** |
-| `local-3b` | LMStudio, `mistralai/ministral-3-3b` | free (shadow-priced $0.12 / $0.35) | 253952 / 8192 | **none, deliberately** |
-| `local-2b` | LMStudio, `google/gemma-4-e2b` | free (shadow-priced $0.12 / $0.35) | **122880** / 8192 | **none, deliberately** |
-| `local-qwen` | LMStudio, `qwen/qwen3.8-27b` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
-| `unsloth-31b` | **Unsloth**, `unsloth/gemma-4-31B-it-qat-GGUF` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
-| `unsloth-26b` | **Unsloth**, `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | free (shadow-priced $0.12 / $0.35) | 253952 / 8192 | **none, deliberately** |
-| `cheap` | OpenRouter, `google/gemma-4-26b-a4b-it` | $0.12 / $0.35 | 245760 / 16384 | → `standard` → `frontier` |
-| `standard` | OpenRouter, `google/gemma-4-31b-it` | $0.14 / $0.40 | 245760 / 16384 | → `standard-hf` → `frontier` |
-| `frontier` | OpenAI, `gpt-5.4-mini` | LiteLLM's built-in rate | provider default | → `standard` |
-| `embed` | LMStudio, `text-embedding-nomic-embed-text-v1.5` | free | 2048 | none |
-| `embed-hq` | LMStudio, `…nomic-embed-text-v1.5-embedding` (Q8_0) | free | 2048 | none |
-| `uncensored` | LMStudio, `gemma-4-31b-it-abliterated` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
-| `reasoning` | LMStudio, `thinkingcap-qwen3.6-27b` | free (shadow-priced $0.14 / $0.40) | 253952 / 8192 | **none, deliberately** |
-| `creative` | LMStudio, `meta/muse-glimmer` | free (shadow-priced $0.14 / $0.40) | 122880 / 8192 | **none, deliberately** |
-
-`local`, `cheap`, `standard` and `frontier` are tiers — pick one per call. Everything else
-is a role: you ask for it because you need that *shape* of model, not that price point.
-`embed` and `embed-hq` are embeddings; `uncensored` is abliterated weights; `reasoning`
-thinks before it answers; `creative` writes long-form prose; `local-qwen` is the non-Gemma
-opinion, named for its family because `reasoning` is *also* a 27B Qwen and a size name
-would fit them both. `local-31b` through `local-2b` are the size ladder on this machine's
-GPU — same promise as each other, different minutes per prompt.
-
-`unsloth-31b` and `unsloth-26b` are the twins of `local-31b` and `local`: the same weights
-at the same QAT quantisation, run by a **second local engine** — Unsloth Studio on port
-8888 instead of LMStudio on 1234. They exist so the two engines can be compared by changing
-the alias and nothing else. They are named after the engine because the engine is the only
-thing that differs, the same way `local-qwen` is named after its family.
-
-Five caveats worth reading before you wire any of these into something:
-
-- **Unsloth serves ONE model at a time, and by default loads nothing on demand.** With
-  `Settings → API → Model auto-switch` off, a request for a model that is not loaded
-  returns `400 No model loaded` — it does not queue and it does not load. With auto-switch
-  on, a call to `unsloth-31b` **unloads** whatever was there and reads ~19 GB from disk
-  before the first token. LMStudio's JIT load is the closest equivalent and it has the
-  cheaper failure: LMStudio quietly gives you a smaller context window, Unsloth gives you
-  an error. `GET /v1/status` on 8888 is the source of truth for what is loaded, and it
-  needs the key. **Unlike every other alias here, `unsloth-*` also requires
-  `UNSLOTH_API_KEY` in the shell** — see § Configuration.
-
-- **`creative` is the one model LMStudio reports as never trained for tool use**
-  (`trainedForToolUse: false`), yet a single-tool request does come back with a proper
-  structured `tool_call` — verified 2026-08-23. The flag describes training, not the
-  runtime. What is *not* verified is whether that survives an agent loop's many-tool,
-  many-turn prompts, which is exactly where an untrained model degrades into raw-text tool
-  syntax and an agent run silently executes nothing. Prose is what this alias is for.
-- **`reasoning` and `local-qwen` spend their output budget on thinking.** Reasoning tokens
-  and the reply draw on the same allowance, so both carry `max_tokens: 8192` where most
-  chat routes carry 4096 — a throwaway puzzle already cost `reasoning` 325 reasoning
-  tokens, and `local-qwen` spent 59 of 65 completion tokens on "17×23". A thinking model
-  that hits the cap mid-thought returns empty content and no error at all. `creative`
-  carries 8192 for the same reason compounded by length; note that `local-12b` reasons
-  too, on 4096.
-- **`local-4b` and `local-2b` have half the window of every other Gemma route** — 122880
-  in, not 253952, because the E builds top out at 131072. They also lose to `local-3b` on
-  disk (6.86 and 4.37 GB against 2.99 — the "2B" is the larger file) and `local-3b` keeps
-  the full window. Their reason to exist is family: they are the bottom of the *Gemma*
-  ladder, where `local-3b` is a different vendor and answers differently by design.
-- **`embed` and `embed-hq` are the same model at different precision, and their vectors do
-  not mix.** Q4_K_M against Q8_0 — quantisation moves where a text lands in the space, so
-  a query embedded with one and matched against an index built with the other returns
-  quietly worse neighbours and never errors. Pick one per index and record which.
-
-`cheap-free` and `standard-hf` also exist and are **not** part of that vocabulary — they
-are fallback targets only. Every `local-*` name wears the same kind of suffix and is the
-exception: they are names to call. Every number above, and the reasoning behind it, is in
-[`litellm/config.yaml`](litellm/config.yaml).
+Then get the models for whichever engine you have. The default config asks for two per
+engine, and you only need the engines you actually use:
 
 ```bash
-curl http://localhost:24000/v1/chat/completions \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"local","messages":[{"role":"user","content":"hi"}]}'
+# LMStudio — hand-load, do not let it JIT-load (see below for why)
+lms load google/gemma-4-e4b --context-length 131072 --parallel 1 --gpu max
+
+# Ollama
+ollama pull gemma4:e4b && ollama pull nomic-embed-text
+
+# Unsloth — download in the app; it needs UNSLOTH_API_KEY in your shell
 ```
 
-### Where a failed call goes next
+Everything is measured on an Apple-Silicon MacBook with 128 GB of RAM. Every timing in this
+file comes from that machine.
 
-```mermaid
-flowchart LR
-    local["local<br/>LMStudio"] -->|1| cheapfree["cheap-free<br/>OpenRouter free tier"]
-    local -->|2| cheap
-    cheapfree --> cheap["cheap<br/>OpenRouter"]
-    cheap -->|1| standard["standard<br/>OpenRouter"]
-    cheap -->|2| frontier["frontier<br/>OpenAI"]
-    standard -->|1| standardhf["standard-hf<br/>HuggingFace"]
-    standard -->|2| frontier
-    frontier --> standard
+## The aliases
 
-    local31b["local-31b<br/>LMStudio"]
-    local12b["local-12b<br/>LMStudio"]
-    local4b["local-4b<br/>LMStudio"]
-    local3b["local-3b<br/>LMStudio"]
-    local2b["local-2b<br/>LMStudio"]
-    localqwen["local-qwen<br/>LMStudio"]
-    reasoning["reasoning<br/>LMStudio"]
-    creative["creative<br/>LMStudio"]
-    uncensored["uncensored<br/>LMStudio"]
-    embed["embed<br/>LMStudio"]
-    embedhq["embed-hq<br/>LMStudio"]
+Call these names, never a model name. Everything shipped is **local and free**.
 
-    classDef terminal stroke-dasharray: 4 3
-    class local31b,local12b,local4b,local3b,local2b,localqwen,reasoning,creative,uncensored,embed,embedhq terminal
+**Every alias names its engine** — `lms-*` is LMStudio, `unsloth-*` is Unsloth, `ollama-*` is
+Ollama. There is deliberately no engine-neutral name, so a caller always knows which of the
+three answered and a comparison is one string away.
+
+|  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) |
+|:--|:--|:--|:--|
+| **Chat** — Gemma 4 E4B | `lms-4b` | `unsloth-4b` | `ollama-4b` |
+| **Embed** — nomic-embed-text v1.5 | `lms-embed` | `unsloth-embed` | `ollama-embed` |
+
+That is the whole default list, and its shape is the point: **two models, three engines**.
+Every chat alias is Gemma 4 E4B and every embedder is nomic v1.5 at 768 dimensions, so
+switching engines is one string and nothing else moves. The **build** still differs per
+engine, and the table says which — that is the one thing a comparison has to state out loud.
+
+| Alias | Model | Input | Build | Notes |
+|:--|:--|--:|:--|:--|
+| `lms-4b` | `google/gemma-4-e4b` | 122880 | QAT | tools and vision both work |
+| `unsloth-4b` | `unsloth/gemma-4-E4B-it-qat-GGUF` | 122880 | QAT | same weights as `lms-4b` |
+| `ollama-4b` | `gemma4:e4b` | 122880 | **Q4_K_M** | not QAT — see below |
+| `lms-embed` | `text-embedding-nomic-embed-text-v1.5` | 2048 | Q4_K_M | 768 dims, 84 MB |
+| `unsloth-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | 2048 | Q8_0 | 768 dims |
+| `ollama-embed` | `nomic-embed-text` | 2048 | **F16** | 768 dims, the heaviest of the three |
+
+Builds measured 2026-08-31 with `lms ls --json` and `ollama show`; the Unsloth figure is the
+one its model card states.
+
+`Input` is the usable prompt window: the model's context minus an 8192-token output reserve.
+E4B caps at 131072, hence 122880.
+
+**You do not need all three engines.** Install whichever you already use — the aliases for an
+engine that is not running simply fail when called, and the others keep working. With all
+three it is about 17 GB of models; with one, far less. Better still, name the one you have in
+`.env` and the other engines' aliases are not served at all:
+
+```bash
+GATEWAY_ENGINE=ollama        # -> ollama-4b and ollama-embed, and nothing else
 ```
 
-Two consequences that look like bugs and are not:
+### Choosing what runs — three lines in `.env`
 
-- **`local` is not guaranteed to stay local.** When LMStudio is unreachable it lands on
-  the same weights at OpenRouter — so a stopped LMStudio changes *where* the request ran,
-  not *what* ran, but a "free" session can quietly accrue real spend. The `api_base`
-  column in `/spend/logs` is how you tell after the fact.
-- **`uncensored` has no chain at all.** A hosted twin would both refuse the request and
-  see a prompt that was chosen to stay on this machine, so it fails instead. `embed` is
-  likewise terminal.
-- **`local-31b` has no chain either, for a different reason.** Its hosted twin *is*
-  `standard` and would answer perfectly well — the omission is so that this name always
-  means "these weights, on this machine, free". Want the cloud twin, knowingly? Call
-  `standard`. That promise is why every LMStudio alias except `local` is terminal:
-  `local-12b`, `local-4b`, `local-3b`, `local-2b`, `local-qwen`, `reasoning`, `creative`
-  and `embed-hq` have no hosted twin in this config at all, so a chain could only send them
-  somewhere that answers differently. `local` is the single deliberate exception, and it is
-  the only local alias that can surprise you with spend.
+Three independent choices, one word each. Change a line, run `docker compose up -d`, and both
+gateways follow.
 
-Separately, a request that *overflows* its window falls to `frontier` rather than down the
-chain above — `frontier` is the only larger window here.
+| Line | Values | Default | Chooses |
+|:--|:--|:--|:--|
+| `COMPOSE_PROFILES` | `litellm`, `mlflow`, `litellm,mlflow`, `all` | *(nothing starts)* | **which gateway** runs |
+| `GATEWAY_MODELS` | `starter`, `full` | `starter` | **which alias list** |
+| `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `all` | `all` | **which engine** |
 
-## Endpoints
+```bash
+# only Ollama, only the MLflow gateway, the full list
+COMPOSE_PROFILES=mlflow
+GATEWAY_MODELS=full
+GATEWAY_ENGINE=ollama
+```
 
-Verified 2026-08-21 against a running stack.
+**Which gateway.** `COMPOSE_PROFILES` is compose's own variable. `litellm` is the primary
+endpoint — virtual keys, spend logs, budget ceilings and `/v1/messages`. `mlflow` is the
+second gateway on 25000, with no key and a trace per request. Neither reads the other's
+config, so either runs alone. **A missing line means neither starts**, which is why the quick
+start copies `.env.example`.
+
+**Which alias list.** `starter` is one chat model and one embedder per engine — small on
+purpose, because a gateway is useless until the models are on disk and nobody should download
+90 GB to try a repo. `full` is **20 aliases**: the whole Gemma ladder from 2B to 31B, a Qwen,
+an abliterated build, a reasoning model, a prose model, and the same models across all three
+engines. Read it as the worked example of everything the starter list demonstrates.
+
+**Which engine.** `all` is what makes the three-way comparison possible — `lms-4b`,
+`unsloth-4b` and `ollama-4b` are the same weights on three engines. Name a single engine and
+the other engines' aliases are **not in the config at all**, which is the right answer when
+you only have one of the three installed: an absent name fails clearly, at the gateway,
+instead of failing later at a port nothing is listening on.
+
+The last two words pick one file per gateway, and it is the same pair on both — so the
+gateways can never end up on different lists:
+
+| | LiteLLM (24000) | MLflow (25000) |
+|:--|:--|:--|
+| what compose selects | `litellm/config.<models>.<engine>.yaml` | `mlflow/seed.py`, with both words in its environment |
+| where the aliases are | `litellm/<models>/<engine>.yaml` | `mlflow/<models>/<engine>.py` |
+
+Each LiteLLM config is a short `include:` list — `settings.yaml` plus one to three engine
+fragments — so no alias is written twice within a gateway. It does **not** stop the two
+gateways' lists drifting in *content*; see [The MLflow gateway](#the-mlflow-gateway).
+
+> Changing either word leaves the **old** endpoints behind on the MLflow gateway, still
+> answering on port 25000 after LiteLLM has stopped serving them. Run
+> `python mlflow/seed.py --prune` when that matters — and read its header first, because with
+> a single engine named it deletes the other engines' endpoints too. A fresh clone never sees
+> any of this.
+
+### Five things that will bite you
+
+- **A model must be loaded before you call it**, and each engine fails differently when it is
+  not — only one of the three fails loudly. [See below](#load-a-model-first).
+- **On Unsloth, embeddings and chat evict each other.** Unsloth holds **one model at a time**,
+  and that limit spans both kinds: a call to `unsloth-embed` unloads `unsloth-4b`, and the
+  next chat call swaps it back. So a retrieval loop that alternates embed and chat pays a
+  model swap on every call. LMStudio and Ollama both hold an embedder alongside a chat model
+  and do not. Use `lms-embed` or `ollama-embed` inside such a loop, and keep `unsloth-embed`
+  for measuring the engine.
+- **Thinking models spend the reply's budget on thinking, and you cannot guess which ones
+  do.** Reasoning tokens come out of the same `max_tokens` allowance as the answer, so a
+  ceiling set too low returns **empty content**, `finish_reason: "length"`, and no error at
+  all. Whether a route thinks is decided **per model, not per engine** — `unsloth-26b` emits a
+  reasoning block while `lms-26b` on identical weights does not (2026-08-27), and yet `lms-4b`
+  on that same LMStudio spent 65 of 70 completion tokens reasoning (2026-08-28). Treat every
+  chat alias as capable of it and keep the ceiling generous. **On port 25000 this is your
+  job**: MLflow has nowhere to store a per-route `max_tokens`, so the caller must send one.
+- **Embedding vectors do not mix across models — or across *builds* of one model.** All three
+  embedders are nomic v1.5 at 768 dims, and **all three are a different build**: Q4_K_M on
+  LMStudio, Q8_0 on Unsloth, F16 on Ollama. A query embedded with one, matched against an
+  index built with another, returns quietly worse neighbours and never errors. Use one alias
+  per index and record which. In the full list `lms-embed-hq` is the Q8_0 build on LMStudio,
+  so that alias against `unsloth-embed` is the pair that isolates the engine alone.
+- **The three engines share one GPU**, and `ollama-4b` is not quite the same build as the
+  other two: the `gemma4:e4b` tag is Q4_K_M, quantised after training, while LMStudio and
+  Unsloth run QAT weights. So `ollama-4b` against either of them measures **engine and build
+  together**. Say which you are claiming when you report a comparison.
+
+### The hosted tiers ship commented out
+
+`cheap` and `standard` (OpenRouter), `frontier` (OpenAI), the `cheap-free` / `standard-hf`
+fallback targets and the chains between them are written and **commented out** at the bottom
+of [`litellm/settings.yaml`](litellm/settings.yaml), and again — as commented-out
+`Endpoint(...)` lines — at the bottom of [`mlflow/seed.py`](mlflow/seed.py). They live beside
+the settings rather than in an engine fragment because they belong to no engine:
+`GATEWAY_ENGINE` picks which **local** engine answers, and these are what you reach for when
+none of them should. Uncomment the block you want on **both** gateways, put the provider keys
+in your shell or in `.env`, and `docker compose up -d` again. Three warnings:
+
+- **A fallback chain can turn a free call into a paid one.** With a chain on, a local alias
+  falls back to a hosted one when its engine is down — the same weights, so it changes
+  *where* the request ran rather than *what* ran, but a "free" session can quietly accrue
+  real spend. Give every key a budget ceiling, and read `api_base` in `/spend/logs` to tell
+  after the fact.
+- **Do not remove the provider pin.** The `cheap-free` block carries
+  `order: ["google-ai-studio"]` and `allow_fallbacks: false`, because OpenRouter
+  load-balances its free tier and one provider returns tool calls as **raw text** with
+  `tool_calls` absent. Nothing errors: your agent sees a message with no tool calls, executes
+  nothing, and stops. The pin is the only thing preventing that.
+- **The MLflow gateway cannot express that pin**, because it has no equivalent of LiteLLM's
+  `extra_body`. So a `cheap-free` endpoint on port 25000 is *not* the same route LiteLLM
+  serves under that name, and it carries exactly the failure the pin exists to stop. If you
+  uncomment the hosted tiers, drive agents through **24000 only**.
+
+Out of the box **no alias has a fallback chain at all**, on either gateway. The names promise "these weights,
+this engine, on this machine, free", and for a set of aliases whose whole purpose is to
+compare engines, a hop to a different engine would destroy the comparison.
+
+## Call it
+
+Any OpenAI-compatible client works. Point `base_url` at `http://localhost:24000/v1`.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:24000/v1", api_key="sk-litellm-master")
+
+r = client.chat.completions.create(
+    model="lms-4b",                                    # an alias, not a model id
+    messages=[{"role": "user", "content": "hi"}],
+)
+print(r.choices[0].message.content)
+```
 
 | Method | Path | Auth | What |
 |:--|:--|:--|:--|
-| `GET` | `/health/liveliness` | none | `"I'm alive!"` — the process is up |
-| `GET` | `/health/readiness` | none | `{"status":"healthy","db":"connected"}` — **the useful probe** |
-| `GET` | `/health` | master key | live per-model check; costs one call to each provider |
 | `POST` | `/v1/chat/completions` | any key | the OpenAI route |
 | `POST` | `/v1/messages` | any key | the Anthropic route — what Claude Code drives |
-| `POST` | `/v1/embeddings` | any key | `embed` and `embed-hq`; both return 768 dims |
+| `POST` | `/v1/embeddings` | any key | the three embedding aliases |
+| `GET` | `/health/readiness` | none | `{"status":"healthy","db":"connected"}` — **the probe to use** |
+| `GET` | `/health/liveliness` | none | `"I'm alive!"` — the process is up, nothing more |
+| `GET` | `/health` | master key | live per-model check; costs one call to each provider |
 | `GET` | `/model/info` | master key | which aliases are actually registered |
-| `POST` | `/key/generate` | master key | mint a capped key (§ below) |
+| `POST` | `/key/generate` | master key | mint a capped key ([below](#budget-capped-keys)) |
 | `GET` | `/key/info` | the key itself | its models, ceiling, spend and expiry |
 | `GET` | `/spend/logs` | master key | every request, with `model`, `spend` and `api_base` |
 | — | `/ui` | master key | admin UI; the Logs tab carries prompt and response |
 
-## The second gateway — MLflow
-
-The same alias names, served by the **MLflow AI Gateway** at
-<http://localhost:25000>. It exists so the two gateways can be compared on one machine
-without changing any caller's vocabulary: swap the base URL, keep the model name.
-
-**LiteLLM stays the primary endpoint.** It is what every project calls, and it is the only
-one with virtual keys, spend logs and budget ceilings. Nothing about port 24000 changed.
-
-### MLflow has no config file
-
-LiteLLM reads `litellm/config.yaml` at every boot. MLflow cannot: its gateway configuration
-lives in the tracking database and arrives over an API. So `mlflow/` holds a script, not a
-`config.yaml`, and one LiteLLM entry becomes three MLflow objects:
-
-```mermaid
-graph LR
-    S["<b>secret</b><br/>api_key + api_base<br/><i>one per provider account</i>"] --> D["<b>model definition</b><br/>provider + real model id<br/><i>one per distinct model</i>"]
-    D --> E["<b>endpoint</b><br/>the alias callers name<br/>+ its fallback chain"]
-```
-
-[`mlflow/seed_gateway.py`](mlflow/seed_gateway.py) reads **LiteLLM's own file** rather than
-keeping a second list, and that is what stops the two drifting apart. Add an alias to
-`litellm/config.yaml`, run `podman compose up -d`, and MLflow serves it too. It runs on
-every `up -d` and is idempotent.
-
-```bash
-podman compose logs mlflow-seed                              # what it built, and what it skipped
-podman compose run --rm mlflow-seed python /app/seed_gateway.py /app/litellm-config.yaml --reset
-podman compose run --rm mlflow-seed python /app/seed_gateway.py /app/litellm-config.yaml --prune
-```
-
-`--reset` rebuilds every endpoint. `--prune` deletes endpoints `config.yaml` no longer
-names; without it they are reported and left alone, because someone may have made them by
-hand in the UI.
-
-### Calling it
-
-Verified 2026-08-26 against a running stack, MLflow 3.15.1.
-
-| Method | Path | What |
-|:--|:--|:--|
-| `POST` | `/gateway/mlflow/v1/chat/completions` | the OpenAI route — `"model"` is the alias |
-| `POST` | `/gateway/<alias>/mlflow/invocations` | the same call, alias in the path |
-| `POST` | `/gateway/openai/v1/embeddings` | `embed` and `embed-hq`; both return 768 dims |
-| `GET` | `/health` | `OK` — unauthenticated, and one of only two routes exempt from the Host header check |
-| — | `/` | the MLflow UI: **AI Gateway → Endpoints**, and one `gateway/<alias>` experiment per alias |
-
-```bash
-curl -sX POST http://localhost:25000/gateway/mlflow/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"local-3b","messages":[{"role":"user","content":"Reply with exactly: OK"}]}'
-```
-
-There is **no key**. This gateway has no virtual keys at all, so anything that reaches the
-port can call any alias — which is one more reason it binds localhost only.
-
-Tool calling works: a single-tool request through `local-3b` came back with
-`finish_reason: "tool_calls"` and a structured `tool_calls` block, not the raw-text tool
-syntax that makes an agent silently execute nothing (verified 2026-08-26).
-
-### Traces, for free
-
-Every endpoint is created with `usage_tracking=True`, so each request becomes an MLflow
-trace in an auto-created experiment named `gateway/<alias>` — no callback, no autolog call,
-no client-side code. That is the one thing this gateway does that LiteLLM cannot do without
-an external trace store.
-
-The trace is written **after** the response is returned, so read it in a poll, not
-immediately.
-
-This does not contradict § What this repo deliberately does not run. MLflow here traces
-**what passes through its own endpoints** and nothing else; it is not a trace store for
-other projects, and `success_callback` in `litellm/config.yaml` is still empty.
-
-### What does not transfer
-
-Six things in `config.yaml` have **no equivalent** here. This is the honest part of the
-comparison, and it is why LiteLLM stays the primary gateway.
-
-| `litellm/config.yaml` | Status in MLflow |
-|:--|:--|
-| `/v1/messages` (the Anthropic route) | **Not available for these aliases.** The passthrough exists only for endpoints whose provider is Anthropic; ours are `openai`-protocol, and the call answers `Unsupported passthrough endpoint '/anthropic/v1/messages' for OpenAI provider`. **Claude Code therefore stays on port 24000** — § Claude Code. |
-| Virtual keys, `/key/generate`, `/spend/logs` | No equivalent. MLflow has budget policies, which cap **cost per endpoint**, not per caller, and there is no key to hand a project. |
-| `input_cost_per_token` / `output_cost_per_token` | Not carried across, so the shadow pricing that makes a local call show up against a ceiling does not exist here. |
-| `model_info.max_input_tokens` + `enable_pre_call_checks` | No equivalent. An over-long prompt fails at the model instead of being caught before the call. |
-| `drop_params: true` | No equivalent. Every parameter is forwarded exactly as sent. |
-| `timeout: 3600` per route | One **global** figure instead: `MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS`, set to 3600 in `compose.yml` because MLflow's own default of 300 s cuts off a long local prompt mid-run. |
-
-`context_window_fallbacks` has no equivalent either — MLflow falls back on **error only** —
-but both fallback maps are commented out in `config.yaml` today, so nothing is lost right
-now. Uncomment them and `mlflow-seed` builds the error chains, not the overflow ones.
-
 ## Tests
 
-`tests/` drives **both** gateways with the real OpenAI client — same alias, same
-message body, different `base_url`. That is the claim this repo makes, so it is what
-gets checked.
+[`tests/`](tests/) drives **both** gateways with the real OpenAI client — same alias, same
+message body, different `base_url`. That is the claim this repo makes, so that is what gets
+checked.
 
 ```bash
 cd tests
-uv sync                     # once
-uv run run_all.py           # 3 scripts x 2 gateways = 6 rows
+uv sync                                     # once
+uv run run_all.py                           # 3 scripts x 2 gateways = 6 rows
+
+uv run run_all.py --model ollama-4b       # any alias
+uv run 02_tools_call.py --gateway litellm   # one script, one gateway
 ```
 
 ```text
-model=local-3b  gateways=litellm, mlflow
+model=lms-4b  gateways=litellm, mlflow
 
-PASS  01_simple_call.py      litellm     0.5s
-PASS  01_simple_call.py      mlflow      0.5s
-PASS  02_tools_call.py       litellm     0.8s
-PASS  02_tools_call.py       mlflow      0.8s
-PASS  03_multimodal.py       litellm     0.5s
-PASS  03_multimodal.py       mlflow      0.5s
+PASS  01_simple_call.py      litellm     1.7s
+PASS  01_simple_call.py      mlflow      2.1s
+PASS  02_tools_call.py       litellm     2.8s
+PASS  02_tools_call.py       mlflow      1.5s
+PASS  03_multimodal.py       litellm     3.0s
+PASS  03_multimodal.py       mlflow      2.6s
 
 6/6 passed
 ```
 
-| Script | What it proves |
-|:--|:--|
-| `01_simple_call.py` | a plain chat completion, with a multi-turn conversation |
-| `02_tools_call.py` | a structured `tool_calls` reply — **not** raw-text tool syntax — then the second turn that uses the tool result |
-| `03_multimodal.py` | an image plus a question, as a base64 `data:` URL |
+`01_simple_call.py` proves a plain completion and a multi-turn conversation.
+`02_tools_call.py` proves a **structured** `tool_calls` reply — not raw-text tool syntax —
+and the second turn that uses the result. `03_multimodal.py` sends an image as a base64
+`data:` URL. Every script prints the full response, so each doubles as a sample to copy
+from; exit code is `1` on any failure.
 
-Every script prints the full response and then the extracted text, so each one doubles
-as a sample to copy from. `--gateway litellm|mlflow|both` and `--model <alias>` pick the
-target; the default alias is `local-3b`, the smallest route that is both vision-capable
-and tool-trained. Exit code is `1` on any failure.
+The timings above are a real run on an Apple-Silicon MacBook with `lms-4b` resident.
 
-The whole story, including what is deliberately **not** covered — `/v1/messages`,
-embeddings, budgets, fallbacks — is in [`tests/README.md`](tests/README.md).
+**The default alias follows `GATEWAY_ENGINE`** — `lms-4b`, `unsloth-4b` or `ollama-4b`, the
+one model this repo carries on all three engines and the one chat route present in **both
+lists on both gateways**. So a fresh clone runs the suite unchanged whichever engine it
+serves, and `--model` still overrides for a one-off. The gateways it drives follow
+`COMPOSE_PROFILES` the same way: a stack running only MLflow gets three rows, not six.
+The default is vision- and tool-capable, so all three scripts work against one loaded model,
+and **that model must be loaded first**.
+Verified 2026-08-31: 6/6 on `ollama-4b`, full list, all three engines served. Verified
+2026-08-28: 6/6 on `lms-4b`, on the run shown above. Verified 2026-08-27: 6/6 on each of
+`lms-4b`, `unsloth-4b` and `ollama-4b`. What is deliberately not covered is in
+[`tests/README.md`](tests/README.md).
 
-Verified 2026-08-26 against a running stack: 6/6 on `local-3b`.
+Because the two gateways now hold **separate** alias lists, this suite is also the cheapest
+drift check there is: a name that LiteLLM serves and MLflow does not fails the `mlflow` column
+and nothing else.
 
-## Claude Code
+## Use it from Claude Code
 
-LiteLLM exposes `/v1/messages`, so Claude Code can drive any alias above: point
-`ANTHROPIC_BASE_URL` at `http://localhost:24000` (no `/v1` suffix) and map all three
-`ANTHROPIC_DEFAULT_*_MODEL` slots onto aliases — leave one unset and it sends a real
-Claude model id the gateway has never heard of.
+Claude Code speaks the Anthropic Messages API and nothing else. LiteLLM exposes
+`/v1/messages` and translates it to whatever the alias points at, so Claude Code can drive
+any model here and never learns it is not talking to Anthropic.
 
-**[`NOTES.md`](NOTES.md) is the whole story**: the variable table, the three ways to apply
-it, per-alias configurations, the two timeouts a local model needs, and a troubleshooting
-table. Tool calling through `local`, `local-31b`, `local-3b`, `local-qwen` and `uncensored`
-is verified there with dates — a structured `tool_use` block, not the raw-text tool syntax
-that makes most local models unusable from an agent.
+| Variable | Value | Why |
+|:--|:--|:--|
+| `ANTHROPIC_BASE_URL` | `http://localhost:24000` | **No `/v1` suffix** — Claude Code appends `/v1/messages` itself |
+| `ANTHROPIC_AUTH_TOKEN` | a gateway key | sent as `Authorization: Bearer` |
+| `ANTHROPIC_API_KEY` | the same value | sent as `x-api-key`. Set both; which one is used has moved between versions |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | an alias | what `/model sonnet` resolves to |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | an alias | what `/model opus` resolves to |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | an alias | background work — titles, summaries, suggestions |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `1` | beta headers a non-Anthropic backend does not implement |
+| `API_TIMEOUT_MS` | `3600000` | the default expires while a local model is still reading the prompt |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | the alias's `Input` figure | without it Claude Code assumes 200000 for every alias |
 
-> Do not hand it the master key for anything longer than a try-out. That key has **no
-> spending ceiling**, and `local` reaches OpenRouter when LMStudio is down — free while it
-> is up, uncapped when it is not.
+```bash
+ANTHROPIC_BASE_URL="http://localhost:24000" \
+ANTHROPIC_API_KEY="$AI_GATEWAY_KEY" \
+ANTHROPIC_AUTH_TOKEN="$AI_GATEWAY_KEY" \
+ANTHROPIC_DEFAULT_SONNET_MODEL="lms-4b" \
+ANTHROPIC_DEFAULT_OPUS_MODEL="lms-4b" \
+ANTHROPIC_DEFAULT_HAIKU_MODEL="lms-4b" \
+CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+API_TIMEOUT_MS=3600000 \
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=122880 \
+claude
+```
+
+The same keys go in a `.claude/settings.json` `env` block if you want them to persist. Two
+warnings about that file: **never commit a gateway key into it**, and an `env` block there
+silently overrides anything you set on the command line.
+
+Three traps, in the order people hit them:
+
+1. **Set all three model variables.** Leave one unset and Claude Code sends a real Claude
+   model id, which this gateway has never heard of:
+   `Invalid model name passed in model=claude-...`. It looks like a broken proxy and is just
+   an unmapped slot.
+2. **Raise both timeouts, or neither matters.** Prompt processing measures ~100 tok/s here
+   (17.6k tokens in 173 s), and Claude Code re-sends its system prompt and every tool schema
+   each turn — so a real agent turn needs **5–15 minutes before the first token**. The
+   gateway already carries `timeout: 3600` on every local route; if the client hangs up
+   first, that patience is wasted.
+3. **Never pick the `[1m]` variant in `/model`.** It forces a 1.0M window unconditionally and
+   ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so auto-compact never fires in time.
+
+**Tool calling works on all three default aliases** — `lms-4b`, `unsloth-4b` and `ollama-4b`
+each returned a structured `tool_calls` reply on both gateways — verified 2026-08-27, and
+re-verified on `ollama-4b` 2026-08-31 — not the raw-text tool syntax that makes most local
+models useless from an agent. Several of the full
+config's larger aliases are verified on the `/v1/messages` route Claude Code actually drives,
+between 2026-08-20 and 2026-08-23.
+
+MLflow on 25000 **cannot** serve Claude Code: its Anthropic passthrough exists only for
+Anthropic-provider endpoints, and every alias here is OpenAI-protocol. Stay on 24000.
 
 ## Budget-capped keys
 
-The master key mints others and **has no ceiling of its own**, so it is not what a project
-should hold. Issue a capped, expiring key instead:
+The master key mints other keys and **has no ceiling of its own**, so it is not what a
+project should hold. Issue a capped, expiring key instead, and check it with
+`curl -H "Authorization: Bearer $KEY" http://localhost:24000/key/info`.
 
 ```bash
 curl -X POST http://localhost:24000/key/generate \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"models":["local","cheap"],"max_budget":0.50,"duration":"24h"}'
+  -d '{"models":["lms-4b","lms-embed"],"max_budget":0.50,"duration":"24h"}'
 ```
 
-Check one at any time with `curl -H "Authorization: Bearer $KEY" http://localhost:24000/key/info`.
+Local routes are **shadow-priced**: free on your machine, but carrying a cloud twin's rate so
+spend accrues and a ceiling can actually trip. That figure is "what this workload would cost
+in the cloud", not money anyone was billed — anything summing `/spend/logs` has to say which
+of the two it reports. Setting both `*_cost_per_token` values to `0` turns it off, at the
+cost of ceilings no longer applying locally.
 
-`local` is **shadow-priced** — it runs free on this machine but carries its OpenRouter
-twin's rate, so spend accrues and a ceiling can actually trip. That figure is "what this
-workload would cost on the cloud twin", not money anyone was billed; anything summing
-`/spend/logs` has to say which it is reporting. Setting both `*_cost_per_token` values on
-`local` to `0` turns it off, at the cost of ceilings no longer applying locally.
-
-A `{"error":"No connected db."}` here means the proxy booted without `DATABASE_URL`.
+`{"error":"No connected db."}` here means the proxy booted without `DATABASE_URL`.
 Completions keep working, which is why this has to be tested rather than assumed.
 
 ## Configuration
 
-`compose.yml` interpolates from the **shell environment first**, then `.env` — that
-ordering is the whole design.
+`compose.yml` interpolates from the **shell environment first**, then `.env`.
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential; mints keys, no ceiling |
-| `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every local alias — the whole `local-*` ladder plus `local-qwen`, `reasoning`, `creative`, `uncensored`, `embed`, `embed-hq`. Docker: `host.docker.internal` |
-| `UNSLOTH_API_BASE` | `http://host.containers.internal:8888/v1` | `unsloth-31b`, `unsloth-26b` — the second local engine |
-| `UNSLOTH_API_KEY` | *(blank by design)* | **required** by both `unsloth-*` aliases. Unlike LMStudio, Unsloth 401s every route without it |
-| `OPENROUTER_API_KEY` | *(blank by design)* | `cheap`, `standard`, `cheap-free` |
-| `OPENAI_API_KEY` | *(blank by design)* | `frontier` |
-| `HF_TOKEN` | *(blank by design)* | `standard-hf` |
-| `DATABASE_URL` | set in `compose.yml` | **required** — without it `/key/generate` fails while completions do not |
+| `COMPOSE_PROFILES` | *(none)* | **which gateway runs** — `litellm`, `mlflow`, `litellm,mlflow` or `all`. compose's own variable. **With it unset, only `postgres` starts** |
+| `GATEWAY_MODELS` | `starter` | **which alias list both gateways serve** — `starter` or `full` |
+| `GATEWAY_ENGINE` | `all` | **which engine both gateways serve** — `lms`, `unsloth`, `ollama` or `all`. With the two above it names `litellm/config.<models>.<engine>.yaml`; a typo is a missing file and a clean crash |
+| `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential. **Change it for anything but a laptop** |
+| `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every `lms-*` alias |
+| `UNSLOTH_API_BASE` | `http://host.containers.internal:8888/v1` | every `unsloth-*` alias |
+| `UNSLOTH_API_KEY` | *(blank)* | **required** by both `unsloth-*` aliases — Unsloth 401s every route without it |
+| `OLLAMA_API_BASE` | `http://host.containers.internal:11434/v1` | every `ollama-*` alias. **There is no `OLLAMA_API_KEY`**: Ollama ignores the header. Both alias lists still set a literal `sk-ollama`, for two different reasons — LiteLLM's `openai/` provider needs some key string, and the MLflow seed skips any endpoint whose key is empty |
+| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `HF_TOKEN` | *(blank)* | the hosted tiers, once you uncomment them |
+| `MLFLOW_CRYPTO_KEK_PASSPHRASE` | *(blank)* | wraps the key encrypting MLflow's stored credentials. Blank is supported. **Change it later and they stop decrypting** — the repair is `up -d`, which rewrites them |
+| `MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS` | `3600` | MLflow's own default is 300 s, which gives up mid-prompt on a local model |
+| `MLFLOW_SERVER_ALLOWED_HOSTS` | set in `compose.yml` | must list `mlflow:5000` and `0.0.0.0:5000`, or in-stack calls get 403 while `/health` still says `OK` |
+| `DATABASE_URL` | set in `compose.yml` | **required** — without it `/key/generate` fails while completions keep working |
 | `MAX_STRING_LENGTH_PROMPT_IN_DB` | `100000` | LiteLLM's own default of 2048 clips agent transcripts mid-run |
-| `MLFLOW_CRYPTO_KEK_PASSPHRASE` | *(blank)* | wraps the key that encrypts MLflow's stored credentials. Blank is supported — MLflow uses a built-in passphrase and logs a warning. **Change it later and the stored secrets stop decrypting**; the repair is `up -d`, which rewrites them |
-| `MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS` | `3600`, set in `compose.yml` | MLflow's own default is 300 s, which gives up mid-prompt on a local model |
-| `MLFLOW_SERVER_ALLOWED_HOSTS` | set in `compose.yml` | must list `mlflow:5000` and `0.0.0.0:5000`, or in-stack calls and the server's own get 403 while `/health` still says `OK` |
 
-The four provider keys stay blank in `.env` **on purpose**: `~/Projects/.envrc` already
-exports them from `~/.secrets/secrets.enc.yaml` into every shell under `~/Projects`, and
-compose reads the shell first. Writing them into `.env` anyway creates a second plaintext
-copy that a rotation will not reach. See [`.env.example`](.env.example).
+The defaults name `host.containers.internal`, which is Podman's name. Docker resolves it too
+because `compose.yml` declares both — but write `host.docker.internal` if you override these.
 
-> **`UNSLOTH_API_KEY` missing fails twice, differently.** LiteLLM keeps the `unsloth-*`
-> aliases and returns `401` at call time; `mlflow-seed` skips them with "no API key in the
-> environment" and MLflow never creates the endpoints, so the same name **404s on 25000 and
-> 401s on 24000**. If you have just added the key, `podman compose up -d` again — the seed
-> is idempotent and will create what it skipped.
+The provider keys stay blank in `.env` on purpose when your shell already exports them from
+an encrypted store: compose reads the shell first, so no second plaintext copy exists to go
+stale after a rotation. Fill them into `.env` only if you have no such setup. The reasoning
+is in [`.env.example`](.env.example).
 
-## LMStudio
+## Load a model first
 
-The context limits declared in the config are only true for a model **hand-loaded** with
-matching flags. A JIT-loaded model does not inherit them and gets a 1 h TTL, so it can
-silently come back smaller an hour after its last request — at 8192, against an agent
-prompt many times that size.
+The context limits above are only true for a model loaded with matching flags. Each engine
+fails differently when the model is not there, and **only Ollama fails loudly**:
 
-Load the model behind the alias you are about to use; they are different models:
+| | LMStudio (1234) | Unsloth (8888) | Ollama (11434) |
+|:--|:--|:--|:--|
+| Key | any string | **required** — every route 401s | ignored entirely |
+| Model not loaded | JIT-loads it, quietly at 8192 context | `400 No model loaded`, unless auto-switch is on | loads it, at the model's own context |
+| Models held at once | several | **one**, chat and embedder alike — a new request unloads the last | several |
+| Idle eviction | 1 h TTL on a JIT load | none — it holds until the next swap | **5 minutes**, by default |
+| Reasoning on Gemma 4 | **depends on the model** — off on the 26B, on for E4B | **on** | **on** |
+| Build pulled here | QAT | QAT | **Q4_K_M** |
+
+**LMStudio** is the dangerous one. It **JIT-loads** a model that is not resident, and a JIT
+load does **not** inherit hand-load flags: a model you loaded at 262144 comes back at
+**8192**, with a 1 h TTL. So a session that worked this morning fails this afternoon with
+nothing changed, and the error looks like a gateway bug.
 
 ```bash
-lms load google/gemma-4-26b-a4b-qat  --context-length 262144 --parallel 1 --gpu max  # local
-lms load google/gemma-4-31b-qat      --context-length 262144 --parallel 1 --gpu max  # local-31b
-lms load google/gemma-4-12b-qat      --context-length 262144 --parallel 1 --gpu max  # local-12b
-lms load mistralai/ministral-3-3b    --context-length 262144 --parallel 1 --gpu max  # local-3b
-lms load qwen/qwen3.8-27b            --context-length 262144 --parallel 1 --gpu max  # local-qwen
-lms load thinkingcap-qwen3.6-27b     --context-length 262144 --parallel 1 --gpu max  # reasoning
-lms load gemma-4-31b-it-abliterated  --context-length 262144 --parallel 1 --gpu max  # uncensored
-
-# These three advertise 131072, not 262144 (`lms ls --json` → maxContextLength).
-lms load google/gemma-4-e4b          --context-length 131072 --parallel 1 --gpu max  # local-4b
-lms load google/gemma-4-e2b          --context-length 131072 --parallel 1 --gpu max  # local-2b
-lms load meta/muse-glimmer           --context-length 131072 --parallel 1 --gpu max  # creative
+lms load google/gemma-4-e4b --context-length 131072 --parallel 1 --gpu max   # lms-4b
 
 lms ps --json    # the source of truth, not the UI
 ```
 
-262144 is the maximum the first group advertises; the second group's ceiling is 131072,
-which is where `local-4b`, `local-2b` and `creative` get their 122880 input limit. These
-are separate models on one GPU — load the one you are about to call rather than all of
-them. The two embedding routes are the exception worth not thinking about: at 84 and
-146 MB they load in under a second, so JIT is fine for them.
+131072 is E4B's ceiling, which is where the 122880 input limit comes from. `lms ls --json`
+reports `maxContextLength` per model, and the model ids are all in the config you are
+running. `lms-embed` needs none of this: at 84 MB it loads in under a second.
 
 `--parallel 1` is deliberate, and it is the flag most likely to be "improved" wrongly. An
-agent client fires its main turn and its background calls (titles, summaries) at once; at
-`--parallel 4` they split one GPU four ways and everything slows together — a 1-token
-request measured **34 s** while large prompts sat in front of it. Serialising is faster end
-to end.
+agent client fires its main turn and its background calls at once; at `--parallel 4` they
+split one GPU four ways and everything slows together — a 1-token request measured **34 s**
+while large prompts sat in front of it.
 
-Prompt processing on this machine measures **~100 tok/s** (17.6k tokens in 173 s), so an
-agent-scale prompt needs minutes before its first token. That is why the two LMStudio chat
-routes carry `timeout: 3600` — and why the client's own timeout has to be raised in step,
-or it hangs up first and the gateway's patience is wasted.
+**Unsloth** has two requirements, and both fail quietly. `UNSLOTH_API_KEY` must be in the
+shell that ran `up -d`, or LiteLLM keeps the alias and 401s while `mlflow-seed` skips it —
+the same name then **401s on 24000 and 404s on 25000**. And
+`Settings → API → Model auto-switch` must be on, because Unsloth serves **one model at a
+time**; with it off, a request for anything else returns `400 No model loaded` without
+queueing or loading. **That one-model limit covers the embedder too** — `unsloth-embed` and
+`unsloth-4b` evict each other, so alternating them costs a swap per call. The swap is cheap
+once the file is in the page cache — measured at 14 s cold and 4.4 s warm on the larger
+models — so alternating costs seconds, not minutes. Leave `auto_download_model` **off**, or
+an unknown model id becomes a multi-gigabyte download rather than an error.
+`GET /v1/status` on 8888 is its truth, and it needs the key too.
 
-## Unsloth Studio — the second engine
-
-Native on the host at `127.0.0.1:8888`, serving `unsloth-31b` and `unsloth-26b`. It runs
-the **same weights** as `local-31b` and `local`, so the pair exists to compare engines, not
-models. Verified 2026-08-27 against a running stack.
-
-It is not a drop-in twin of LMStudio. Four differences, each of which fails in its own way:
-
-| | LMStudio (1234) | Unsloth (8888) |
-|:--|:--|:--|
-| Key | any string | **required** — every route 401s, `/v1/models` included |
-| Model not loaded | JIT-loads it, quietly at 8192 context with a 1 h TTL | `400 No model loaded`, unless auto-switch is on |
-| Models held at once | several | **one** — a new request unloads the last |
-| Reasoning | off for `gemma-4-26b-a4b-qat` | **on** for the same weights |
-
-That last row is the one that surprised me and it is why both `unsloth-*` routes carry
-`max_tokens: 8192` where their LMStudio twins carry 4096. Asked for one sentence with a
-60-token ceiling, `unsloth-26b` returned **empty content**, `finish_reason: "length"`, and
-a full reasoning block — the whole budget spent thinking. At 1000 tokens it answered in
-117. There is no error in that failure, which is what makes it worth a paragraph.
+**Ollama** is the least fussy: no key, several models resident, loads on demand, no flags to
+get wrong. Pull what your config names:
 
 ```bash
-# Its truth, and both need the key
-curl -s http://127.0.0.1:8888/v1/status -H "Authorization: Bearer $UNSLOTH_API_KEY"
-curl -s http://127.0.0.1:8888/v1/models -H "Authorization: Bearer $UNSLOTH_API_KEY"
+ollama pull gemma4:e4b           # ollama-4b
+ollama pull nomic-embed-text     # ollama-embed
+
+ollama ps      # what is RESIDENT — the source of truth
+ollama list    # only what is on disk; it says nothing about memory
 ```
 
-**`Settings → API → Model auto-switch` must be on** or every `unsloth-*` call fails until
-somebody loads a model by hand. With it on, a call to `unsloth-31b` unloads `unsloth-26b`
-and loads 17 GB before answering.
+Two notes. It **evicts an idle model after 5 minutes**, so the second call of a session can
+be as slow as the first — `OLLAMA_KEEP_ALIVE` changes that machine-wide. And the plain
+`gemma4` tags are **Q4_K_M, not QAT** like the other two engines, so `ollama-4b` against
+`lms-4b` moves the build as well as the engine. Ollama's library carries `-it-qat` tags for
+the larger Gemma sizes; if it has one for the size you are running, pull it and change the
+`model:` id to isolate the engine alone.
 
-That swap is cheaper than it sounds. Measured 2026-08-27: a cold load of the 26B took
-**14 s**, the swap to the 31B **10.1 s**, and the swap back to the 26B **4.4 s** — the file
-is in the page cache by then, and 128 GB of RAM means it stays there. So alternating
-between the two aliases is a few seconds, not a coffee break, and there is no reason to
-avoid it in normal use. Leave `auto_download_model` **off**: on, an unknown model id
-becomes a multi-gigabyte download rather than an error.
+## The MLflow gateway
 
-Unsloth also indexes the LMStudio model folder, so `GET /v1/models` lists 12 models here,
-including Ministral, Muse-Glimmer and the abliterated 31B. Anything in the LMStudio ladder
-could be given an Unsloth twin the same way.
+The second gateway: the same alias names at <http://localhost:25000>, so the two can be
+compared on one machine without changing a caller's vocabulary. Swap the base URL, keep the
+model name. **LiteLLM stays the primary endpoint** — it is the only one with virtual keys,
+spend logs and budget ceilings, and there is **no key on this one at all**, which is why it
+binds localhost only.
 
-## Ports
+```bash
+curl -sX POST http://localhost:25000/gateway/mlflow/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"lms-4b","messages":[{"role":"user","content":"hi"}]}'
+```
 
-`24000` and `25000` are a deliberate third band. Two other stacks on this machine hold
-ports, and the failure being avoided is not a loud bind error but the silent one — a health
-probe against `localhost:4000` that a *different* project's gateway answers, going green.
-`mlflow-tutorial` runs its own MLflow on `5555`, which is exactly why this one is not on
-`5000`.
+Embeddings use a different path here, `/gateway/openai/v1/embeddings`.
 
-| Stack | Band |
+### It has no config file, so its config is Python
+
+MLflow's endpoints live in the database and arrive over an API — there is no file to mount.
+So this gateway's alias list is **Python**, split exactly the way LiteLLM's YAML is: one file
+per engine per list, with one entry point that picks two of them.
+
+```text
+mlflow/
+├── gateway.py            the MLflow API calls, written once
+├── seed.py               the entry point — reads GATEWAY_MODELS and GATEWAY_ENGINE
+├── starter/              2 endpoints each
+│   ├── lms.py
+│   ├── unsloth.py
+│   └── ollama.py
+└── full/                 12 / 4 / 4 endpoints
+    ├── lms.py
+    ├── unsloth.py
+    └── ollama.py
+```
+
+Each engine file is a plain list of `Endpoint(...)` entries with the reasoning beside them;
+read one top to bottom. `mlflow-seed` runs `seed.py` on every `up -d`, and it is idempotent.
+`--reset` rebuilds every endpoint it names; `--prune` deletes the ones it does not — which
+now includes the other engines, so read its header before reaching for it. Run it by hand
+against the published port:
+
+```bash
+python mlflow/seed.py --tracking-uri http://localhost:25000
+python mlflow/seed.py --models full --engine ollama --tracking-uri http://localhost:25000
+```
+
+You also get **traces for free**: each request becomes an MLflow trace in an auto-created
+`gateway/<alias>` experiment, written after the response.
+
+> **Nothing in `mlflow/` reads anything in `litellm/`.** Delete the `litellm` service and the
+> whole `litellm/` directory and this gateway still comes up and serves — or just set
+> `COMPOSE_PROFILES=mlflow`. That independence is deliberate, and it has a price: **the two
+> alias lists are maintained twice**. Add a model to `litellm/starter/lms.yaml` and not to
+> `mlflow/starter/lms.py` and the name answers on 24000 and 404s on 25000, with nothing in
+> either log to say why. The two sides were identical when this was written — verified
+> 2026-08-31.
+
+What does **not** transfer, and why LiteLLM stays primary:
+
+| In LiteLLM | In MLflow |
 |:--|:--|
-| `mlflow-tutorial` | 3000, 4000, 5432, 5555, 6333/4, 7233, 8080, 9090 |
-| `ai-agent-platform` | 1xxxx — 14000, 15000 |
-| `ai-gateway` | 2xxxx — 24000 (litellm), 25000 (mlflow) |
-
-Container-internal ports are unchanged; on the compose network nothing can collide.
+| `/v1/messages` (the Anthropic route) | **Not available** — the passthrough exists only for Anthropic-provider endpoints. Claude Code therefore stays on 24000 |
+| Virtual keys, `/key/generate`, `/spend/logs` | No equivalent. Budget policies cap **per endpoint**, not per caller, and there is no key to hand a project |
+| Per-token pricing | Not carried across, so no shadow pricing |
+| `max_input_tokens` + pre-call checks | No equivalent — an over-long prompt fails at the model instead of before the call |
+| `drop_params` | No equivalent; every parameter is forwarded exactly as sent |
+| `timeout` per route | One global `MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS` instead |
 
 ## Troubleshooting
 
-Claude-Code-specific symptoms are in [`NOTES.md`](NOTES.md). These are the gateway's own.
+Every request lands in the admin UI's Logs tab at <http://localhost:24000/ui>, prompt and
+response included. **Look there before changing configuration.**
 
 | Symptom | Cause | Fix |
 |:--|:--|:--|
 | `unhealthy` for the first minute after `up -d` | schema migrations against an empty database | expected — wait out the 60 s `start_period` |
 | `{"error":"No connected db."}` from `/key/generate` | the proxy booted without `DATABASE_URL` | `curl /health/readiness` — it reports `db` |
-| 401 from a priced alias only | the shell that ran `up -d` had no direnv, so the key interpolated blank | re-run `up -d` from a shell under `~/Projects` |
-| Non-zero spend on `local` | LMStudio was down and the fallback chain ran | expected — check `api_base` in `/spend/logs` |
-| `local` fails instantly, context error | LMStudio JIT-loaded it at 8192 | hand-load it — § LMStudio |
-| An agent runs a step or two, executes nothing, exits cleanly | tool calls returned as raw text by the wrong OpenRouter free-tier provider | the provider pin in `litellm/config.yaml` — check it is intact |
-| A health probe is green but nothing works | it probed `localhost:4000`, which another stack answers | § Ports |
-| `Engine protocol predict request failed: fetch failed` in the logs | a timeout fired mid-prompt and tore down LMStudio's engine socket; it maps to a 400, and a 400 is never retried | raise **both** timeouts — § LMStudio |
-| `mlflow-seed` shows as exited in `compose ps` | it is a one-shot, and exit 0 is the finished state | expected — read `compose logs mlflow-seed` |
-| An alias answers on 24000 and 404s on 25000 | `mlflow-seed` has not run since you added it to `config.yaml` | `podman compose up -d`, then check its log |
-| `unsloth-*` gives `400 No model loaded` | Unsloth serves one model at a time and auto-switch is off | turn on `Settings → API → Model auto-switch` — § Unsloth Studio |
-| `unsloth-*` 401s on 24000 **and** 404s on 25000 | `UNSLOTH_API_KEY` was blank when `up -d` ran: LiteLLM kept the alias, `mlflow-seed` skipped it | export the key, `podman compose up -d` again |
-| `unsloth-*` returns empty content, `finish_reason: "length"` | these weights reason under Unsloth, and the reasoning block ate the whole `max_tokens` | raise the caller's `max_tokens`; the routes already carry 8192 |
-| MLflow answers 403 `Invalid Host header` | the caller's `Host` is not in `MLFLOW_SERVER_ALLOWED_HOSTS`, and `/health` is exempt so the container still looks healthy | add that host:port — § Configuration |
-| Every MLflow alias fails with an auth error, LiteLLM is fine | `MLFLOW_CRYPTO_KEK_PASSPHRASE` changed, so the stored secrets no longer decrypt | `podman compose up -d` — `mlflow-seed` rewrites every secret |
+| A local alias fails instantly with a context error | LMStudio JIT-loaded it at 8192 | hand-load it — [above](#load-a-model-first) |
+| Empty content, `finish_reason: "length"` | a thinking model spent the whole `max_tokens` on reasoning | raise `max_tokens` on the call |
+| `400 No model loaded` from `unsloth-*` | Unsloth serves one model at a time and auto-switch is off | turn on `Settings → API → Model auto-switch` |
+| `unsloth-*` 401s on 24000 **and** 404s on 25000 | `UNSLOTH_API_KEY` was blank when `up -d` ran | export it, run `up -d` again |
+| An `ollama-*` call that was fast a few minutes ago is slow again | Ollama evicted the idle model and re-read it from disk | expected — `ollama ps`, or raise `OLLAMA_KEEP_ALIVE` |
+| `ollama-*` says `model not found` | the tag is not pulled | `ollama pull <tag>` — the ids are in `litellm/<models>/ollama.yaml` |
+| `ollama-4b` and `lms-4b` differ in quality | not the same build: Q4_K_M here, QAT there | expected — see [Load a model first](#load-a-model-first) |
+| An alias answers on 24000 and 404s on 25000 | either `mlflow-seed` has not run since you added it, **or you added it to `litellm/` only** — the two lists are separate and nothing syncs them | `docker compose up -d` and read the seed's log; if the name is not in it, add the `Endpoint(...)` to `mlflow/<models>/<engine>.py` |
+| `up -d` starts **only `postgres`**; both ports refuse the connection | `COMPOSE_PROFILES` is missing from `.env`, and a service with a profile stays off until its profile is named | `cp .env.example .env`, or `docker compose --profile litellm --profile mlflow up -d` |
+| One port answers and the other refuses the connection | that gateway's profile is not in `COMPOSE_PROFILES` — which may well be what you asked for | `docker compose ps`; add the profile if you wanted both |
+| `litellm` exits saying the config file does not exist | `GATEWAY_MODELS` or `GATEWAY_ENGINE` is misspelled — the name is built from both words | fix the spelling; the eight valid names are `ls litellm/config.*.yaml` |
+| `mlflow-seed` exits non-zero saying a word "must be one of" | same typo, caught by `seed.py` before it writes anything | fix the spelling and `up -d` again |
+| An alias 404s on **both** ports after you changed `GATEWAY_ENGINE` | that engine's fragment does not carry the name — a single engine serves only its own aliases | `curl /model/info`, or set `GATEWAY_ENGINE=all` |
+| `mlflow-seed` shows as exited | it is a one-shot; exit 0 is the finished state | expected — `docker compose logs mlflow-seed` |
+| `Engine protocol predict request failed: fetch failed` | a timeout fired mid-prompt and tore down the engine socket; it maps to a 400, and a 400 is never retried | raise **both** the client and the route timeout |
+| An agent runs a step or two, executes nothing, exits cleanly | tool calls came back as raw text from the wrong OpenRouter free-tier provider | check the provider pin in `litellm/settings.yaml` |
+| MLflow answers 403 `Invalid Host header` | the caller's `Host` is not in `MLFLOW_SERVER_ALLOWED_HOSTS`, and `/health` is exempt so the container still looks healthy | add that `host:port` |
+| Every MLflow alias fails on auth, LiteLLM is fine | `MLFLOW_CRYPTO_KEK_PASSPHRASE` changed, so stored secrets no longer decrypt | `docker compose up -d` — the seed rewrites them |
+| A health probe is green but nothing works | it probed a port another stack answers | this repo uses **24000 / 25000** on purpose, leaving the usual 4000 / 5000 free |
 
-Every request lands in the admin UI's Logs tab at <http://localhost:24000/ui>, prompt and
-response included. Look there before changing configuration.
-
-## Repository structure
+## Repository layout
 
 ```text
 ai-gateway/
-├── .claude/            the contract this repo is maintained under
-├── .env.example        tracked; the three provider keys are blank BY DESIGN
-├── .gitignore
-├── compose.yml         four services, ports, healthchecks, env wiring
-├── litellm/
-│   └── config.yaml     aliases, prices, fallback chains, provider pins
-├── mlflow/
-│   └── seed_gateway.py reads that config.yaml into the MLflow gateway
-├── postgres/
-│   └── init-databases.sh   creates the `mlflow` database, on a fresh volume only
-├── tests/              a uv project — § Tests
-│   ├── common.py           the two base URLs, the client, the pass/fail printing
-│   ├── 01_simple_call.py   plain chat completion
-│   ├── 02_tools_call.py    tools, and the second turn that uses the result
-│   ├── 03_multimodal.py    an image plus a question
-│   ├── run_all.py          every script x every gateway, as a table
-│   └── test_image.png      256x256, one red circle on white
-├── NOTES.md            connecting Claude Code to this gateway
-└── README.md           start here — aliases, endpoints, keys, ports
+├── compose.yml                 four services, profiles, ports, healthchecks, env wiring
+├── .env.example                tracked; the key lines are blank BY DESIGN
+├── litellm/                    gateway 1's alias list — YAML
+│   ├── settings.yaml           the settings blocks + the hosted tiers, commented out
+│   ├── starter/                lms.yaml · unsloth.yaml · ollama.yaml   2 aliases each
+│   ├── full/                   lms.yaml · unsloth.yaml · ollama.yaml   12 / 4 / 4
+│   └── config.<models>.<engine>.yaml   8 composed files; compose loads exactly one
+├── mlflow/                     gateway 2's alias list — Python; reads nothing above
+│   ├── gateway.py              the MLflow API machinery, written once
+│   ├── seed.py                 the entry point; picks a list and an engine
+│   ├── starter/                lms.py · unsloth.py · ollama.py         2 endpoints each
+│   └── full/                   lms.py · unsloth.py · ollama.py         12 / 4 / 4
+├── postgres/init-databases.sh  creates the `mlflow` database, on a fresh volume only
+├── tests/                      a uv project: 3 call kinds x both gateways
+└── .claude/                    the working contract for AI agents in this repo
 ```
 
-## What this repo deliberately does not run
+**`litellm/` and `mlflow/` are the same aliases written twice, once per gateway.** That is the
+cost of each gateway standing on its own; see
+[It has no config file](#it-has-no-config-file-so-its-config-is-python). Inside one gateway
+nothing repeats: an engine fragment is written once and the composed files only name it.
+[`litellm/starter/lms.yaml`](litellm/starter/lms.yaml) is where the numbers live — every one
+carries a comment saying where it came from — and
+[`litellm/full/lms.yaml`](litellm/full/lms.yaml) is the same fragment grown to twelve aliases.
 
-- **No trace store for other projects.** MLflow is a *project's* system of record for "did
-  this get better"; two projects sharing one experiment namespace makes that question
-  ambiguous. The `mlflow` service here is a **gateway**, and it traces only what passes
-  through its own endpoints. `success_callback` in `litellm/config.yaml` is still empty —
-  trace client-side, or point a callback at your own server.
-- **No custom image.** All three are stock, so there is no build step. The MLflow image
-  already ships `psycopg2` and `cryptography`, which is everything the Postgres backend and
-  the gateway's encrypted secrets need. A `litellm/Dockerfile` returns the day a callback
-  needs a package it lacks.
-- **No secrets.** They arrive from the shell, never from this repo — § Configuration.
-- **No test suite.** There is nothing to unit-test in three stock images, a YAML file and a
-  seed script. Verification is `/health/readiness` plus one real completion through the
-  alias you touched — on **both** gateways, if you touched `config.yaml`.
+## Design decisions
 
-Derived from `~/Projects/Github/lukaskellerstein/ai-agent-platform/deploy/compose`, minus
-its client-side trace store and its `judge` / `optimizer` role aliases.
+- **Aliases, not model names.** The model behind a name is expected to change; the name is
+  the contract. A caller that hardcodes a model id has to be edited when the model moves.
+- **Each gateway owns its own alias list.** MLflow's endpoints are a Python script that reads
+  nothing from `litellm/`, so either gateway can be deleted without touching the other. The
+  cost is real and deliberate: the same aliases are written twice, and only a call to both
+  ports proves they still agree. `tests/` does exactly that.
+- **Every alias names its engine.** There is no engine-neutral name, because one existed and
+  it hid which of the three answered — the single question this repo is built to make cheap.
+- **The default config is small on purpose.** A gateway is useless until the models are on
+  disk, and nobody should download 90 GB to try a repo. Six aliases demonstrate the whole
+  idea; the full list is there when you want more, behind one word in `.env`.
+- **Three choices, three words, and each one is independent.** Which gateway, which alias
+  list, which engine. They compose into one filename per gateway rather than into a matrix of
+  hand-written configs — an engine's aliases are written once and named by the four composed
+  files that use them. Adding a model is still one edit per gateway, not one per combination.
+- **Local routes are priced anyway.** An unpriced route logs `$0`, which makes a budget
+  ceiling a no-op. Shadow pricing keeps the guardrail real.
+- **No trace store for other projects.** MLflow here traces only what passes through its own
+  endpoints; `success_callback` is empty on purpose, because two projects sharing one
+  experiment namespace makes "did this get better" ambiguous. Trace client-side instead.
+- **No custom image, no build step.** All three images are stock. A `Dockerfile` returns the
+  day a callback needs a package the base image lacks.
+- **No secrets in the repo.** They arrive from the shell. `.env` is gitignored;
+  `.env.example` is tracked and must never carry a real value.
+- **Ports 24000 / 25000.** The failure worth avoiding is not a loud bind error but the silent
+  one — a health probe against `localhost:4000` that a *different* stack answers, going
+  green. Container-internal ports are unchanged.
+
+## Contributing
+
+Issues and pull requests are welcome. Most changes here are an alias — a model you run that
+this repo does not name yet — and there is one rule that catches everyone:
+
+> **An alias is two edits, one per gateway.** Add it to `litellm/<list>/<engine>.yaml` and to
+> `mlflow/<list>/<engine>.py`. Do one and the name answers on 24000 and 404s on 25000, with
+> nothing in either log to say why.
+
+1. Fork, then branch — `git checkout -b feature/my-alias`.
+2. Edit the **engine fragment**, never a composed `config.*.yaml`. New models go in `full/`;
+   `starter/` stays at one chat model and one embedder per engine, and is a strict subset.
+3. Do the same in `mlflow/`, and add the name to the alias table in this file.
+4. Prove it on **both** ports — `docker compose up -d`, then
+   `cd tests && uv sync && uv run run_all.py --model <your-alias>`.
+5. Open a pull request saying which engines, models and machine you ran it against.
+
+**There is no CI.** `tests/` is the whole check, and it only runs against models on your own
+disk — so the pull request has to carry that evidence itself. Numbers in the config get a
+comment saying where they came from; a claim in this file gets the date it was verified.
+
+The working contract for AI coding agents in this repo is [`.claude/`](.claude/), and it is
+worth a read before a larger change.
+
+## License
+
+[MIT](LICENSE).

@@ -1,0 +1,21 @@
+# COMPOSED CONFIG — the STARTER list, UNSLOTH only. Two aliases: unsloth-4b, unsloth-embed.
+#
+# compose loads exactly ONE file from this directory, and its name is two words from `.env`:
+#
+#   config.${GATEWAY_MODELS:-starter}.${GATEWAY_ENGINE:-all}.yaml
+#
+# so this file is what you get from:
+#
+#   GATEWAY_MODELS=starter        # or leave it out — starter is the default
+#   GATEWAY_ENGINE=unsloth
+#
+# NOTHING IS DECLARED HERE. The aliases are in starter/unsloth.yaml and the settings blocks
+# are in settings.yaml; this file only names them. Edit those, not this one.
+#
+# BOTH ALIASES NEED UNSLOTH_API_KEY in the shell that ran `up -d`. Without it LiteLLM keeps
+# them and 401s at call time, while the MLflow seed skips them and 404s — so this engine is
+# the one where a missing key looks like two different bugs.
+
+include:
+  - settings.yaml
+  - starter/unsloth.yaml
