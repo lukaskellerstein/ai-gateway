@@ -82,10 +82,6 @@
 
       "Read(./secrets/**)",
       "Read(./.secrets/**)",
-      "Read(./**/.env)",
-      "Read(./**/.env.local)",
-      "Read(./**/.env.production)",
-      "Read(./**/.env.staging)",
       "Read(./.npmrc)",
       "Read(./**/*credentials*.json)",
       "Read(./**/serviceAccountKey.json)",

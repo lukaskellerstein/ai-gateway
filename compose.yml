@@ -9,17 +9,26 @@
 #   mlflow       the SAME aliases through the MLflow AI Gateway, for comparison
 #   mlflow-seed  a one-shot that writes MLflow's endpoint list in. Exits.
 #
-# THREE WORDS IN .env DECIDE WHAT RUNS. Nothing else in this file needs editing to
+# TWO WORDS IN .env DECIDE WHAT RUNS. Nothing else in this file needs editing to
 # get a different stack:
 #
-#   COMPOSE_PROFILES   litellm | mlflow | litellm,mlflow | all   WHICH GATEWAY
-#   GATEWAY_MODELS     starter | full                            WHICH ALIAS LIST
-#   GATEWAY_ENGINE     lms | unsloth | ollama | all              WHICH ENGINE
+#   COMPOSE_PROFILES   litellm | mlflow | litellm,mlflow | all       WHICH GATEWAY
+#   GATEWAY_ENGINE     lms | unsloth | ollama | openrouter | openai  WHICH ENGINE
 #
 # COMPOSE_PROFILES is compose's own variable and it gates the two gateway services
-# below; the other two are interpolated into a filename on one side and passed as
+# below; GATEWAY_ENGINE is interpolated into a filename on one side and passed as
 # environment on the other. postgres carries no profile, so it always starts —
 # both gateways need it.
+#
+# ONE ENGINE AT A TIME, ON PURPOSE. There is no list, no `all` and no starter/full
+# split: the gateway serves one engine's two or three aliases and nothing else. To
+# compare two engines, change the word and run `up -d` again — the aliases are named
+# so only the prefix differs (`lms-26b` / `unsloth-26b` / `ollama-26b` /
+# `openrouter-26b` are the same weights).
+#
+# AN ENGINE IS AN ENGINE, LOCAL OR HOSTED. `openrouter` and `openai` are engine names
+# like `lms` is, and the alias prefix says which is which. Selecting one of those two
+# is the ONLY way anything in the running stack can spend money.
 #
 # WITH NO .env AT ALL, `up -d` STARTS POSTGRES AND NOTHING ELSE, because a service
 # with a profile is off until its profile is named. `cp .env.example .env` is the
@@ -30,22 +39,21 @@
 # spend logs and budget ceilings. MLflow serves the same alias names so the two can
 # be compared on one machine — swap the base URL, keep the model name.
 #
-# EACH GATEWAY OWNS ITS OWN ALIAS LIST, and both are split the same way — one file
-# per engine per list, composed by the two words above:
+# EACH GATEWAY OWNS ITS OWN ALIAS LIST — one self-contained file per engine, named
+# by the same word on both sides:
 #
-#              starter                      full
-#   LiteLLM    litellm/starter/<engine>.yaml   litellm/full/<engine>.yaml
-#   MLflow     mlflow/starter/<engine>.py      mlflow/full/<engine>.py
+#   LiteLLM    litellm/<engine>.yaml   includes settings.yaml, declares its aliases
+#   MLflow     mlflow/<engine>.py      an ENDPOINTS list, written in over the API
 #
 # MLflow's side reads nothing from LiteLLM's, so the `litellm` service and the
 # whole litellm/ directory can be deleted and the MLflow gateway still comes up and
 # serves. The price of that independence is that the two lists are maintained
-# twice — the two words keep them on the same LIST and the same ENGINE, but adding
-# a model is still two edits, not one.
+# twice — the one word keeps them on the same ENGINE, but adding a model is still
+# two edits, not one.
 #
 # The MLflow here is a GATEWAY, not a trace store for other projects. It traces
 # what passes through ITS OWN endpoints and nothing else. `success_callback` in
-# litellm/config.*.yaml stays empty for the original reason: two projects sharing
+# litellm/settings.yaml stays empty for the original reason: two projects sharing
 # one experiment namespace makes "did this get better" ambiguous, which is the
 # one question a trace store exists to answer. A project that wants tracing runs
 # its own MLflow and traces client-side.
@@ -138,32 +146,33 @@ services:
     profiles: ["litellm", "all"]
     depends_on:
       postgres: { condition: service_healthy }
-    # WHICH ALIAS LIST THIS GATEWAY SERVES, in one filename built from two words in
-    # .env. GATEWAY_MODELS holds `starter` or `full`, GATEWAY_ENGINE holds `lms`,
-    # `unsloth`, `ollama` or `all`, and litellm/ carries all eight combinations as
-    # short composed files:
+    # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in .env.
+    # GATEWAY_ENGINE holds `lms`, `unsloth`, `ollama`, `openrouter` or `openai`, and
+    # litellm/ carries one self-contained config per engine:
     #
-    #   config.starter.all.yaml     6 aliases, the default a fresh clone gets
-    #   config.starter.ollama.yaml  2 aliases, one engine
-    #   config.full.lms.yaml        12 aliases, one engine
-    #   ...
+    #   litellm/lms.yaml         3 aliases: 2 chat, 1 embedder      free
+    #   litellm/unsloth.yaml     3 aliases: 2 chat, 1 embedder      free
+    #   litellm/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
+    #   litellm/openrouter.yaml  2 aliases: 2 chat                  PAID
+    #   litellm/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
     #
-    # Each composed file is an `include:` list — litellm/settings.yaml plus one to
-    # three model fragments — so no alias is written twice. THE SAME TWO WORDS pick
-    # mlflow-seed's list below, so the two gateways cannot end up on different ones.
+    # Each one includes litellm/settings.yaml for the three settings blocks and then
+    # declares its own model_list. There is no fragment/composed split, no generated
+    # file and no list: ONE ENGINE RUNS AT A TIME. THE SAME WORD picks mlflow-seed's
+    # endpoints below, so the two gateways cannot serve different engines.
     #
-    # A TYPO IN EITHER WORD IS A CLEAN CRASH, not a silent one: the file simply does
-    # not exist and litellm exits saying so. (It was NOT clean before 2026-08-31,
-    # when this mounted a single file: compose bind-mounts a missing source by
-    # CREATING AN EMPTY DIRECTORY, and the proxy then crash-looped on
-    # `IsADirectoryError` while `compose ps` still said Up. Mounting the directory
-    # is what removed that trap.)
-    command: ["--config", "/app/config/config.${GATEWAY_MODELS:-starter}.${GATEWAY_ENGINE:-all}.yaml", "--port", "4000", "--num_workers", "1"]
+    # A TYPO IS A CLEAN CRASH, not a silent one: the file simply does not exist and
+    # litellm exits saying so. (It was NOT clean before 2026-08-31, when this mounted
+    # a single file: compose bind-mounts a missing source by CREATING AN EMPTY
+    # DIRECTORY, and the proxy then crash-looped on `IsADirectoryError` while
+    # `compose ps` still said Up. Mounting the directory is what removed that trap.)
+    command: ["--config", "/app/config/${GATEWAY_ENGINE:-lms}.yaml", "--port", "4000", "--num_workers", "1"]
     ports:
       - "24000:4000"
     volumes:
-      # The whole directory, because a composed file includes its fragments by
-      # relative path and they must be visible next to it. It lands on /app/config
+      # The whole directory, because every engine config carries
+      # `include: [settings.yaml]` and that relative path must resolve next to
+      # it. Mount the one engine file alone and the settings vanish. It lands on /app/config
       # and NOT on /app/litellm: the image already ships /app/litellm, which is the
       # proxy's own Python package, and mounting over it breaks the container.
       - ./litellm:/app/config:ro
@@ -201,9 +210,13 @@ services:
       # NO KEY VARIABLE, and that is not an omission: Ollama does not read the
       # Authorization header at all. The literal `sk-ollama` in both configs is
       # there only so the MLflow seed does not skip the routes — see the note on
-      # the Ollama block in litellm/starter/ollama.yaml.
+      # the Ollama block in litellm/ollama.yaml.
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.containers.internal:11434/v1}
-      # Hosted providers — needed by the priced aliases (`cheap`, `standard`, `frontier`).
+      # The two PAID engines: OPENROUTER_API_KEY backs every `openrouter-*` alias and
+      # OPENAI_API_KEY every `openai-*` one. Neither engine is in the running config at
+      # all unless GATEWAY_ENGINE names it. HF_TOKEN backs nothing now — HuggingFace only
+      # ever served `standard-hf`, a fallback target, and no alias has a fallback chain.
+      #
       # Blank in .env on this machine: ~/Projects/.envrc already exports the real values
       # from ~/.secrets/secrets.enc.yaml, and compose's shell environment wins over the
       # .env file. See .env.example.
@@ -232,7 +245,7 @@ services:
   #
   # Call it exactly like LiteLLM, with one URL changed:
   #   POST http://localhost:25000/gateway/mlflow/v1/chat/completions
-  #   {"model": "lms-3b", "messages": [...]}
+  #   {"model": "lms-4b", "messages": [...]}
   # ---------------------------------------------------------------------------
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
@@ -303,16 +316,17 @@ services:
   #
   # MLFLOW'S ALIAS LIST IS PYTHON, NOT YAML, because MLflow's gateway has no config
   # file: its endpoints live in the database and arrive over an API. The list is
-  # split exactly the way LiteLLM's YAML is — one file per engine per list —
-  # and seed.py picks two of them from the SAME two words:
-  #   mlflow/starter/{lms,unsloth,ollama}.py   2 endpoints each
-  #   mlflow/full/{lms,unsloth,ollama}.py      12 / 4 / 4
+  # split exactly the way LiteLLM's YAML is — one self-contained file per engine —
+  # and seed.py loads the ONE that GATEWAY_ENGINE names:
+  #   mlflow/{lms,unsloth,ollama}.py      3 endpoints each      free
+  #   mlflow/openrouter.py                1 endpoint            PAID
+  #   mlflow/openai.py                    2 endpoints           PAID
   # They import mlflow/gateway.py, which holds the API calls, so the whole
   # directory is mounted rather than a single file.
   #
-  # THE TWO WORDS ARRIVE AS ENVIRONMENT VARIABLES HERE, not in the filename. That
-  # is what lets seed.py validate them and print the allowed values, instead of
-  # failing with `python: can't open file`.
+  # THE WORD ARRIVES AS AN ENVIRONMENT VARIABLE HERE, not in the filename. That is
+  # what lets seed.py validate it and print the allowed values, instead of failing
+  # with `python: can't open file`.
   #
   # NOTHING HERE READS A LITELLM FILE. Delete the `litellm` service and the
   # litellm/ directory and this still works. The cost is that an alias must be
@@ -332,11 +346,10 @@ services:
       - ./mlflow:/app/mlflow:ro
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
-      # WHICH ENDPOINTS THIS RUN WRITES. The same two words that name LiteLLM's
-      # composed config file above, so the gateways cannot end up on different
-      # lists. seed.py rejects anything else by name.
-      GATEWAY_MODELS: ${GATEWAY_MODELS:-starter}
-      GATEWAY_ENGINE: ${GATEWAY_ENGINE:-all}
+      # WHICH ENDPOINTS THIS RUN WRITES. The SAME word that names LiteLLM's config
+      # file above, so the two gateways cannot serve different engines. One engine at
+      # a time; seed.py rejects a list and rejects a typo, by name.
+      GATEWAY_ENGINE: ${GATEWAY_ENGINE:-lms}
       # The same values LiteLLM gets. This container never calls a provider; it
       # only reads these and hands them to MLflow, which stores them encrypted. A
       # name missing here is the silent failure: the seed script skips the endpoint

@@ -1,0 +1,90 @@
+# Ollama (port 11434) — the whole config for this engine.
+#
+# ONE ENGINE RUNS AT A TIME. `GATEWAY_ENGINE=ollama` in .env points compose at THIS file, and
+# the aliases below are then the entire vocabulary the gateway serves.
+#
+# THIS FILE IS SELF-CONTAINED: it includes settings.yaml for the three settings blocks and
+# declares its own aliases.
+#
+# THE LEAST FUSSY ENGINE: it loads on demand, holds several models at once, and needs no key
+# at all. Four notes anyway:
+#
+#   THE PREFIX IS `openai/`, NOT `ollama/`, AND THAT IS A CHOICE. LiteLLM does ship an
+#   `ollama_chat` provider. It is not used because Ollama's /v1 layer is already
+#   OpenAI-compatible and returns structured tool_calls (verified 2026-08-27), so the native
+#   prefix buys nothing while `openai/` keeps these routes shaped exactly like the
+#   `unsloth-*` ones.
+#
+#   THE KEY IS IGNORED, AND ONE IS SET ANYWAY. Ollama never reads Authorization. `sk-ollama`
+#   is here because LiteLLM's `openai/` provider needs SOME key string — with none it falls
+#   back to OPENAI_API_KEY, which is blank, and the route errors. The MLflow seed also skips
+#   any endpoint whose key is empty.
+#
+#   IT EVICTS AN IDLE MODEL AFTER 5 MINUTES by default, so the second call of a session can
+#   be as slow as the first. `ollama ps` says what is resident; `ollama list` only says what
+#   is on disk. OLLAMA_KEEP_ALIVE changes it machine-wide.
+#
+#   THE BUILD IS NOT ITS TWINS' BUILD. These tags are Q4_K_M, quantised AFTER training,
+#   while LMStudio and Unsloth run QAT weights trained around the quantisation. So an
+#   `ollama-*` route against its twin measures ENGINE AND BUILD together. Say which you are
+#   claiming. Ollama's library carries `-it-qat` tags for some Gemma sizes; pull one and
+#   change the `model:` id below to isolate the engine alone.
+#
+# Pull what this file names before calling it:
+#   ollama pull gemma4:e4b && ollama pull gemma4:26b && ollama pull nomic-embed-text
+
+include:
+  - settings.yaml
+
+model_list:
+  # `lms-4b`'s twin: Gemma 4 E4B, the small chat route, tools and vision both working.
+  # `gemma4:latest` is the SAME model — one digest, two tags — but `latest` moves on the next
+  # pull, so the explicit `:e4b` is used.
+  - model_name: ollama-4b
+    litellm_params:
+      model: openai/gemma4:e4b
+      api_base: os.environ/OLLAMA_API_BASE
+      api_key: "sk-ollama"                # ignored by Ollama; see the note above
+      input_cost_per_token: 0.00000012    # shadow price, so budget ceilings still trip
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                    # it thinks here — reasoning and reply share this
+      timeout: 3600                       # a cold load reads ~10 GB from disk first
+    model_info:
+      max_input_tokens: 122880            # gemma4.context_length 131072 − the reserve
+      max_output_tokens: 8192
+
+  # `lms-26b`'s twin: the 26B mixture of experts, the large chat route. Q4_K_M here against
+  # QAT on the other two local engines, so this pair moves the build as well as the engine.
+  - model_name: ollama-26b
+    litellm_params:
+      model: openai/gemma4:26b
+      api_base: os.environ/OLLAMA_API_BASE
+      api_key: "sk-ollama"
+      input_cost_per_token: 0.00000012
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                    # it thinks here too
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952            # 262144 − the same 8192 output reserve
+      max_output_tokens: 8192
+
+  # The same nomic-embed-text v1.5 model the other local engines serve, at 768 dimensions on
+  # a 2048 window (verified 2026-08-27 from GET /api/show) — but the F16 build at 274 MB,
+  # against `lms-embed`'s Q4_K_M at 84 MB and `unsloth-embed`'s Q8_0 at 146 MB (measured
+  # 2026-08-31). It is the most accurate of the three and the heaviest.
+  #
+  # VECTORS DO NOT MIX ACROSS BUILDS — see the note in lms.yaml. Record which alias built
+  # each index.
+  #
+  # No tag is pinned: `nomic-embed-text` resolves to :latest, which has been v1.5 for a long
+  # time but is not guaranteed to stay. Pin `nomic-embed-text:v1.5` if reproducibility of the
+  # VECTORS matters — a moved tag re-embeds differently and silently invalidates an index.
+  - model_name: ollama-embed
+    litellm_params:
+      model: openai/nomic-embed-text
+      api_base: os.environ/OLLAMA_API_BASE
+      api_key: "sk-ollama"
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 2048              # nomic-bert.context_length from GET /api/show

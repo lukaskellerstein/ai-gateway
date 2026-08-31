@@ -1,45 +1,60 @@
 #!/usr/bin/env python
-"""MLflow AI Gateway — the seeder's entry point. It picks a list and an engine, and writes.
+"""MLflow AI Gateway — the seeder's entry point. It picks ONE engine, and writes.
 
 MLflow's gateway has NO CONFIG FILE: its endpoints live in the tracking database
-and arrive over an API. So this gateway's alias list is Python, split exactly the
-way LiteLLM's YAML is — one file per engine per list:
+and arrive over an API. So this gateway's alias list is Python — one file per
+engine, beside this one:
 
-              starter (2 each)      full
-    LMStudio  starter/lms.py        full/lms.py         12 aliases
-    Unsloth   starter/unsloth.py    full/unsloth.py      4 aliases
-    Ollama    starter/ollama.py     full/ollama.py       4 aliases
+    lms.py         LMStudio, on this machine        free
+    unsloth.py     Unsloth Studio, on this machine  free
+    ollama.py      Ollama, on this machine          free
+    openrouter.py  OpenRouter                       PAID
+    openai.py      OpenAI                           PAID
 
-TWO WORDS FROM `.env` PICK WHAT RUNS, and they are the same two words that pick
-LiteLLM's composed config file, so the gateways cannot end up on different lists:
+ONE WORD FROM `.env` PICKS WHAT RUNS, and it is the same word that names LiteLLM's
+config file, so the two gateways cannot end up serving different engines:
 
-    GATEWAY_MODELS   starter | full            default starter
-    GATEWAY_ENGINE   lms | unsloth | ollama | all      default all
+    GATEWAY_ENGINE   lms | unsloth | ollama | openrouter | openai   default lms
 
-    GATEWAY_MODELS=full + GATEWAY_ENGINE=unsloth  ->  full/unsloth.py, 4 endpoints
-    both unset                                    ->  all three starter files, 6
+ONE ENGINE AT A TIME, ON PURPOSE. There is no `all`, no list and no starter/full
+split — the repo serves one engine's three-or-so aliases and nothing else. To
+compare two engines, change the word and run `docker compose up -d` again; the
+aliases are named so that only the prefix differs (`lms-26b` / `unsloth-26b` /
+`ollama-26b` / `openrouter-26b` are the same weights).
+
+AN ENGINE IS AN ENGINE, LOCAL OR HOSTED. `openrouter` and `openai` are engine
+names like `lms` is, and the alias prefix says which is which. Selecting one of
+those two is the only way anything here can spend money — and this script prints a
+warning when you do.
 
 compose runs this on every `up -d`, after `mlflow` reports healthy, and it is
-idempotent. Run it by hand against the published port:
+idempotent.
 
-    python mlflow/seed.py --tracking-uri http://localhost:25000
-    python mlflow/seed.py --models full --engine ollama
-    python mlflow/seed.py --reset        # rebuild every endpoint it names
-    python mlflow/seed.py --prune        # ALSO delete every endpoint it does not
+RUN IT BY HAND THROUGH COMPOSE, NOT ON THE HOST. It imports `mlflow`, which the
+image ships and a laptop usually does not — on the host it stops at
+`ModuleNotFoundError: No module named 'mlflow'` before it reads one argument.
+Inside the container `--tracking-uri` already defaults to http://mlflow:5000:
+
+    docker compose run --rm mlflow-seed python /app/mlflow/seed.py --engine ollama
+    docker compose run --rm mlflow-seed python /app/mlflow/seed.py --reset  # rebuild what it names
+    docker compose run --rm mlflow-seed python /app/mlflow/seed.py --prune  # ALSO delete what it does not
+
+`--tracking-uri http://localhost:25000` is for the rare host run that does have
+MLflow installed.
 
 ---------------------------------------------------------------------------
 READ THIS BEFORE `--prune`. It deletes every endpoint this run does not name —
-which now includes THE OTHER ENGINES. `--engine ollama --prune` removes every
-`lms-*` and `unsloth-*` endpoint MLflow holds, and the `gateway/*` traces then
-point at endpoints that no longer exist. Without `--prune` the extras are left
-alone and merely listed, which is why switching engine or list leaves the old
-names still answering on 25000.
+which is EVERY OTHER ENGINE'S. `--engine ollama --prune` removes every `lms-*`,
+`unsloth-*`, `openrouter-*` and `openai-*` endpoint MLflow holds, and the
+`gateway/*` traces then point at endpoints that no longer exist. Without `--prune`
+the extras are left alone and merely listed, which is why switching engine leaves
+the old names still answering on 25000.
 
-NOTHING HERE READS ANYTHING FROM LiteLLM, and that is deliberate. It used to
-parse `litellm/config.yaml`, which meant MLflow could not run without LiteLLM.
-The cost of the split is that the two alias lists are maintained twice: add a
-model in `mlflow/<list>/<engine>.py` AND in `litellm/<list>/<engine>.yaml`, or
-the name answers on one port and 404s on the other.
+NOTHING HERE READS ANYTHING FROM LiteLLM, and that is deliberate: MLflow must be
+able to run with the whole `litellm/` directory deleted. The cost of the split is
+that the two alias lists are maintained twice — add a model in `mlflow/<engine>.py`
+AND in `litellm/<engine>.yaml`, or the name answers on one port and 404s on the
+other.
 
 WHAT MLFLOW HAS NO PLACE FOR, so it is absent rather than lost: prices,
 `max_tokens`, context windows and per-route timeouts. MLflow carries one global
@@ -66,33 +81,30 @@ import sys
 
 from gateway import DEFAULT_TRACKING_URI, Endpoint, env, seed
 
-MODELS = ("starter", "full")
-ENGINES = ("lms", "unsloth", "ollama")
+# The engines this repo carries, one file each beside this one. Order is only the
+# order they are reported in.
+ENGINES = ("lms", "unsloth", "ollama", "openrouter", "openai")
+
+# The engines that bill someone. Used only to print a warning — which engine runs is
+# the caller's decision and this script does not second-guess it. It exists so that
+# turning one on is never something you discover from an invoice.
+PAID = frozenset({"openrouter", "openai"})
 
 
-def endpoints_for(models: str, engine: str) -> list[Endpoint]:
-    """Load `<models>/<engine>.py` — or all three engines — and return their lists."""
-    wanted = ENGINES if engine == "all" else (engine,)
-    chosen: list[Endpoint] = []
-    for name in wanted:
-        chosen.extend(importlib.import_module(f"{models}.{name}").ENDPOINTS)
-    return chosen
+def endpoints_for(engine: str) -> list[Endpoint]:
+    """Load `<engine>.py` and return its ENDPOINTS list."""
+    return list(importlib.import_module(engine).ENDPOINTS)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Write one list of endpoints into the MLflow AI Gateway.",
-        epilog="Both words default from the environment, which is how compose passes them in.",
-    )
-    parser.add_argument(
-        "--models",
-        default=env("GATEWAY_MODELS", "starter"),
-        help="which alias list: starter or full (default: $GATEWAY_MODELS, else starter)",
+        description="Write one engine's endpoints into the MLflow AI Gateway.",
+        epilog="The engine defaults from the environment, which is how compose passes it in.",
     )
     parser.add_argument(
         "--engine",
-        default=env("GATEWAY_ENGINE", "all"),
-        help="which engine: lms, unsloth, ollama or all (default: $GATEWAY_ENGINE, else all)",
+        default=env("GATEWAY_ENGINE", "lms"),
+        help=f"which engine: {', '.join(ENGINES)} (default: $GATEWAY_ENGINE, else lms)",
     )
     parser.add_argument(
         "--tracking-uri",
@@ -105,19 +117,25 @@ def main(argv: list[str] | None = None) -> int:
 
     # Checked by hand rather than with argparse `choices`, because a default that
     # came from the environment is never validated against choices — and the
-    # environment is exactly where the typo comes from. Without this the failure
-    # is a ModuleNotFoundError naming a file nobody meant to write.
-    if args.models not in MODELS:
-        parser.error(f"--models / GATEWAY_MODELS is {args.models!r}; it must be one of: {', '.join(MODELS)}")
-    if args.engine not in (*ENGINES, "all"):
-        parser.error(f"--engine / GATEWAY_ENGINE is {args.engine!r}; it must be one of: {', '.join(ENGINES)}, all")
+    # environment is exactly where the typo comes from. Without this the failure is
+    # a ModuleNotFoundError naming a file nobody meant to write.
+    engine = args.engine.strip()
+    if engine not in ENGINES:
+        parser.error(
+            f"--engine / GATEWAY_ENGINE is {args.engine!r}; it must be one of: {', '.join(ENGINES)}. "
+            "One engine at a time — a list is not accepted."
+        )
 
-    endpoints = endpoints_for(args.models, args.engine)
-    print(f"seeding: models={args.models}  engine={args.engine}  ->  {len(endpoints)} endpoints declared")
-    if args.prune and args.engine != "all":
+    endpoints = endpoints_for(engine)
+    print(f"seeding: engine={engine}  ->  {len(endpoints)} endpoints declared")
+
+    if engine in PAID:
+        print(f"  PAID ENGINE: {engine} — every endpoint below bills a real account.")
+
+    if args.prune:
         print(
-            f"  WARNING: --prune with one engine deletes every endpoint that is not {args.engine}-*, "
-            "including the other engines' — see the header."
+            "  WARNING: --prune deletes every endpoint this run does not name, which is "
+            "EVERY OTHER ENGINE'S — see the header."
         )
 
     return seed(
@@ -131,44 +149,15 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     sys.exit(main())
 
-# ---------------------------------------------------------------------------
-# THE HOSTED TIERS — cloud, priced, and COMMENTED OUT, exactly as they are in
-# litellm/settings.yaml. They live here rather than in an engine file because they
-# belong to no engine: GATEWAY_ENGINE selects which LOCAL engine answers, and
-# these are what you reach for when none of them should.
+# THE HOSTED PROVIDERS ARE ENGINE FILES, not a commented-out block beside the settings.
+# They became `openrouter.py` and `openai.py` on 2026-08-31, because an engine is an
+# engine whether the GPU is yours or someone else's, and GATEWAY_ENGINE is the one
+# property that decides which one runs. The old names went with them: `cheap`,
+# `standard`, `frontier`, `cheap-free` and `standard-hf` named a tier rather than a
+# vendor, so a caller could not tell who answered or who was billed.
 #
-# To turn them on, add them to `endpoints_for`'s result — a `hosted.py` beside
-# this file with its own ENDPOINTS list, loaded whatever the engine, is the
-# smallest honest way — and uncomment the matching routes in litellm/settings.yaml
-# so the two gateways still agree.
-#
-# READ THIS FIRST. LiteLLM pins `cheap-free` to one OpenRouter provider because
-# another returns tool calls as raw text and an agent then executes nothing.
-# MLflow has no equivalent of `extra_body`, so THAT PIN CANNOT BE EXPRESSED HERE
-# and a `cheap-free` endpoint on 25000 is not the same route LiteLLM serves under
-# that name. `standard-hf` is absent on purpose too: MLflow's nearest provider is
-# text-generation-inference, a different API from the HuggingFace router LiteLLM
-# uses. A LiteLLM feature with no MLflow equivalent is documented, not faked.
-#
-#   Endpoint(name="cheap", provider="openrouter",
-#            model="google/gemma-4-26b-a4b-it",
-#            secret="openrouter", api_key=env("OPENROUTER_API_KEY"),
-#            fallbacks=["standard", "frontier"]),
-#   Endpoint(name="standard", provider="openrouter",
-#            model="google/gemma-4-31b-it",
-#            secret="openrouter", api_key=env("OPENROUTER_API_KEY"),
-#            fallbacks=["frontier"]),
-#   Endpoint(name="cheap-free", provider="openrouter",
-#            model="google/gemma-4-26b-a4b-it:free",
-#            secret="openrouter", api_key=env("OPENROUTER_API_KEY"),
-#            fallbacks=["cheap"]),
-#   Endpoint(name="frontier", provider="openai",
-#            model="gpt-5.4-mini",
-#            secret="openai", api_key=env("OPENAI_API_KEY"),
-#            fallbacks=["standard"]),
-#
-# NO LOCAL ENDPOINT GETS A FALLBACK CHAIN, in either gateway. These names promise
-# "these weights, this engine, on this machine, free", and a hop to a hosted model
-# breaks that promise at the worst moment. `lms-26b` is LiteLLM's single
-# deliberate exception and it is commented out there too.
-# ---------------------------------------------------------------------------
+# NO ENDPOINT HERE HAS A FALLBACK CHAIN, hosted or local. An alias names one route: a
+# local one fails rather than quietly leaving the machine and billing you, and a hosted
+# one fails rather than quietly becoming a different model. `Endpoint.fallbacks` still
+# works and is still wired through — it is simply unused, which is a choice this repo
+# makes rather than a feature it lacks.

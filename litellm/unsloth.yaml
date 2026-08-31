@@ -1,0 +1,88 @@
+# Unsloth Studio (port 8888) — the whole config for this engine.
+#
+# ONE ENGINE RUNS AT A TIME. `GATEWAY_ENGINE=unsloth` in .env points compose at THIS file,
+# and the aliases below are then the entire vocabulary the gateway serves.
+#
+# THIS FILE IS SELF-CONTAINED: it includes settings.yaml for the three settings blocks and
+# declares its own aliases.
+#
+# THE MODELS ARE THE SAME WEIGHTS `lms-*` AND `ollama-*` SERVE, which is the point — change
+# GATEWAY_ENGINE, re-run tests/, and the only thing that moved is the engine.
+#
+# FOUR THINGS DIFFER FROM LMSTUDIO, and each fails quietly:
+#
+#   THE PREFIX IS `openai/`, NOT `unsloth/`. LiteLLM has no Unsloth provider. A provider
+#   prefix means "speaks the OpenAI protocol", and api_base is the only thing separating
+#   this from api.openai.com. The model id then carries its own slash, so the strings below
+#   have TWO — only the first is the provider.
+#
+#   IT REQUIRES A KEY. LMStudio takes any string; Unsloth answers 401 on every route without
+#   one, `/v1/models` included. It is personal, so it arrives from the shell and the line in
+#   .env stays blank. A BLANK KEY FAILS TWICE, DIFFERENTLY: LiteLLM keeps the alias and 401s
+#   at call time, while the MLflow seed skips the endpoint entirely — so the same name 401s
+#   on 24000 and 404s on 25000.
+#
+#   IT SERVES ONE MODEL AT A TIME, and that limit SPANS chat and the embedder: calling
+#   `unsloth-embed` unloads `unsloth-26b`, and the next chat call swaps it back. So a
+#   retrieval loop that alternates embed and chat pays a model swap on every call — measured
+#   at 14 s cold and 4.4 s warm. `Settings > API > Model auto-switch` must be ON or the
+#   second alias you call returns 400 "No model loaded". Leave `auto_download_model` OFF, or
+#   an unknown model id becomes a multi-gigabyte download rather than an error.
+#
+#   IT TURNS REASONING ON where LMStudio does not. Verified 2026-08-27: `unsloth-26b`
+#   returns a reasoning block that `lms-26b` — the identical gemma-4-26b-a4b-qat — does not.
+#   At max_tokens 60 the reply came back EMPTY with finish_reason `length`, the whole budget
+#   spent thinking. Hence the larger max_tokens below.
+#
+# `GET /v1/status` on 8888 is this engine's truth, and it needs the key too.
+
+include:
+  - settings.yaml
+
+model_list:
+  # `lms-4b`'s twin: Gemma 4 E4B, the small chat route, tools and vision both working.
+  - model_name: unsloth-4b
+    litellm_params:
+      model: openai/unsloth/gemma-4-E4B-it-qat-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000012    # shadow price, so budget ceilings still trip
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                    # reasoning and reply share this — see above
+      timeout: 3600                       # see the timeout note in settings.yaml
+    model_info:
+      max_input_tokens: 122880            # 131072 − the 8192 output reserve
+      max_output_tokens: 8192
+
+  # `lms-26b`'s twin: the same gemma-4-26b-a4b-qat weights on a different engine. This pair
+  # is the cleanest engine comparison in the repo — identical build, identical model.
+  - model_name: unsloth-26b
+    litellm_params:
+      model: openai/unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000012
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                    # it reasons here and does not on LMStudio
+      timeout: 3600
+    model_info:
+      # 262144 − the 8192 output reserve, read from Unsloth's own GET /v1/status with the
+      # model loaded, not copied from the LMStudio twin.
+      max_input_tokens: 253952
+      max_output_tokens: 8192
+
+  # The Q8_0 build of the same nomic v1.5 the other engines serve — more fidelity per vector,
+  # and NOT interchangeable with theirs. `lms-embed` is Q4_K_M, `ollama-embed` is F16, and
+  # `openai-embed` is a different model at 1536 dims. An index built with one alias and
+  # queried with another returns quietly worse neighbours and never errors. See lms.yaml.
+  #
+  # REMEMBER THE ONE-MODEL LIMIT: calling this evicts whichever chat model is loaded.
+  - model_name: unsloth-embed
+    litellm_params:
+      model: openai/second-state/Nomic-embed-text-v1.5-Embedding-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 2048              # context_length from Unsloth's GET /v1/status

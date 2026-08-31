@@ -4,16 +4,17 @@
 MLflow's gateway has NO CONFIG FILE. LiteLLM re-reads a YAML file at every boot;
 MLflow cannot, because its endpoints live in the tracking database and arrive
 over an API. So the thing that plays the part of a config file in this repo is
-Python, and it is split the same way LiteLLM's YAML is — one file per engine per
-list, with the CLI that picks two of them on top:
+Python, and it is split the same way LiteLLM's YAML is — one self-contained file
+per engine, with the CLI that picks ONE of them on top:
 
-    seed.py            the entry point: reads GATEWAY_MODELS and GATEWAY_ENGINE
-    starter/lms.py     starter/unsloth.py    starter/ollama.py     2 endpoints each
-    full/lms.py        full/unsloth.py       full/ollama.py        12 / 4 / 4
+    seed.py        the entry point: reads GATEWAY_ENGINE and loads one file
+    lms.py         unsloth.py      ollama.py       3 endpoints each   free
+    openrouter.py                                  1 endpoint         PAID
+    openai.py                                      2 endpoints        PAID
 
-Each of those six declares `ENDPOINTS` and nothing else. THIS FILE EXISTS SO THE
+Each of those five declares `ENDPOINTS` and nothing else. THIS FILE EXISTS SO THE
 API CALLS ARE WRITTEN ONCE: a fix to the seeding logic is made here and every
-list gets it, rather than drifting between copies.
+engine gets it, rather than drifting between copies.
 
 Nothing in this directory reads any LiteLLM file. Delete the `litellm/` directory
 and the `litellm` service and the seed still works — verified 2026-08-28 by
