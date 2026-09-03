@@ -17,7 +17,7 @@ market is closed".
 import json
 import sys
 
-from common import MAX_TOKENS, Gateway, answer_of, check, client_for, run, show
+from common import Gateway, answer_of, check, client_for, run, show
 
 PRICES = {"MSFT": 512.34, "GOOG": 187.65}
 DIVIDEND_DATES = {"MSFT": "2026-09-11", "GOOG": "2026-09-15"}
@@ -105,8 +105,12 @@ def scenario(gateway: Gateway, model: str) -> str:
         {"role": "user", "content": "What is the current stock price for MSFT?"},
     ]
 
+    # `**gateway.body_extras` is the per-gateway calling contract from common.py.
+    # BOTH TURNS CARRY IT: a tool loop that sets a ceiling on the first call and
+    # forgets it on the second gets an empty final answer on MLflow, which reads
+    # like the tool result never arrived.
     first = client.chat.completions.create(
-        model=model, messages=messages, tools=TOOLS, tool_choice="auto", max_tokens=MAX_TOKENS
+        model=model, messages=messages, tools=TOOLS, tool_choice="auto", **gateway.body_extras
     )
     show("First response", first)
 
@@ -122,7 +126,7 @@ def scenario(gateway: Gateway, model: str) -> str:
     run_tool_calls(messages, tool_calls)
 
     second = client.chat.completions.create(
-        model=model, messages=messages, tools=TOOLS, tool_choice="auto", max_tokens=MAX_TOKENS
+        model=model, messages=messages, tools=TOOLS, tool_choice="auto", **gateway.body_extras
     )
     show("Second response", second)
     text = answer_of(second)

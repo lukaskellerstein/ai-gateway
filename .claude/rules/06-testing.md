@@ -60,7 +60,7 @@ not run since the edit, or it skipped that route and said why in its log — **e
 ## The suite
 
 ```bash
-cd tests && uv sync && uv run run_all.py            # 6 rows: 3 scripts x 2 gateways
+cd tests && uv sync && uv run run_all.py            # 8 rows: 4 scripts x 2 gateways
 uv run run_all.py --model <the alias you touched>
 uv run 02_tools_call.py --gateway litellm           # one script, one gateway
 ```

@@ -16,6 +16,7 @@ returns the day a callback needs a package the base image lacks.
 | `postgres` | `docker.io/postgres:17` | **none** | databases `litellm` (keys, teams, spend, ceilings) and `mlflow` (endpoints, secrets, traces) |
 | `mlflow` | `ghcr.io/mlflow/mlflow:latest` | **25000** → 5000 | the same aliases through the MLflow AI Gateway. **No key, and no `/v1/messages`** |
 | `mlflow-seed` | same as `mlflow` | — | one-shot: runs `mlflow/seed.py`, then exits. **Exited (0) is the finished state** |
+| `discover` | same as `litellm` | — | one-shot on the **`litellm` profile only**: writes `litellm/discovered-<engine>.yaml` when `GATEWAY_DISCOVERY` is set, and exits in a second doing nothing when it is not. `litellm` waits for it either way |
 
 Both gateways carry compose profiles; `postgres` carries none and always starts. Each
 server applies its own schema migrations on first boot, so the only SQL here is
@@ -31,12 +32,20 @@ failure avoided is not a loud bind error but the silent one: a probe against
 | `~/Projects/Github/lukaskellerstein/ai-agent-platform` | 1xxxx |
 | `ai-gateway` | **2xxxx** — 24000, 25000 |
 
-## The two words
+## The three words
 
 | Variable | Values | Default | Picks |
 |:--|:--|:--|:--|
 | `COMPOSE_PROFILES` | `litellm`, `mlflow`, `litellm,mlflow`, `all` | *(nothing starts)* | which gateway |
 | `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | `lms` | which engine |
+| `GATEWAY_DISCOVERY` | *(empty)*, `on` | *(empty)* | which models |
+
+`GATEWAY_DISCOVERY` is empty by default, and then the hand-written lists below are the whole
+vocabulary. Set it and each gateway ADDS every model the engine holds on disk — LiteLLM
+through a generated `litellm/discovered-<engine>.yaml` that **includes** the hand-written
+file, MLflow by **appending** to the hand-written `ENDPOINTS`. It never replaces a
+hand-written alias, and it is refused on the two paid engines. Full facts:
+[`../CLAUDE.md`](../CLAUDE.md) § the repo in ten points, and `discover/gateway_discovery.py`.
 
 `GATEWAY_ENGINE` becomes a filename on one side and an environment variable on the other,
 so the gateways cannot serve different engines — though they can still drift in *content*:
@@ -122,6 +131,9 @@ while the MLflow seed skips the endpoint entirely — so the same name 401s on 2
   MLflow image and has no manifest of its own; the repo root carries none.
 - **Run**: `podman compose up -d` (or `docker compose`) → 24000, and 25000. Needs
   `COMPOSE_PROFILES` in `.env`, or only postgres starts.
-- **Test**: `cd tests && uv sync && uv run run_all.py` — three call kinds against every
-  gateway `COMPOSE_PROFILES` starts, exit 1 on any failure. It drives one alias per run,
-  so it is not a substitute for the checks in [`06-testing.md`](06-testing.md).
+- **Test**: `cd tests && uv sync && uv run run_all.py` — three call kinds plus
+  `04_gateway_contract.py`, against every gateway `COMPOSE_PROFILES` starts, exit 1 on any
+  failure. It drives one alias per run, so it is not a substitute for the checks in
+  [`06-testing.md`](06-testing.md). **The two gateways share a vocabulary but not a calling
+  contract** — `max_tokens` above all, since only LiteLLM stores a per-route default.
+  `tests/common.py` § `Gateway` is the table.

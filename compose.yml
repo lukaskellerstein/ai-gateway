@@ -3,17 +3,35 @@
 # Works with BOTH `podman compose up -d` and `docker compose up -d`.
 #
 # Derived from ~/Projects/Github/lukaskellerstein/ai-agent-platform/deploy/compose,
-# reduced to what a GLOBAL gateway owns. Four services, and each is load-bearing:
+# reduced to what a GLOBAL gateway owns. Five services, and each is load-bearing:
 #   litellm      the OpenAI-compatible endpoint every project on this machine calls
 #   postgres     virtual keys, spend logs and budget ceilings. Not published.
 #   mlflow       the SAME aliases through the MLflow AI Gateway, for comparison
 #   mlflow-seed  a one-shot that writes MLflow's endpoint list in. Exits.
+#   discover     a one-shot that writes LiteLLM's config when auto-discovery is on,
+#                and does nothing at all when it is off — the default. Exits.
 #
-# TWO WORDS IN .env DECIDE WHAT RUNS. Nothing else in this file needs editing to
+# THREE WORDS IN .env DECIDE WHAT RUNS. Nothing else in this file needs editing to
 # get a different stack:
 #
 #   COMPOSE_PROFILES   litellm | mlflow | litellm,mlflow | all       WHICH GATEWAY
 #   GATEWAY_ENGINE     lms | unsloth | ollama | openrouter | openai  WHICH ENGINE
+#   GATEWAY_DISCOVERY  (empty) | on                                  WHICH MODELS
+#
+# THE THIRD IS OFF BY DEFAULT AND THAT IS THE POINT. With it empty — a fresh clone,
+# and every stack that ran before 2026-09-03 — each gateway serves exactly the two
+# or three aliases its hand-written file names, and those files stay in the repo as
+# the worked example of configuring this by hand.
+#
+# Set it and each gateway ADDS every model its engine holds on disk, discovered at
+# start over the engine's own HTTP API. LMStudio and Ollama both report the models
+# they have, loaded or not, and both JIT-load, so a not-loaded model answers on the
+# first call. THE HAND-WRITTEN ALIASES ARE NEVER REPLACED: turning discovery on can
+# only add names, so nothing a project already calls can break.
+#
+# DISCOVERY IS LOCAL-ONLY. `lms`, `unsloth` and `ollama` are free, so listing
+# everything costs a longer list. OpenRouter and OpenAI bill a real account per
+# model, so they keep hand-written lists and MONEY IS NEVER DISCOVERED.
 #
 # COMPOSE_PROFILES is compose's own variable and it gates the two gateway services
 # below; GATEWAY_ENGINE is interpolated into a filename on one side and passed as
@@ -129,6 +147,60 @@ services:
       - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
 
   # ---------------------------------------------------------------------------
+  # discover — writes LiteLLM's config when auto-discovery is on, then exits.
+  #
+  # A CONTAINER THAT EXITS IS THE EXPECTED STATE, exactly like mlflow-seed.
+  #
+  # THE THIRD WORD IN .env DECIDES WHETHER IT DOES ANYTHING:
+  #
+  #   GATEWAY_DISCOVERY   (empty) | on          default EMPTY
+  #
+  # Empty is the default, and then this exits 0 in about a second having written
+  # nothing — litellm reads the hand-written litellm/<engine>.yaml exactly as it
+  # always has. Set it and this asks the engine what it holds and writes
+  # litellm/discovered-<engine>.yaml, which INCLUDES the hand-written file. So
+  # discovery only ever ADDS aliases; nothing a project already calls can break.
+  #
+  # IT IS ON THE `litellm` PROFILE ONLY, and that is deliberate. The MLflow gateway
+  # discovers for itself inside mlflow-seed, because its endpoints are database rows
+  # and not a file. So `COMPOSE_PROFILES=mlflow` still starts no LiteLLM container
+  # and no LiteLLM image is ever pulled — the profile independence is unchanged.
+  #
+  # IT USES THE LITELLM IMAGE because it needs a Python and that image already ships
+  # one. The alternative was a third image pulled for a script with no dependency
+  # outside the standard library. STILL NO BUILD STEP.
+  #
+  # ./litellm IS MOUNTED READ-WRITE HERE and read-only on litellm below: this is the
+  # one thing in the stack that writes into the repo, and the file it writes is
+  # gitignored.
+  # ---------------------------------------------------------------------------
+  discover:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: "no"
+    profiles: ["litellm", "all"]
+    entrypoint: ["python"]
+    command: ["/app/discover/gateway_discovery.py"]
+    volumes:
+      - ./discover:/app/discover:ro
+      - ./litellm:/app/config
+    extra_hosts:
+      # It dials the engine on the host, so it needs the same two names the
+      # gateways do.
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
+    environment:
+      # The same two words the gateways read, plus the one that turns this on.
+      GATEWAY_ENGINE: ${GATEWAY_ENGINE:-lms}
+      GATEWAY_DISCOVERY: ${GATEWAY_DISCOVERY:-}
+      LITELLM_CONFIG_DIR: /app/config
+      # Where to ask. Only the three LOCAL engines are ever discovered — OpenRouter
+      # and OpenAI bill a real account per model, so they keep hand-written lists.
+      LM_STUDIO_API_BASE: ${LM_STUDIO_API_BASE:-http://host.containers.internal:1234/v1}
+      UNSLOTH_API_BASE: ${UNSLOTH_API_BASE:-http://host.containers.internal:8888/v1}
+      UNSLOTH_API_KEY: ${UNSLOTH_API_KEY:-}
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.containers.internal:11434/v1}
+
+  # ---------------------------------------------------------------------------
   # LiteLLM proxy — one OpenAI-compatible endpoint (also /v1/messages) for every
   # provider. http://localhost:24000, admin UI at /ui.
   # ---------------------------------------------------------------------------
@@ -146,6 +218,11 @@ services:
     profiles: ["litellm", "all"]
     depends_on:
       postgres: { condition: service_healthy }
+      # The config file may be GENERATED, so wait for the generator whether or not
+      # it had anything to do. With discovery off that is a one-second no-op; the
+      # price of the simpler alternative — no dependency — is litellm crash-looping
+      # on a file that arrives a moment later.
+      discover: { condition: service_completed_successfully }
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in .env.
     # GATEWAY_ENGINE holds `lms`, `unsloth`, `ollama`, `openrouter` or `openai`, and
     # litellm/ carries one self-contained config per engine:
@@ -166,7 +243,18 @@ services:
     # a single file: compose bind-mounts a missing source by CREATING AN EMPTY
     # DIRECTORY, and the proxy then crash-looped on `IsADirectoryError` while
     # `compose ps` still said Up. Mounting the directory is what removed that trap.)
-    command: ["--config", "/app/config/${GATEWAY_ENGINE:-lms}.yaml", "--port", "4000", "--num_workers", "1"]
+    #
+    # THE `discovered-` PREFIX IS THE WHOLE AUTO-DISCOVERY SWITCH. `${VAR:+text}`
+    # substitutes `text` when VAR is set and NON-EMPTY, so ONE word in .env moves the
+    # filename and no second variable can fall out of step with it:
+    #
+    #   GATEWAY_DISCOVERY unset/empty  ->  /app/config/lms.yaml             hand-written
+    #   GATEWAY_DISCOVERY=on           ->  /app/config/discovered-lms.yaml  + every model
+    #
+    # IT REACTS TO THE WORD BEING NON-EMPTY, NOT TO ITS MEANING, so `GATEWAY_DISCOVERY=off`
+    # switches discovery ON here. The `discover` service catches those four words and
+    # exits 2 saying to leave the value empty, which is why litellm waits on it.
+    command: ["--config", "/app/config/${GATEWAY_DISCOVERY:+discovered-}${GATEWAY_ENGINE:-lms}.yaml", "--port", "4000", "--num_workers", "1"]
     ports:
       - "24000:4000"
     volumes:
@@ -344,8 +432,26 @@ services:
     command: ["python", "/app/mlflow/seed.py"]
     volumes:
       - ./mlflow:/app/mlflow:ro
+      # The probing, shared with the `discover` service above. MOUNTED READ-ONLY and
+      # importable only because of PYTHONPATH below: this container writes no config
+      # file, because MLflow has none — its endpoints are database rows.
+      - ./discover:/app/discover:ro
+    extra_hosts:
+      # NEW, AND LOAD-BEARING SINCE DISCOVERY. This container used to talk to nothing
+      # but the MLflow server; with GATEWAY_DISCOVERY set it dials the engine on the
+      # host to ask what it holds, exactly as the gateways do.
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      # /app/discover ALONE, never /app. `/app/mlflow` is a directory on that path,
+      # and Python would import it as a namespace package called `mlflow` — shadowing
+      # the real library that gateway.py imports.
+      PYTHONPATH: /app/discover
+      # Empty by default: the hand-written mlflow/<engine>.py is then the whole list,
+      # which is the state a fresh clone is in. Set it and every model the engine
+      # holds is ADDED to that list.
+      GATEWAY_DISCOVERY: ${GATEWAY_DISCOVERY:-}
       # WHICH ENDPOINTS THIS RUN WRITES. The SAME word that names LiteLLM's config
       # file above, so the two gateways cannot serve different engines. One engine at
       # a time; seed.py rejects a list and rejects a typo, by name.

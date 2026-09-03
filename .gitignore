@@ -11,6 +11,11 @@
 # — it is where a gateway key would land if one were ever put in an `env` block.
 .claude/settings.local.json
 
+# Auto-discovery's output. The `discover` service rewrites it on every `up -d` from
+# whatever the engine holds on THIS machine, so it is a local fact and never a
+# shared one. The hand-written litellm/<engine>.yaml files it includes ARE tracked.
+litellm/discovered-*.yaml
+
 # tests/ is a uv project. The lockfile IS tracked; the environment it builds is not.
 .venv/
 __pycache__/

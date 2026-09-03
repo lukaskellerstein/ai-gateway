@@ -51,10 +51,12 @@ flowchart LR
         litellm["<b>litellm</b><br/>the endpoint you call<br/>24000 → 4000"]
         mlf["<b>mlflow</b><br/>same aliases, 2nd gateway<br/>25000 → 5000"]
         seed["mlflow-seed<br/>runs mlflow/seed.py<br/>runs once, exits"]
+        disc["discover<br/>auto-discovery, OFF by default<br/>runs once, exits"]
         pg[("<b>postgres</b><br/>keys · spend · ceilings<br/>not published")]
         litellm <--> pg
         mlf <--> pg
         seed -->|"the same aliases"| mlf
+        disc -.->|"writes the config<br/>only when discovery is on"| litellm
     end
 
     engine{{"GATEWAY_ENGINE<br/>picks exactly ONE"}}
@@ -143,7 +145,7 @@ the last two are the cloud and cost money.
 | **Extra** | — | — | — | `openrouter-free` | — |
 | **Costs** | free | free | free | **paid** | **paid** |
 
-That is every alias this repo defines. `GATEWAY_ENGINE` selects **one column**, so the
+That is every alias this repo defines **by hand**. `GATEWAY_ENGINE` selects **one column**, so the
 gateway serves two or three names at a time — never the whole table. The rows are the point:
 the same model sits across a row, so changing the engine word and re-running the tests
 measures the engine and nothing else. You do not need every engine — name the one you have,
@@ -171,6 +173,61 @@ one its model card states.
 `Input` is the usable prompt window: the model's context minus an output reserve — 8192 tokens
 on the local routes, larger on the two OpenRouter ones. E4B caps at 131072, hence 122880.
 `openai-embed`'s 8191 is the model's own limit, not a subtraction.
+
+### Auto-discovery: add every model you already have
+
+The table above is the hand-written vocabulary, and it is the default. One more line in
+`.env` adds every model the selected engine holds on **your** disk:
+
+```bash
+GATEWAY_DISCOVERY=on
+```
+
+At `up -d` each gateway asks the engine over its own HTTP API what it has, and writes one
+alias per model. The name is **the engine, a dash, and the model id**, with anything MLflow
+rejects turned into a dash:
+
+| Engine reports | Alias becomes |
+|:--|:--|
+| `google/gemma-4-e4b` | `lms-google-gemma-4-e4b` |
+| `gemma4:26b` | `ollama-gemma4-26b` |
+| `nomic-embed-text:latest` | `ollama-nomic-embed-text-latest` |
+
+**It only ever adds.** The generated LiteLLM config *includes* the hand-written one, and the
+MLflow seed appends to the hand-written list, so `lms-4b`, `lms-26b` and `lms-embed` keep
+answering exactly as before. A discovered name that would collide with one is dropped.
+Turning discovery on cannot break anything a project already calls. Turning it off is
+leaving the value **empty** and running `up -d` again.
+
+**Models that are downloaded but not loaded are configured too.** LMStudio and Ollama both
+report what is on disk, and both load a model on demand, so an unloaded model answers on the
+first call — slowly the first time, then warm.
+
+Verified 2026-09-03: `GATEWAY_ENGINE=lms` with discovery on served **17** aliases on both
+ports — the 3 hand-written ones plus 14 discovered — and `tests/` passed 6/6 against a
+discovered alias on both gateways.
+
+Three limits worth knowing before you switch it on:
+
+- **It is local-only.** `lms`, `unsloth` and `ollama` are free, so a long list costs nothing.
+  OpenRouter lists hundreds of models and every one bills a real account, so the two paid
+  engines keep their hand-written lists and **money is never discovered**. Ask for discovery
+  on one and the `discover` service refuses by name.
+- **`GATEWAY_DISCOVERY=off` does not mean off.** compose builds the config filename with
+  `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being *non-empty*, not to its
+  meaning. `off`, `false`, `0` and `no` are caught and refused with exit 2; **leave the value
+  empty** to turn it off.
+- **Unsloth reports the names fine; the numbers are thin.** Its `/v1/models` gives every model
+  on disk with its quantisation and whether it is loaded, so the aliases are complete. But it
+  serves **one model at a time**, and it reports the context window **only for the loaded
+  one** — 1 of 15 rows carried it on 2026-09-03, and the other 14 fall back to 8192, far below
+  the 262144 the hand-written `unsloth-26b` carries. It also has no type field, so chat
+  against embedding is guessed from the name. For the models it names, `unsloth.yaml` stays
+  the better route.
+
+The generated file is `litellm/discovered-<engine>.yaml`. It is gitignored, rewritten on
+every `up -d`, and worth reading once — it carries the window and quantisation each model
+reported.
 
 ### Two traps when you pick an alias
 
@@ -249,7 +306,7 @@ checked, and it is the cheapest way to catch the two alias lists drifting apart.
 ```bash
 cd tests
 uv sync                                     # once
-uv run run_all.py                           # 3 scripts x 2 gateways = 6 rows
+uv run run_all.py                           # 4 scripts x 2 gateways = 8 rows
 
 uv run run_all.py --model ollama-4b         # any alias
 uv run 02_tools_call.py --gateway litellm   # one script, one gateway
@@ -358,13 +415,14 @@ ceilings no longer applying locally.
 
 ## Configuration
 
-Two lines in `.env` decide what runs, and they are independent. `compose.yml` interpolates
+Three lines in `.env` decide what runs, and they are independent. `compose.yml` interpolates
 from the **shell environment first**, then `.env`.
 
 ```bash
-# only Ollama, only the MLflow gateway
+# only Ollama, only the MLflow gateway, hand-written aliases only
 COMPOSE_PROFILES=mlflow
 GATEWAY_ENGINE=ollama
+GATEWAY_DISCOVERY=
 ```
 
 **Which gateway.** `COMPOSE_PROFILES` is compose's own variable. `litellm` is the primary
@@ -374,8 +432,12 @@ second gateway on 25000, with no key and a trace per request.
 **Which engine.** One word, one engine. There is **no list, no `all`, and no separate switch
 for the cloud** — a hosted provider is an engine like any other, and the alias prefix already
 says which is which. That word names one file per gateway, `litellm/<engine>.yaml` and
-`mlflow/<engine>.py`. There is no generated config and no composed-file matrix: what you read
-is what LiteLLM loads.
+`mlflow/<engine>.py`. There is no composed-file matrix: what you read is what LiteLLM loads.
+
+**Which models.** `GATEWAY_DISCOVERY` is empty by default, and then those two files are the
+whole vocabulary. Set it to `on` and each gateway *adds* every model the engine holds on this
+machine — see [Auto-discovery](#auto-discovery-add-every-model-you-already-have) above. It is
+local-only, and it never replaces a hand-written alias.
 
 > Changing the word leaves the **old** endpoints behind on the MLflow gateway, still answering
 > on port 25000 after LiteLLM has stopped serving them. Run
@@ -386,6 +448,7 @@ is what LiteLLM loads.
 |:--|:--|:--|
 | `COMPOSE_PROFILES` | *(none)* | **which gateway runs** — `litellm`, `mlflow`, `litellm,mlflow` or `all`. **With it unset, only `postgres` starts** |
 | `GATEWAY_ENGINE` | `lms` | **which engine both gateways serve** — one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list. A typo stops both gateways: `mlflow-seed` exits 2 naming the valid five, and `litellm` crash-loops on a file that does not exist |
+| `GATEWAY_DISCOVERY` | *(blank)* | **which models** — blank means the hand-written lists alone. `on` **adds** every model the engine holds on this machine. Local engines only; `openrouter` and `openai` are refused. **`off` does not mean off** — compose reads any non-empty value as on, so leave it blank |
 | `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential. **Change it for anything but a laptop** |
 | `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every `lms-*` alias |
 | `UNSLOTH_API_BASE` | `http://host.containers.internal:8888/v1` | every `unsloth-*` alias |
@@ -519,18 +582,21 @@ response included. **Look there before changing configuration.**
 
 ```text
 ai-gateway/
-├── compose.yml                 four services, profiles, ports, healthchecks, env wiring
+├── compose.yml                 five services, profiles, ports, healthchecks, env wiring
 ├── .env.example                tracked; the key lines are blank BY DESIGN
 ├── litellm/                    gateway 1's alias list — YAML
 │   ├── settings.yaml           the three settings blocks; NO aliases
-│   └── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
-│                                each includes settings.yaml and declares its aliases
+│   ├── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
+│   │                            each includes settings.yaml and declares its aliases
+│   └── discovered-<engine>.yaml  GENERATED and gitignored; only when discovery is on
 ├── mlflow/                     gateway 2's alias list — Python; reads nothing above
 │   ├── gateway.py              the MLflow API machinery, written once
 │   ├── seed.py                 the entry point; picks the one engine and writes
 │   └── <engine>.py             the same five names, an ENDPOINTS list each
+├── discover/                   auto-discovery, OFF by default; used by both gateways
+│   └── gateway_discovery.py    asks a local engine what it holds; standard library only
 ├── postgres/init-databases.sh  creates the `mlflow` database, on a fresh volume only
-├── tests/                      a uv project: 3 call kinds x both gateways
+├── tests/                      a uv project: 3 call kinds + the contract test
 └── .claude/                    the working contract for AI agents in this repo
 ```
 

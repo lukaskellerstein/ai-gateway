@@ -25,18 +25,33 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
 
 ## The repo in ten points
 
-- **Four containers.** `litellm` on **24000** (UI at `/ui`), `postgres` unpublished
-  (virtual keys, spend logs, budget ceilings), `mlflow` on **25000**, and `mlflow-seed`, a
-  one-shot whose finished state is **exited (0)**.
-- **TWO WORDS IN `.env` DECIDE WHAT RUNS**, and they are independent:
+- **Five containers.** `litellm` on **24000** (UI at `/ui`), `postgres` unpublished
+  (virtual keys, spend logs, budget ceilings), `mlflow` on **25000**, and two one-shots
+  whose finished state is **exited (0)**: `mlflow-seed`, and `discover` (on the `litellm`
+  profile only).
+- **THREE WORDS IN `.env` DECIDE WHAT RUNS**, and they are independent:
 
   | Variable | Values | Default | Picks |
   |:--|:--|:--|:--|
   | `COMPOSE_PROFILES` | `litellm`, `mlflow`, `litellm,mlflow`, `all` | *(nothing starts)* | which gateway |
   | `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | `lms` | which engine |
+  | `GATEWAY_DISCOVERY` | *(empty)*, `on` | *(empty)* | which models |
 
   With no `.env` at all, `up -d` starts postgres and nothing else. That is configured
   behaviour, not a fault.
+- **AUTO-DISCOVERY IS OFF BY DEFAULT AND IS PURELY ADDITIVE.** With `GATEWAY_DISCOVERY`
+  empty nothing changes: each gateway serves exactly the aliases its hand-written file
+  names, and those files stay as the worked example of hand configuration. Set it and each
+  gateway ADDS every model the engine holds on disk, named `<engine>-<slugged model id>`
+  (`lms-google-gemma-4-e4b`, `ollama-gemma4-26b`). LiteLLM's generated
+  `litellm/discovered-<engine>.yaml` **includes** the hand-written file and MLflow's seed
+  **appends** to the hand-written list, so a hand-written alias can never be replaced or
+  shadowed. **Discovery is local-only** — `openrouter` and `openai` are refused by name,
+  because money is never discovered.
+- **`GATEWAY_DISCOVERY=off` DOES NOT TURN IT OFF.** compose builds the config filename with
+  `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being non-empty, not to its
+  meaning. `discover` catches `off`, `false`, `0` and `no` and exits 2. **The way to turn it
+  off is an EMPTY value.**
 - **ONE ENGINE AT A TIME.** No list, no `all`, no starter/full split. `GATEWAY_ENGINE`
   names one file per gateway — `litellm/<engine>.yaml` and `mlflow/<engine>.py` — so the
   two can never serve different engines. Each engine has two or three aliases; every other
@@ -55,8 +70,9 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
 - **Local routes are shadow-priced** — free, but carrying a cloud twin's rate so budget
   ceilings still trip. Anything summing `/spend/logs` must say whether it reports money
   billed or the cost of the same workload in the cloud.
-- **Almost no code.** `compose.yml`, six YAML in `litellm/`, seven Python in `mlflow/`,
-  `tests/`, `README.md`. All three images are stock — there is no build step.
+- **Almost no code.** `compose.yml`, six YAML in `litellm/`, seven Python in `mlflow/`, one
+  in `discover/`, `tests/`, `README.md`. All three images are stock — there is no build
+  step, and `discover/` reaches for nothing outside the standard library.
 - **Ports 24000 / 25000 are deliberate.** The failure avoided is not a bind error but the
   silent one: a health probe against `localhost:4000` that another stack answers, going
   green.
@@ -79,7 +95,7 @@ here. **`.env` is denied to you — ask the user what is in it.**
 Calling a **free** alias to check something is always fine. A **paid** one
 (`openrouter-*`, `openai-*`) costs money, so keep it to one short call.
 
-**Pre-approved mutations:** editing `compose.yml`, `litellm/`, `mlflow/`,
+**Pre-approved mutations:** editing `compose.yml`, `litellm/`, `mlflow/`, `discover/`,
 `postgres/init-databases.sh`, `README.md`, `LICENSE`, `.env.example`, `.claude/`,
 `tests/`; `up -d`, `restart`, and `down` **without `-v`**; re-running the seed; bringing
 the stack up on another engine for a test — **then putting it back the way you found

@@ -10,7 +10,7 @@ conversation survives the trip.
 
 import sys
 
-from common import MAX_TOKENS, Gateway, answer_of, check, client_for, run, show
+from common import Gateway, answer_of, check, client_for, run, show
 
 # `system` and not `developer`: the newer role is an OpenAI-model convention, and
 # a local model behind the gateway does not know it.
@@ -23,10 +23,14 @@ CONVERSATION = [
 
 
 def scenario(gateway: Gateway, model: str) -> str:
+    # THE BODY IS IDENTICAL ON BOTH PORTS except for `body_extras`, which is the
+    # gateway's own calling contract from common.py — empty for LiteLLM, whose
+    # route stores a `max_tokens`, and `max_tokens` for MLflow, which stores none.
+    # This scenario does not know or care which it got.
     response = client_for(gateway).chat.completions.create(
         model=model,
         messages=CONVERSATION,
-        max_tokens=MAX_TOKENS,
+        **gateway.body_extras,
     )
 
     show("Full response", response)

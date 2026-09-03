@@ -17,6 +17,7 @@ every number carries a comment saying where it came from.
 | a LiteLLM settings block (`router_settings`, `general_settings`, …) | `litellm/settings.yaml` — once; every engine file includes it |
 | MLflow seeding logic | `mlflow/gateway.py` — every engine gets it |
 | how an engine is chosen | `mlflow/seed.py`, and the `--config` path in `compose.yml` |
+| what auto-discovery finds, or how it renders | `discover/gateway_discovery.py` — one file, both gateways |
 | services, profiles, ports, healthchecks, env | `compose.yml` |
 | anything a caller reads | `README.md` — the one doc, written for the public |
 
@@ -102,8 +103,18 @@ One script per **kind** of call, never per alias — `--model` already covers "t
 on a different alias".
 
 - **A scenario never names a gateway.** The point is that the client, the alias and the
-  body are identical on 24000 and 25000. A scenario that branches on `gateway.name` has
+  messages are identical on 24000 and 25000. A scenario that branches on `gateway.name` has
   stopped testing that.
+- **The differences go in `Gateway`, as data — never in a scenario.** The vocabulary is
+  shared; the calling contract is not. Four things differ (the API key, the model listing,
+  what `response.model` echoes, and whether a route stores a `max_tokens`), and all four are
+  declared once on `common.Gateway`. A scenario applies the contract by spreading
+  `**gateway.body_extras` into its request and reads nothing else, so it still cannot behave
+  differently depending on which gateway it got.
+- **`04_gateway_contract.py` is the ONE script allowed to care which gateway it is on**,
+  because the difference is its whole subject. Even it does not branch on the name: it checks
+  the DECLARED table against observed behaviour, so a failure reads "the table says X and the
+  gateway did Y". Add a difference to the table and add its check there, in the same commit.
 - **`02_tools_call.py` checks `finish_reason` and the `tool_calls` structure**, not the
   words in the reply. A model emitting raw-text tool syntax returns a perfectly
   good-looking message — that is the failure the file exists to catch.
@@ -135,8 +146,10 @@ ai-gateway/
 │   ├── gateway.py              the MLflow API machinery
 │   ├── seed.py                 the CLI: picks one engine, validates, writes
 │   └── <engine>.py             the same five names, an ENDPOINTS list each
+├── discover/               auto-discovery, OFF by default; stdlib only
+│   └── gateway_discovery.py    probes a local engine; renders LiteLLM's config
 ├── postgres/init-databases.sh  CREATE DATABASE mlflow, fresh volume only
-├── tests/                  a uv project: 3 call kinds x both gateways
+├── tests/                  a uv project: 3 call kinds + the contract test, both gateways
 ├── README.md               the ONE doc
 └── .claude/                this contract
 ```

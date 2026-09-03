@@ -5,9 +5,21 @@ the gateway? So each script owns a single `scenario` function and nothing else �
 the argument parsing, the two base URLs, the timing and the pass/fail printing
 all live here, once.
 
-The point of the two gateways is that the caller's vocabulary does not change:
-same OpenAI client, same alias in `model`, different `base_url`. That is exactly
-what `GATEWAYS` below encodes, and it is why a scenario never names a gateway.
+The point of the two gateways is that the caller's VOCABULARY does not change:
+same OpenAI client, same alias in `model`, same messages, different `base_url`.
+Scripts 01-03 exist to prove exactly that, and it is why a scenario never names
+a gateway.
+
+THE VOCABULARY IS THE SAME; THE CALLING CONTRACT IS NOT. `max_tokens` is the one
+a caller feels: LiteLLM stores a default on the route and MLflow cannot store one
+at all, so on 25000 the caller must always send it. There are three more
+differences of the same kind — the API key, the model listing, and what
+`response.model` echoes back.
+
+ALL FOUR ARE DECLARED ONCE, on `Gateway` below, and applied by a scenario as
+`**gateway.body_extras`. A scenario still cannot behave differently depending on
+which gateway it got; it applies whatever contract the table declares.
+`04_gateway_contract.py` is the test that proves the table is still true.
 """
 
 from __future__ import annotations
@@ -106,20 +118,108 @@ class CheckFailed(AssertionError):
 
 @dataclass(frozen=True)
 class Gateway:
+    """One gateway, and THE CONTRACT FOR CALLING IT.
+
+    THE ALIAS AND THE MESSAGES ARE IDENTICAL ON BOTH PORTS — that is the whole
+    promise of running two gateways over one vocabulary, and scripts 01-03 exist
+    to prove it. But the promise stops at the message body. The two differ in
+    what a caller must SEND and in what comes BACK, and those differences are
+    declared here, ONCE, as data.
+
+    THIS IS WHY A SCENARIO STILL NEVER BRANCHES ON A GATEWAY NAME. A scenario
+    spreads `**gateway.body_extras` into its request and reads nothing else; it
+    cannot behave differently depending on WHICH gateway it got. The table below
+    is the single place the difference is written down, and `04_gateway_contract.py`
+    is the test that proves every line of it is still true.
+
+    Fields, and the measurement behind each (all verified 2026-09-03, `lms-4b`):
+
+    body_extras
+        What a caller MUST add here and nowhere else. Empty for LiteLLM,
+        `max_tokens` for MLflow — see the block comment on GATEWAYS below.
+    checks_api_key
+        LiteLLM answers 401 to `Bearer sk-wrong`; MLflow answers 200. MLflow has
+        no key concept at all, so the one in `api_key` is a placeholder the
+        OpenAI client demands and MLflow never reads.
+    lists_models
+        `GET {base_url}/models` returns the alias list on LiteLLM and **404** on
+        MLflow. A caller cannot discover MLflow's vocabulary over the OpenAI
+        surface; it is in the MLflow UI and in `mlflow/<engine>.py`.
+    echoes_alias
+        `response.model` is the ALIAS the caller sent on LiteLLM (`lms-4b`) and
+        the ENGINE'S OWN id on MLflow (`google/gemma-4-e4b`). Anything keying
+        metrics or logs off `response.model` sees two different strings for one
+        request.
+    exposes_route_limits
+        LiteLLM's `/model/info` reports each route's stored `max_tokens` and
+        `max_input_tokens`. MLflow stores neither and has no equivalent route, so
+        there is nothing to read and nothing to protect a caller who sends no
+        ceiling. This is the fact `body_extras` exists to work around.
+    """
+
     name: str
     base_url: str
     api_key: str
+    body_extras: dict
+    checks_api_key: bool
+    lists_models: bool
+    echoes_alias: bool
+    exposes_route_limits: bool
 
 
 # The master key mints virtual keys and has no ceiling, so AI_GATEWAY_KEY (a
 # capped key from /key/generate) is preferred when the shell carries one.
 _LITELLM_KEY = os.environ.get("AI_GATEWAY_KEY") or os.environ.get("LITELLM_MASTER_KEY") or "sk-litellm-master"
 
+# THE ONE DIFFERENCE A CALLER FEELS MOST: WHO OWNS `max_tokens`.
+#
+# Measured 2026-09-03, `lms-4b`, one prompt ("count from 1 to 3000") sent to both
+# ports with NO `max_tokens` in the body:
+#
+#   LiteLLM 24000   finish_reason "length" at  4095 completion tokens — the
+#                   `max_tokens: 4096` that litellm/lms.yaml stores on the route
+#   MLflow  25000   finish_reason "stop"   at 13961 completion tokens — nothing
+#                   bounded it; the model simply ran out of things to say
+#
+# Same prompt, same alias, same weights: 3.4x the output and 3.4x the wait.
+#
+# So the parameter itself behaves IDENTICALLY when it is sent — both gateways
+# truncate at `max_tokens: 16` and return EMPTY content with finish_reason
+# "length". What differs is the DEFAULT: LiteLLM can store one per route and
+# every local route here does, while MLflow's endpoints are database rows with
+# no place to put one. `mlflow/seed.py` says the same thing from the other side.
+#
+# The consequence for a caller is one line, and it is the line below: ON 25000
+# YOU ALWAYS SEND `max_tokens` YOURSELF. Get it wrong downwards and a reasoning
+# model spends the whole allowance thinking and returns empty content with no
+# error at all — see `answer_of`.
+#
+# LiteLLM's entry is deliberately EMPTY rather than a copy of the same value.
+# Scripts 01-03 therefore run against the stored route default, which is worth
+# testing: it is what every caller who forgets `max_tokens` actually gets.
+# `openai-mini` is the one route here that stores none — OpenAI's own default
+# applies there, which is generous.
 GATEWAYS: dict[str, Gateway] = {
-    "litellm": Gateway("litellm", "http://localhost:24000/v1", _LITELLM_KEY),
-    # The MLflow gateway has NO key at all. The OpenAI client refuses to build
-    # without one, so this string is a placeholder that MLflow never reads.
-    "mlflow": Gateway("mlflow", "http://localhost:25000/gateway/mlflow/v1", "no-key-needed"),
+    "litellm": Gateway(
+        name="litellm",
+        base_url="http://localhost:24000/v1",
+        api_key=_LITELLM_KEY,
+        body_extras={},
+        checks_api_key=True,
+        lists_models=True,
+        echoes_alias=True,
+        exposes_route_limits=True,
+    ),
+    "mlflow": Gateway(
+        name="mlflow",
+        base_url="http://localhost:25000/gateway/mlflow/v1",
+        api_key="no-key-needed",
+        body_extras={"max_tokens": MAX_TOKENS},
+        checks_api_key=False,
+        lists_models=False,
+        echoes_alias=False,
+        exposes_route_limits=False,
+    ),
 }
 
 
@@ -161,10 +261,14 @@ def answer_of(response) -> str:
 
     thinking = _reasoning_of(choice.message)
     if thinking:
+        # The allowance is NOT necessarily MAX_TOKENS: on LiteLLM a scenario sends
+        # no ceiling and gets the route's stored `max_tokens` instead. So name both
+        # places rather than a number this function cannot know.
         raise CheckFailed(
             f"empty content, finish_reason={choice.finish_reason!r}: the model spent its whole "
-            f"{MAX_TOKENS}-token allowance on a reasoning block ({len(thinking)} chars) and never "
-            "started the reply. Raise MAX_TOKENS in common.py."
+            f"token allowance on a reasoning block ({len(thinking)} chars) and never started the "
+            "reply. Raise MAX_TOKENS in common.py (that is what MLflow gets), or the route's "
+            "`max_tokens` in litellm/<engine>.yaml (that is what LiteLLM gets)."
         )
     raise CheckFailed(f"the model returned empty content, finish_reason={choice.finish_reason!r}")
 

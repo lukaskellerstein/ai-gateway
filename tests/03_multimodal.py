@@ -15,7 +15,7 @@ both the colour and the shape.
 
 import sys
 
-from common import MAX_TOKENS, Gateway, answer_of, check, client_for, encode_image, run, show
+from common import Gateway, answer_of, check, client_for, encode_image, run, show
 
 QUESTION = "What shape and what colour is in this image? Answer in one short sentence."
 ROUND_WORDS = ("circle", "round", "dot", "sphere", "disc")
@@ -37,7 +37,11 @@ def scenario(gateway: Gateway, model: str) -> str:
                 ],
             },
         ],
-        max_tokens=MAX_TOKENS,
+        # The per-gateway calling contract from common.py. It matters most here:
+        # the request body is large, and a vision model that describes an image
+        # often reasons first — so a missing ceiling on MLflow is the difference
+        # between an answer and empty content.
+        **gateway.body_extras,
     )
 
     show("Full response", response)

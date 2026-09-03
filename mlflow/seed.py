@@ -16,6 +16,20 @@ config file, so the two gateways cannot end up serving different engines:
 
     GATEWAY_ENGINE   lms | unsloth | ollama | openrouter | openai   default lms
 
+A SECOND WORD DECIDES WHETHER THE LIST ABOVE IS THE WHOLE LIST:
+
+    GATEWAY_DISCOVERY   (empty) | on                                default empty
+
+Empty is the default and nothing changes: the file this script imports is the
+entire vocabulary, which is what makes those files worth reading as the example of
+how to configure this gateway by hand. Set it and every model the engine holds is
+ADDED to that list — the hand-written endpoints are never replaced, and a
+discovered alias that would collide with one is dropped. `discover/` holds the
+probing; see `with_discovered` below and `discover/gateway_discovery.py`.
+
+DISCOVERY IS LOCAL-ONLY. `openrouter` and `openai` bill a real account per model,
+so they keep their hand-written lists and this script refuses to enumerate them.
+
 ONE ENGINE AT A TIME, ON PURPOSE. There is no `all`, no list and no starter/full
 split — the repo serves one engine's three-or-so aliases and nothing else. To
 compare two engines, change the word and run `docker compose up -d` again; the
@@ -96,6 +110,44 @@ def endpoints_for(engine: str) -> list[Endpoint]:
     return list(importlib.import_module(engine).ENDPOINTS)
 
 
+def with_discovered(engine: str, manual: list[Endpoint]) -> list[Endpoint]:
+    """Append every model the engine holds to the hand-written list.
+
+    ADDITIVE, NEVER A REPLACEMENT. The hand-written endpoints come first and a
+    discovered alias that collides with one is dropped, so `lms-4b` keeps meaning
+    what it has always meant and turning discovery on can only ADD names. That
+    matches what the LiteLLM side does by including `<engine>.yaml`.
+
+    THE CREDENTIALS ARE COPIED FROM THE HAND-WRITTEN LIST rather than read from
+    the environment a second time. `gateway.check_secrets` demands that one secret
+    name mean one api_base + api_key pair, and copying is the only way this cannot
+    drift from the file beside it and fail with an unhelpful message.
+
+    The import is here and not at the top of the file because discovery is
+    OPTIONAL machinery: with GATEWAY_DISCOVERY empty, `mlflow/` still runs with
+    the whole `discover/` directory absent.
+    """
+    from gateway_discovery import check_word, discover
+
+    check_word(env("GATEWAY_DISCOVERY"))
+    template = manual[0]
+    taken = {endpoint.name for endpoint in manual}
+    extra = [
+        Endpoint(
+            name=model.alias,
+            provider=template.provider,
+            model=model.model_id,
+            secret=template.secret,
+            api_base=template.api_base,
+            api_key=template.api_key,
+        )
+        for model in discover(engine)
+        if model.alias not in taken
+    ]
+    print(f"discovery: {engine} holds {len(extra)} models not already named by mlflow/{engine}.py")
+    return manual + extra
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Write one engine's endpoints into the MLflow AI Gateway.",
@@ -127,6 +179,17 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     endpoints = endpoints_for(engine)
+    # THE THIRD WORD IN .env. Empty is the default and means the hand-written list
+    # above is the whole vocabulary — exactly what this script did before.
+    if env("GATEWAY_DISCOVERY").strip():
+        try:
+            endpoints = with_discovered(engine, endpoints)
+        except (ValueError, RuntimeError, OSError) as error:
+            # A dead engine, a missing key or a PAID engine. Failing here is the
+            # point: seeding the hand-written list alone would leave 25000 serving
+            # a shorter vocabulary than 24000, which is the drift this repo hates.
+            print(f"discovery failed: {error}", file=sys.stderr)
+            return 2
     print(f"seeding: engine={engine}  ->  {len(endpoints)} endpoints declared")
 
     if engine in PAID:
