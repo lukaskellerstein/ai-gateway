@@ -1,4 +1,6 @@
 # Live values. Only .env.example is tracked, and it must never carry a real value.
+# No leading slash, so this matches at every depth: each gateway project keeps its
+# OWN .env beside its compose.yml, and there is no repo-root one any more.
 .env
 .envrc
 
@@ -13,10 +15,11 @@
 
 # Auto-discovery's output. The `discover` service rewrites it on every `up -d` from
 # whatever the engine holds on THIS machine, so it is a local fact and never a
-# shared one. The hand-written litellm/<engine>.yaml files it includes ARE tracked.
-litellm/discovered-*.yaml
+# shared one. The hand-written config/<engine>.yaml files it includes ARE tracked.
+litellm/config/discovered-*.yaml
 
-# tests/ is a uv project. The lockfile IS tracked; the environment it builds is not.
+# Each gateway's tests/ is its own uv project. The lockfile IS tracked; the
+# environment it builds is not.
 .venv/
 __pycache__/
 

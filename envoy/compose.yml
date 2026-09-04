@@ -1,0 +1,114 @@
+# =============================================================================
+# Envoy AI Gateway — a STANDALONE compose project. http://localhost:26000.
+# Works with both `podman compose up -d` and `docker compose up -d`.
+#
+# Run it from THIS directory. Nothing above it is read, and nothing here reads
+# ../litellm or ../mlflow.
+#
+#   cd envoy && podman compose up -d
+#
+# ONE SERVICE, ONE STOCK IMAGE, NO DATABASE. This is `aigw run` — Envoy AI
+# Gateway's STANDALONE MODE, which runs a real Envoy data plane from a config
+# file with no Kubernetes and no Envoy Gateway install. The image ships the Envoy
+# binary already downloaded, so there is no build step and nothing is fetched at
+# start.
+#
+# ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
+#
+#   GATEWAY_ENGINE   lms | unsloth | ollama | openrouter | openai   default lms
+#
+# THERE IS NO GATEWAY_DISCOVERY HERE. The other two projects can generate their
+# alias list; this one cannot yet — see README.md § Auto-discovery.
+#
+# WHAT THIS GATEWAY HAS THAT THE OTHER TWO DO NOT:
+#   /mcp                      an MCP gateway that aggregates MCP servers
+#   /anthropic/v1/messages    the Anthropic API translated onto ANY backend
+#   :26064/metrics            Prometheus metrics
+#   OpenTelemetry tracing     OpenInference spans, straight into Arize Phoenix
+#
+# WHAT IT DOES NOT HAVE, and cannot in standalone mode: virtual keys, budgets and
+# spend logs. `QuotaPolicy` and token rate limiting need Redis plus an Envoy
+# Gateway install configured for it — the Kubernetes path. `../litellm` is still
+# the only gateway here with spend controls.
+# =============================================================================
+
+# Distinct from ../litellm's `ai-gateway` and ../mlflow's `ai-gateway-mlflow`, so
+# all three can run at once: `ai-gateway-envoy-<service>-N`.
+name: ai-gateway-envoy
+
+services:
+  # ---------------------------------------------------------------------------
+  # aigw — the Envoy AI Gateway CLI in standalone mode.
+  #
+  # 26000 is the data plane: /v1/chat/completions, /v1/embeddings, /v1/models,
+  # /anthropic/v1/messages and /mcp. 26064 is the admin server: /metrics and
+  # /health, and nothing else — it is NOT an Envoy admin port.
+  #
+  # THE IMAGE CARRIES ITS OWN HEALTHCHECK (`aigw healthcheck`, which GETs
+  # localhost:1064/health), so none is declared here. `compose ps` reports it.
+  #
+  # IT RUNS AS nonroot (uid 65532) and writes its generated Envoy Gateway config,
+  # extproc config and logs under /home/nonroot/.local/state/aigw/runs/0/. The
+  # image sets AIGW_RUN_ID=0 so that path is predictable; `compose exec` cannot
+  # read it, because the image is distroless and has no shell. Use
+  # `compose logs envoy` instead.
+  # ---------------------------------------------------------------------------
+  envoy:
+    image: docker.io/envoyproxy/ai-gateway-cli:latest
+    restart: unless-stopped
+    # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
+    # .env. config/ carries one self-contained file per engine:
+    #
+    #   config/lms.yaml         3 aliases: 2 chat, 1 embedder      free
+    #   config/unsloth.yaml     3 aliases: 2 chat, 1 embedder      free
+    #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
+    #   config/openrouter.yaml  1 alias:  1 chat                   PAID
+    #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
+    #
+    # A TYPO IS A CLEAN CRASH: the file does not exist and aigw exits saying so.
+    #
+    # THE MOUNT IS /etc/aigw AND NOT /app. `/app` IS THE BINARY in this image —
+    # the Dockerfile copies the CLI to /app and sets it as the entrypoint — so
+    # mounting a directory there replaces the program with a folder.
+    command: ["run", "/etc/aigw/${GATEWAY_ENGINE:-lms}.yaml"]
+    ports:
+      - "26000:1975"
+      - "26064:1064"
+    volumes:
+      - ./config:/etc/aigw:ro
+    extra_hosts:
+      # The three local engines run natively on the host and bind 127.0.0.1 only.
+      # The config files address them as host.docker.internal.
+      #
+      # UPSTREAM'S OWN COMPOSE NOTES THAT THE `localhost:host-gateway` TRICK DOES
+      # NOT WORK WITH aigw, which is why the config names host.docker.internal
+      # explicitly rather than localhost.
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
+    environment:
+      # aigw substitutes ${VAR} in the config file before parsing it, which is how
+      # a key reaches a Secret without ever being written to disk here. A missing
+      # variable substitutes EMPTY and the route then fails at call time with the
+      # provider's own 401 — the same failure shape as ../litellm.
+      UNSLOTH_API_KEY: ${UNSLOTH_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # THIS IS THE ONLY WAY TO SEE ANYTHING PER-REQUEST. Envoy runs as a child
+      # of aigw, and with this off its stdout — which is where the JSON access
+      # log goes — lands in a file inside the container that no shell can read,
+      # because the image is distroless. `compose logs envoy` then shows the
+      # startup lines and nothing else, however much traffic you send.
+      # Verified 2026-09-04, both ways round.
+      #
+      # SET IT TO `true` AND YOU GET BOTH: one JSON access line per request
+      # (model, token counts, status, duration) AND aigw's own debug dump, which
+      # carries the FULL PROMPT AND RESPONSE with only the Authorization header
+      # redacted. That is this gateway's Logs tab, and it is also why it is off
+      # by default.
+      #
+      # `false` AND NOT EMPTY, DELIBERATELY. aigw parses this as a bool flag and
+      # rejects an empty string — `${AIGW_DEBUG:-}` makes it crash-loop on
+      # `--debug: bool value must be true, 1, yes, false, 0 or no but got ""`
+      # before it reads one line of config. The other variables here are strings
+      # and are happy blank; this one is not.
+      AIGW_DEBUG: ${AIGW_DEBUG:-false}

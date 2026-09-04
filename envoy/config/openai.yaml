@@ -1,0 +1,239 @@
+# OpenAI — 2 aliases. PAID: EVERY CALL BILLS A REAL ACCOUNT.
+#
+#   openai-mini    gpt-5.4-mini              chat. NO VISION
+#   openai-embed   text-embedding-3-small    embeddings, 1536 dims
+#
+# Selecting this engine is the only way this gateway can spend money, and there
+# is no fallback anywhere here.
+#
+# SEND `max_completion_tokens`, NOT `max_tokens`. The gpt-5 family rejects
+# `max_tokens` outright. ../../litellm translates one to the other; this gateway
+# forwards the parameter as sent, so the same body that works on 24000 400s here
+# — the same trap the MLflow gateway has.
+#
+# `openai-mini` HAS NO VISION, so it is not a drop-in for the local chat aliases:
+# ../tests/03_multimodal.py cannot pass against it, and `common.py` maps this
+# engine to no default alias for that reason.
+#
+# REQUIRES OPENAI_API_KEY in the shell. A blank value substitutes empty and every
+# call 401s.
+#
+# THE SHAPE OF THIS FILE IS KUBERNETES CUSTOM RESOURCES, even though there is no
+# Kubernetes anywhere. `aigw run` reads the same API the Envoy AI Gateway
+# controller reads in a cluster, translates it in-process, and starts a real
+# Envoy with it. config/lms.yaml carries the full note on the seven resources.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      # 1975 INSIDE the container; compose publishes it on 26000.
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      # Raise to `debug` and Envoy dumps request headers, INCLUDING the
+      # Authorization header the extproc injects with the backend key.
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        # One JSON line per LLM request, carrying TOKEN COUNTS AND TIMINGS ONLY —
+        # never the prompt or the response.
+        #
+        # IT ONLY REACHES `compose logs` WHEN AIGW_DEBUG=true. Envoy runs as a
+        # child of aigw, and with debug off its stdout goes to a file inside the
+        # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
+        # can reach — the image is distroless. Verified 2026-09-04: a call with
+        # AIGW_DEBUG unset logged nothing; the same call with it true logged
+        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        #
+        # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
+        # and replies included, with only the Authorization header redacted. That
+        # is the closest thing here to LiteLLM's Logs tab, and the reason not to
+        # leave it on.
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              request.path: "%REQ(:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-mini
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-5.4-mini
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-embed
+      backendRefs:
+        - name: openai
+          modelNameOverride: text-embedding-3-small
+      timeouts:
+        request: 10m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: openai
+  namespace: default
+spec:
+  endpoints:
+    # OpenAI, over the public internet. TLS, so a BackendTLSPolicy below.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: api.openai.com
+        port: 443
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openai
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 10m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
+    name: OpenAI
+  backendRef:
+    name: openai
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    # ENVOY'S DEFAULT IS 32 KiB AND THAT IS TOO SMALL FOR AI TRAFFIC. A base64
+    # image or a long agent transcript exceeds it and the request fails before
+    # it reaches the model.
+    bufferLimit: 50Mi
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: openai-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: openai
+  validation:
+    # WITHOUT THIS the connection is plain HTTP to port 443 and every call fails
+    # with an upstream connect error. The three local engines need no such policy.
+    wellKnownCACertificates: "System"
+    hostname: api.openai.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openai-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. REAL SPEND.
+  apiKey: ${OPENAI_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openai-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openai
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: openai-apikey

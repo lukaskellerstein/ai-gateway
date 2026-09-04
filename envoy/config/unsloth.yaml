@@ -1,0 +1,235 @@
+# Unsloth Studio, on this machine — 3 aliases, free.
+#
+#   unsloth-4b      unsloth/gemma-4-E4B-it-qat-GGUF                     chat
+#   unsloth-26b     unsloth/gemma-4-26B-A4B-it-qat-GGUF                 chat, 26B MoE
+#   unsloth-embed   second-state/Nomic-embed-text-v1.5-Embedding-GGUF   embeddings
+#
+# The same weights as the `lms-*` routes, on a different engine — that is the
+# point of the naming, and the reason ../tests can measure one against the other.
+#
+# UNSLOTH IS THE ONE ENGINE THAT NEEDS A KEY. Every route answers `401 Not
+# authenticated` without it, /v1/models included. It arrives from the shell
+# (~/Projects/.envrc) and reaches the Secret below through ${UNSLOTH_API_KEY},
+# which aigw substitutes before parsing this file. A BLANK VALUE SUBSTITUTES
+# EMPTY and every call here 401s at request time.
+#
+# IT HOLDS ONE MODEL AT A TIME, chat and embedder alike. `unsloth-embed` evicts
+# `unsloth-26b` and the next chat call swaps it back — 14 s cold, 4.4 s warm. Two
+# gateways pointed at Unsloth at once will thrash it.
+#
+# `Settings -> API -> Model auto-switch` MUST BE ON, or the first call to a model
+# that is not resident returns `400 No model loaded`.
+#
+# THE SHAPE OF THIS FILE IS KUBERNETES CUSTOM RESOURCES, even though there is no
+# Kubernetes anywhere. `aigw run` reads the same API the Envoy AI Gateway
+# controller reads in a cluster, translates it in-process, and starts a real
+# Envoy with it. config/lms.yaml carries the full note on the seven resources.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      # 1975 INSIDE the container; compose publishes it on 26000.
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      # Raise to `debug` and Envoy dumps request headers, INCLUDING the
+      # Authorization header the extproc injects with the backend key.
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        # One JSON line per LLM request, carrying TOKEN COUNTS AND TIMINGS ONLY —
+        # never the prompt or the response.
+        #
+        # IT ONLY REACHES `compose logs` WHEN AIGW_DEBUG=true. Envoy runs as a
+        # child of aigw, and with debug off its stdout goes to a file inside the
+        # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
+        # can reach — the image is distroless. Verified 2026-09-04: a call with
+        # AIGW_DEBUG unset logged nothing; the same call with it true logged
+        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        #
+        # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
+        # and replies included, with only the Authorization header redacted. That
+        # is the closest thing here to LiteLLM's Logs tab, and the reason not to
+        # leave it on.
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              request.path: "%REQ(:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-4b
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-26b
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-embed
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
+      timeouts:
+        request: 60m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: unsloth
+  namespace: default
+spec:
+  endpoints:
+    # Unsloth Studio runs NATIVELY on the host for the GPU and binds 127.0.0.1 only.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 8888
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: unsloth
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 60m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
+    name: OpenAI
+  backendRef:
+    name: unsloth
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    # ENVOY'S DEFAULT IS 32 KiB AND THAT IS TOO SMALL FOR AI TRAFFIC. A base64
+    # image or a long agent transcript exceeds it and the request fails before
+    # it reaches the model.
+    bufferLimit: 50Mi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unsloth-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. Unsloth 401s every route without it.
+  apiKey: ${UNSLOTH_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: unsloth-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: unsloth
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: unsloth-apikey

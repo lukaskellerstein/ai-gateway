@@ -1,0 +1,144 @@
+# LiteLLM gateway — THE SETTINGS, and the notes that are true of every alias.
+#
+# NO ALIAS LIVES HERE. This file carries the three settings blocks and nothing else, and each
+# engine config includes it exactly once. The aliases live one file per engine, and an engine
+# is an engine whether its GPU is yours or someone else's:
+#
+#   lms.yaml   unsloth.yaml   ollama.yaml            this machine, free
+#   openrouter.yaml   openai.yaml                    the cloud, PAID
+#
+# HOW A CONFIG IS BUILT — and it barely is. compose mounts this whole directory at
+# /app/config and points LiteLLM at ONE file, named by ONE word in `.env`:
+#
+#   --config /app/config/${GATEWAY_ENGINE:-lms}.yaml
+#
+# Each of those five files carries `include: [settings.yaml]` and then its own `model_list`.
+# LiteLLM merges an included file key by key: a LIST is extended, anything else is replaced.
+# So the settings blocks below arrive from here and the aliases from there, in one file the
+# reader can follow top to bottom.
+#
+# ONE ENGINE RUNS AT A TIME, ON PURPOSE. There is no list, no `all`, and no starter/full
+# split. Until 2026-08-31 there were eight composed `config.<models>.<engine>.yaml` files and
+# then a generator script; both are gone, and the whole selection mechanism is now the
+# filename above. To compare two engines, change the word and `up -d` again.
+#
+# NOTHING INCLUDED MAY ITSELF CARRY AN `include:`. LiteLLM does not recurse: a nested
+# `include:` is merged as data and then deleted, so the settings would silently vanish and
+# the proxy would boot with NO master key.
+#
+# ---------------------------------------------------------------------------------
+# THE OTHER GATEWAY HAS ITS OWN LIST AND DOES NOT READ ANY OF THIS. MLflow's endpoints live
+# in mlflow/<engine>.py — Python, because MLflow has no config file at all. So AN ALIAS IS
+# TWO EDITS, one per gateway. Add it on one side only and the name answers on 24000 and 404s
+# on 25000, with nothing in either log to say why.
+#
+# ADDING A MODEL is a FIVE-part edit, and skipping any part is a bug that hides:
+#   1. the model_list entry, in the file for ITS engine
+#   2. its price — an unpriced route logs $0, which makes a budget ceiling a no-op
+#   3. its max_input_tokens — with enable_pre_call_checks on, this is what catches an
+#      over-long prompt before it reaches the model
+#   4. THE MATCHING Endpoint(...) in mlflow/<engine>.py — the other gateway's list
+#   5. the alias table in README.md — a route nobody documents is a route nobody calls
+#
+# EVERY ALIAS NAMES ITS ENGINE. `lms-*` is LMStudio, `unsloth-*` is Unsloth Studio,
+# `ollama-*` is Ollama, `openrouter-*` is OpenRouter, `openai-*` is OpenAI. There is
+# deliberately no engine-neutral name and no capability name: `local` existed and hid which
+# engine answered; `cheap`, `standard` and `frontier` existed and hid who was BILLED. Both
+# were removed for the same reason. Keep the convention when you add one.
+#
+# THE PREFIX IS ALSO THE MONEY WARNING. The first three are this machine and are free; the
+# last two are someone else's datacentre and bill a real account. No alias crosses that line
+# by itself — there are no fallback chains — so a request only ever costs money when a
+# caller names a route that costs money.
+#
+# ---------------------------------------------------------------------------------
+# THREE FACTS THAT APPLY TO EVERY ENGINE FILE, so they are written here once.
+#
+# 1. THE 3600 s TIMEOUT ON EVERY CHAT ROUTE. Prompt processing on this machine measures
+#    ~100 tok/s (17.6k tokens in 173 s), so an agent-scale prompt needs 5-15 MINUTES before
+#    its first token and a full 253952-token window needs ~42. LiteLLM's 600 s default
+#    expires mid-prompt; LMStudio then reports `Engine protocol predict request failed:
+#    fetch failed` — its engine socket torn down, not a bad request — which maps to a 400,
+#    and a 400 is never retried. Raise it in step with the client's own timeout
+#    (API_TIMEOUT_MS for Claude Code), or the client gives up first and the patience is
+#    wasted. Hosted routes keep the default: an hour is right for a local GPU grinding and
+#    wrong for a hung HTTP call to OpenRouter.
+#
+# 2. PRICES ARE STATED EXPLICITLY, because LiteLLM's cost map knows none of these models and
+#    an unpriced route logs $0 — which makes a virtual key's budget ceiling a no-op. Local
+#    routes are therefore SHADOW-PRICED: free to run, carrying a cloud twin's rate so a
+#    ceiling still trips. Anything summing /spend/logs must say whether it reports money
+#    billed or the cost of the same workload on the cloud twin.
+#
+#    Several local routes have no hosted twin to mirror, so their shadow price reuses the
+#    nearest rate that IS sourced, rounded UP rather than down. A shadow price exists only
+#    to make ceilings trip: pricing a 3B at a 26B's rate burns a budget faster than reality,
+#    which is visible and correctable, while pricing it under reality silently disables the
+#    guardrail. Err in the direction you can see.
+#
+# 3. REASONING TOKENS COME OUT OF max_tokens, AND WHICH ROUTES THINK IS DECIDED PER MODEL,
+#    NOT PER ENGINE. A route that hits the cap mid-thought returns EMPTY content with
+#    finish_reason "length" and raises no error at all. Two measurements that refuse the
+#    tidy story that only Unsloth and Ollama think:
+#      - 2026-08-28, `lms-4b` on LMSTUDIO: 65 of 70 completion tokens were reasoning, and at
+#        max_tokens 20 the content came back empty.
+#      - 2026-08-27, `lms-26b` on LMStudio: NO reasoning block, while `unsloth-26b` — the
+#        identical gemma-4-26b-a4b-qat — produced one.
+#    Treat EVERY chat route as capable of thinking and keep max_tokens generous.
+#
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+# ---------------------------------------------------------------------------------
+
+litellm_settings:
+  success_callback: []                    # tracing is a project's job, not the gateway's
+  drop_params: true                       # forward what the model understands, drop the rest
+  turn_off_message_logging: false         # pinned: either one flipped empties every stored request
+  redact_messages_in_exceptions: false
+
+  # NO ALIAS HAS A FALLBACK CHAIN, on either gateway, and there is no commented-out one to
+  # uncomment. An alias names ONE route. That is the whole promise of the naming scheme: a
+  # `lms-*` name means these weights, this engine, on this machine, free, and an
+  # `openrouter-*` or `openai-*` name means someone is being billed. A chain breaks the
+  # promise at the worst possible moment — a stopped LMStudio would silently turn a free
+  # session into a paid one, with a correct-looking answer and nothing in the reply to say
+  # the request left the building.
+  #
+  # THE OLD CHAIN IS WORTH KNOWING ABOUT because it is the obvious thing to add back. It was
+  # `lms-26b -> cheap-free -> cheap`, and it was removed on 2026-08-31 along with the tier
+  # names it pointed at. If you do add one: budget every key that can reach it, and read
+  # `api_base` in /spend/logs to find out after the fact where a request actually ran.
+  #
+  # MLFLOW CAN EXPRESS A CHAIN AND EXPRESSES NONE. Each Endpoint(...) in mlflow/ takes a
+  # `fallbacks=[...]` list and every one leaves it empty, matching this file. The Envoy
+  # gateway can express one too and expresses none. Add a chain here without adding the
+  # matching one in the other two and the gateways behave differently under exactly the
+  # failure a chain exists to survive.
+
+router_settings:
+  enable_pre_call_checks: true            # off (the default), every max_input_tokens is inert
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Needs DATABASE_URL. The prompt lands in the `proxy_server_request` column, NOT in
+  # `messages` — that one looks obvious and stays "{}" for chat completions.
+  store_prompts_in_spend_logs: true
+
+# ---------------------------------------------------------------------------------
+# THE HOSTED TIERS USED TO BE COMMENTED OUT HERE. They became real engine configs on
+# 2026-08-31 — openrouter.yaml and openai.yaml, beside this file.
+#
+# WHY THEY MOVED: they lived beside the settings because they "belonged to no engine".
+# That was true only while an engine meant a local one. OpenRouter and OpenAI ARE
+# engines — GATEWAY_ENGINE names them like it names `lms`, and the alias prefix says
+# which is which — so there is no cloud/local switch, and no `hosted.yaml` sitting
+# outside the scheme that every other route follows.
+#
+# THE OLD NAMES WENT WITH THEM. `cheap`, `standard`, `frontier`, `cheap-free` and
+# `standard-hf` named a tier rather than a vendor, so a caller could not tell who
+# answered, who was billed, or that `cheap` was not the free one. `standard-hf` is gone
+# entirely: HuggingFace only ever existed as a fallback target, and nothing has a
+# fallback now.
+#
+# WHAT STILL LIVES IN THIS FILE: the three settings blocks above, and nothing else. Every
+# alias — local or hosted, free or billed — is in `<engine>.yaml` beside this file.
+# ---------------------------------------------------------------------------------

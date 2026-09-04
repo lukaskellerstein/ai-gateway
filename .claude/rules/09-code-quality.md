@@ -19,7 +19,7 @@ configured state, not a defect.
 Two facts behind it:
 
 - **Nothing on this machine formats YAML** — biome has no YAML parser and prettier is not
-  installed. `compose.yml` and `litellm/*.yaml` are hand-formatted.
+  installed. Both `compose.yml` files and `litellm/config/*.yaml` are hand-formatted.
 - **Markdown opts in per repo** via `.markdownlint-cli2.yaml`. This repo has not.
 
 Do not add a marker file as a side effect of another task. The fix route, if one is ever
