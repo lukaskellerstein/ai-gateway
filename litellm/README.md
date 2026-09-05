@@ -1,11 +1,11 @@
 # litellm — the primary gateway, on port 24000
 
 A standalone compose project. Run it from **this** directory; nothing above it is read, and
-nothing here reads `../mlflow`.
+nothing here reads `../envoy`.
 
 ```bash
 cp .env.example .env      # edit GATEWAY_ENGINE if you do not run LMStudio
-docker compose up -d      # first boot takes ~60 s: LiteLLM runs schema migrations
+podman compose up -d      # first boot takes ~60 s: LiteLLM runs schema migrations
 
 curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db":"connected"}
 ```
@@ -14,7 +14,7 @@ curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db
 
 **This is the gateway your projects should call.** It is the only one with virtual keys, spend
 logs, budget ceilings, `/v1/messages` and an admin UI. The alias names are shared with
-`../mlflow`; the table of what they point at is in [`../README.md`](../README.md).
+`../envoy`; the table of what they point at is in [`../README.md`](../README.md).
 
 Three services: `postgres` (keys, spend, ceilings — no published port), `discover` (a one-shot
 that exits, and does nothing unless discovery is on), and `litellm` itself.
@@ -73,15 +73,17 @@ the cloud", not money anyone was billed — anything summing `/spend/logs` has t
 the two it reports. Setting both `*_cost_per_token` values to `0` turns it off, at the cost of
 ceilings no longer applying locally.
 
-**This is the one feature no other gateway here has.** MLflow caps per endpoint, not per
-caller, and has no key to hand a project at all.
+**This is the one feature no other gateway here has.** `../envoy` checks no caller key at all,
+and its budget equivalent — `QuotaPolicy` and token rate limiting — needs Redis and a full
+Envoy Gateway install, which is the Kubernetes path this repo does not take.
 
 ## Use it from Claude Code
 
 Claude Code speaks the Anthropic Messages API and nothing else. LiteLLM exposes
 `/v1/messages` and translates it to whatever the alias points at, so Claude Code can drive
-any model here and never learns it is not talking to Anthropic. **Stay on 24000 for this** —
-the MLflow gateway has no equivalent route.
+any model here and never learns it is not talking to Anthropic. **This is the simpler of the
+two paths** — `../envoy` serves `/anthropic/v1/messages`, but only on a separate
+`<alias>-anthropic` pass-through route, for the reason its README gives.
 
 | Variable | Value | Why |
 |:--|:--|:--|
@@ -155,7 +157,7 @@ the whole vocabulary — see [Auto-discovery](#auto-discovery) below.
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `lms` | **which engine this gateway serves** — one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list. It is this project's alone: `../mlflow` has its own, and nothing checks that they agree |
+| `GATEWAY_ENGINE` | `lms` | **which engine this gateway serves** — one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list. It is this project's alone: `../envoy` has its own, and nothing checks that they agree |
 | `GATEWAY_DISCOVERY` | *(blank)* | **which models** — blank means the hand-written list alone. `on` **adds** every model the engine holds on this machine. Local engines only. **`off` does not mean off** — compose reads any non-empty value as on, so leave it blank |
 | `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential. **Change it for anything but a laptop** |
 | `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every `lms-*` alias |
@@ -174,6 +176,44 @@ The provider keys stay blank in `.env` on purpose when your shell already export
 encrypted store: compose reads the shell first, so no second plaintext copy exists to go stale
 after a rotation. Fill them in only if you have no such setup — see
 [`.env.example`](.env.example).
+
+## Provider × route
+
+**LiteLLM routes by the `model:` prefix, not by the alias name**, and the three routes do not
+behave the same. This table is the memory: read it before chasing anything that looks like a
+routing or reasoning bug, and add a row the day you measure one — **including a result that
+did not work**, because those are what get re-tried.
+
+The provider for each alias is in the root [`README.md`](../README.md) § The aliases.
+
+| Provider | `/v1/chat/completions` | `/v1/messages` | `/v1/responses` |
+|:--|:--|:--|:--|
+| `lm_studio/` | works | works — never used the Responses bridge | works |
+| `openai/` | works | **needs `use_chat_completions_url_for_anthropic_messages: true`** | works |
+| `openrouter/` | works | works — not in the bridge set | works |
+
+**The one quirk, in full.** `/v1/messages` picks its upstream path from
+`_RESPONSES_API_PROVIDERS = frozenset({"openai"})`. Anything on the `openai/` provider is
+bridged through the Responses API, and that bridge drops `reasoning_content` — so the Claude
+Agent SDK got no thinking blocks at all from `unsloth-*`, `ollama-*` or `openai-*`, while
+`lms-*` was fine because it is `lm_studio/`. The flag in
+[`config/settings.yaml`](config/settings.yaml) forces the chat-completions path and carries
+the full four-field header. Measured 2026-09-05 on 1.99.1, `unsloth-4b`: **6/6 streaming runs
+carried thinking, against 0/5 before.**
+
+**Tried and rejected, so nobody re-tries them:**
+
+| Attempt | Result |
+|:--|:--|
+| Upgrade 1.95.0 → 1.99.1 on its own | no effect — 0/5. The bug is routing, not version |
+| `model_info.supports_reasoning: true` | no effect — 0/3 |
+| Waiting on BerriAI/litellm#29518, #27946 | **both already closed** before this was measured, and neither fixes it; #29518's fix shipped in 1.95.0 where it still reproduced |
+
+**If a client ever needs the opposite of a global flag, do not flip it.** Give that alias its
+own route — `model_info.supported_endpoints: ["/v1/messages"]` is per-alias — and record both
+directions here. The rule is in
+[`../.claude/rules/05-implement.md`](../.claude/rules/05-implement.md) § Settings that exist
+for one client.
 
 ## Auto-discovery
 
@@ -210,7 +250,10 @@ Three limits worth knowing before you switch it on:
 - **It is local-only.** `lms`, `unsloth` and `ollama` are free, so a long list costs nothing.
   OpenRouter lists hundreds of models and every one bills a real account, so the two paid
   engines keep their hand-written lists and **money is never discovered**. Ask for discovery
-  on one and the `discover` service refuses by name.
+  on one and `discover` enumerates nothing, then writes a **pass-through**
+  `discovered-<engine>.yaml` that just includes the hand-written file — so the gateway comes
+  up serving exactly that list. **Until 2026-09-05 it exited 2 instead and LiteLLM
+  crash-looped on `Config file not found`**, because compose had already built the filename.
 - **`GATEWAY_DISCOVERY=off` does not mean off.** compose builds the config filename with
   `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being *non-empty*, not to its
   meaning. `off`, `false`, `0` and `no` are caught and refused with exit 2; **leave the value
@@ -226,24 +269,45 @@ Three limits worth knowing before you switch it on:
 The generated file is gitignored, rewritten on every `up -d`, and worth reading once — it
 carries the window and quantisation each model reported.
 
-**`discover/gateway_discovery.py` is this project's own copy.** `../mlflow/discover/` has the
-same three probe functions and no renderer, because MLflow has no config file. Fix a probe here
-and copy it there.
+**`discover/gateway_discovery.py` belongs to this project and is now the only copy.**
+`../mlflow/discover/` held a second one until that folder was deleted on 2026-09-04.
+`../envoy` has no discovery at all — its config needs another renderer and its image is
+distroless, with no Python to run one in.
 
 ## Tests
 
+`tests/` is **seven folders, one per way of calling this gateway**, ordered by distance from
+the wire. Each is its own uv project; `uv run --directory` builds whichever venv is missing,
+so a fresh clone needs no `uv sync`.
+
 ```bash
 cd tests
-uv sync                                 # once
-uv run run_all.py                       # 4 rows against 24000
-uv run run_all.py --model ollama-4b     # any alias
-uv run 02_tools_call.py                 # one script
+uv run run_all.py                       # 7 rows against 24000
+uv run run_all.py --only 6_codex_sdk    # one folder
+uv run run_all.py --model ollama-4b     # any alias, everywhere
 ```
 
-It drives **this gateway only**. `04_gateway_contract.py` asserts the four claims
-`tests/common.py` makes about how to call it — that a bad key gets 401, that `/models` lists
+| Folder | Reaches this gateway through |
+|:--|:--|
+| `1_http_client` | `urllib` — no dependencies at all |
+| `2_openai_client` | `openai` — 4 call kinds plus the contract test |
+| `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop built by hand |
+| `4_deepagents` | a deep agent. Seven scenarios: query, todos, filesystem, tools, MCP, subagent, skill |
+| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → **`/v1/messages`**, on the plain alias. Seven scenarios: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
+| `6_codex_sdk` | a `model_providers` override → **`/v1/responses`** |
+| `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider |
+
+**All seven run here, and all seven run on `../envoy` too.** They run differently: folder 5
+there needs an `<alias>-anthropic` pass-through route, because Envoy translates the Anthropic
+body and this gateway does not.
+
+It drives **this gateway only**. `2_openai_client/04_gateway_contract.py` asserts the four
+claims `common.py` makes about how to call it — that a bad key gets 401, that `/models` lists
 the aliases, that `response.model` echoes the alias, and that `/model/info` exposes each
-route's stored ceiling. `../mlflow/tests/` asserts the opposite four against its own gateway.
+route's stored ceiling. `../envoy/tests/` declares its own four, and only one of them matches.
+
+The base URL, the key and the alias live once in `tests/gateway.py`, which every folder
+imports and which depends on nothing outside the standard library.
 
 What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 
@@ -263,10 +327,10 @@ response included. **Look there before changing configuration.**
 | `unsloth-*` 401s | `UNSLOTH_API_KEY` was blank when `up -d` ran | export it, run `up -d` again |
 | An `ollama-*` call that was fast a few minutes ago is slow again | Ollama evicted the idle model | expected — `ollama ps`, or raise `OLLAMA_KEEP_ALIVE` |
 | `ollama-*` says `model not found` | the tag is not pulled | `ollama pull <tag>` — the ids are in [`config/ollama.yaml`](config/ollama.yaml) |
-| An alias answers here and 404s on 25000 | `openrouter-free` does this **by design**. Otherwise you added it to `config/` only | add the `Endpoint(...)` to `../mlflow/config/<engine>.py` and `up -d` there |
+| An alias answers here and 404s on 26000 | `openrouter-free` does this **by design**. Otherwise you added it to `config/` only | add the `AIGatewayRoute` rule to `../envoy/config/<engine>.yaml` and `up -d` there |
 | An alias 404s after you changed `GATEWAY_ENGINE` | you are calling another engine's alias — only one engine is served at a time | `curl /model/info` for the names this engine serves |
-| `litellm` restarts in a loop | `GATEWAY_ENGINE` is misspelled, or is an old value like `all` | `docker compose logs litellm` — it names the config file it could not open |
-| `discover` shows as exited | it is a one-shot; exit 0 is the finished state | expected — `docker compose logs discover` |
+| `litellm` restarts in a loop | `GATEWAY_ENGINE` is misspelled, or is an old value like `all` | `podman compose logs litellm` — it names the config file it could not open |
+| `discover` shows as exited | it is a one-shot; exit 0 is the finished state | expected — `podman compose logs discover` |
 | `Engine protocol predict request failed: fetch failed` | a timeout fired mid-prompt and tore down the engine socket; it maps to a 400, and a 400 is never retried | raise **both** the client and the route timeout |
 | An agent runs a step or two, executes nothing, exits cleanly | tool calls came back as raw text from the wrong OpenRouter free-tier provider | check the provider pin in [`config/openrouter.yaml`](config/openrouter.yaml) |
 | A health probe is green but nothing works | it probed a port another stack answers | this project uses **24000** on purpose, leaving the usual 4000 free |
@@ -284,7 +348,17 @@ litellm/
 │   └── discovered-<engine>.yaml  GENERATED and gitignored; only when discovery is on
 ├── discover/
 │   └── gateway_discovery.py    probes + the YAML renderer; standard library only
-└── tests/                  a uv project: 3 call kinds + the contract test
+└── tests/                  SEVEN folders, one per way of calling this gateway
+    ├── gateway.py              base URL · key · alias, shared by all seven. stdlib only
+    ├── run_all.py              runs every folder, one row each
+    ├── 1_http_client/          urllib, NO dependencies
+    ├── 2_openai_client/        openai — 4 call kinds + the contract test
+    ├── 3_langchain_langgraph/  LangChain's agent, and the same loop by hand
+    ├── 4_deepagents/           a deep agent. SEVEN scenarios + its own run_all.py
+    ├── 5_claude_agent_sdk/     the ANTHROPIC surface, /v1/messages.
+    │                            SEVEN scenarios + its own run_all.py
+    ├── 6_codex_sdk/            the RESPONSES surface, /v1/responses
+    └── 7_opencode_sdk/         an openai-compatible provider over the HTTP server API
 ```
 
 `config/<engine>.yaml` is where the numbers live — every one carries a comment saying where it

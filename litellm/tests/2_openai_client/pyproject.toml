@@ -1,0 +1,14 @@
+[project]
+name = "litellm-tests-openai-client"
+version = "0.1.0"
+description = "The LiteLLM gateway driven through OpenAI's own Python client"
+readme = "README.md"
+requires-python = ">=3.12"
+# `python-dotenv` is gone: ../gateway.py reads ../../.env with the standard library,
+# because it must also import inside 1_http_client, whose venv is empty.
+dependencies = [
+    "openai>=3.8.0",
+]
+
+[tool.uv]
+package = false

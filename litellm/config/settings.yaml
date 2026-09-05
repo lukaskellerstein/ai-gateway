@@ -27,17 +27,18 @@
 # the proxy would boot with NO master key.
 #
 # ---------------------------------------------------------------------------------
-# THE OTHER GATEWAY HAS ITS OWN LIST AND DOES NOT READ ANY OF THIS. MLflow's endpoints live
-# in mlflow/<engine>.py — Python, because MLflow has no config file at all. So AN ALIAS IS
-# TWO EDITS, one per gateway. Add it on one side only and the name answers on 24000 and 404s
-# on 25000, with nothing in either log to say why.
+# THE OTHER GATEWAY HAS ITS OWN LIST AND DOES NOT READ ANY OF THIS. Envoy's routes live in
+# envoy/config/<engine>.yaml — Kubernetes custom resources, a different shape entirely. So AN
+# ALIAS IS TWO EDITS, one per gateway. Add it on one side only and the name answers on 24000
+# and 404s on 26000, with nothing in either log to say why.
 #
 # ADDING A MODEL is a FIVE-part edit, and skipping any part is a bug that hides:
 #   1. the model_list entry, in the file for ITS engine
 #   2. its price — an unpriced route logs $0, which makes a budget ceiling a no-op
 #   3. its max_input_tokens — with enable_pre_call_checks on, this is what catches an
 #      over-long prompt before it reaches the model
-#   4. THE MATCHING Endpoint(...) in mlflow/<engine>.py — the other gateway's list
+#   4. THE MATCHING AIGatewayRoute rule in envoy/config/<engine>.yaml — the other gateway's
+#      list: an exact x-ai-eg-model match, a modelNameOverride, and a request timeout
 #   5. the alias table in README.md — a route nobody documents is a route nobody calls
 #
 # EVERY ALIAS NAMES ITS ENGINE. `lms-*` is LMStudio, `unsloth-*` is Unsloth Studio,
@@ -95,6 +96,55 @@ litellm_settings:
   turn_off_message_logging: false         # pinned: either one flipped empties every stored request
   redact_messages_in_exceptions: false
 
+  # EVERY SETTING BELOW THIS LINE CARRIES THE FOUR-FIELD HEADER, and the convention is in
+  # ../../.claude/rules/05-implement.md § Settings that exist for one client. The short
+  # version: a setting whose reason is not written down, and whose removal breaks no test,
+  # WILL be removed by someone making a different client pass — and then rediscovered.
+  # `GUARDED BY` is the field that prevents that. It is not optional.
+
+  # WHY:            without it the Claude Agent SDK gets NO thinking blocks from any
+  #                 `openai/`-provider alias — 0 runs out of 5, measured on unsloth-4b
+  # SCOPE:          provider=openai/  route=/v1/messages  client=5_claude_agent_sdk
+  # GLOBAL BECAUSE: litellm/__init__.py:239 declares it as a module bool and
+  #                 llms/anthropic/experimental_pass_through/messages/handler.py:78 reads
+  #                 that global. There is NO per-model, per-alias or per-request override —
+  #                 checked across the whole package on 2026-09-05, three occurrences total.
+  # PROVEN:         2026-09-05, litellm 1.99.1, unsloth-4b — 6/6 streaming and 4/5
+  #                 non-streaming carried thinking, against 0/5 before
+  # GUARDED BY:     tests/5_claude_agent_sdk/07_thinking.py — it asserts
+  #                 THINKING_REACHES_CLIENT, so deleting this line turns the ollama and
+  #                 unsloth rows red on the next suite run
+  #
+  # WHAT IT ACTUALLY DOES. `/v1/messages` picks its upstream route by PROVIDER, from one
+  # frozen set in that same handler:
+  #
+  #     _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+  #
+  # A provider in that set is bridged through the RESPONSES API instead of chat completions,
+  # and that bridge does not carry `reasoning_content`. Our aliases split exactly on it —
+  # `lms-*` is `lm_studio/` and `openrouter-*` is `openrouter/`, so neither was ever
+  # affected; `ollama-*`, `unsloth-*` and `openai-*` are `openai/` and were. That is the
+  # whole reason the bug looked engine-specific when it is provider-specific.
+  #
+  # This forces the chat-completions path, where the adapter already falls back to
+  # `reasoning_content` when `thinking_blocks` is absent (adapters/transformation.py, the
+  # `elif` at line 1245). That fallback was proven correct in isolation BEFORE the flag was
+  # found, which is how the search narrowed to routing rather than translation.
+  #
+  # IT IS NOT THE ISSUES THAT WERE CLOSED. BerriAI/litellm#29518 and #27946 had both closed
+  # before any of this was measured and NEITHER fixes it — #29518's fix already shipped in
+  # 1.95.0, where the bug still reproduced. Upgrading 1.95.0 -> 1.99.1 changed nothing on
+  # its own. Do not read their closure as the cure.
+  #
+  # TRIED AND REJECTED, so nobody re-tries them: `supports_reasoning: true` on the
+  # deployment (0/3, no effect) and a plain image upgrade (0/5, no effect).
+  #
+  # IF A CLIENT EVER NEEDS THE OPPOSITE, do not flip this line. Give that alias its own
+  # route with `model_info.supported_endpoints: ["/v1/messages"]`, which IS per-alias
+  # (handler.py:87) — the same shape as Envoy's `<alias>-anthropic` aliases. Then record
+  # both directions in ../README.md § Provider x route.
+  use_chat_completions_url_for_anthropic_messages: true
+
   # NO ALIAS HAS A FALLBACK CHAIN, on either gateway, and there is no commented-out one to
   # uncomment. An alias names ONE route. That is the whole promise of the naming scheme: a
   # `lms-*` name means these weights, this engine, on this machine, free, and an
@@ -108,11 +158,9 @@ litellm_settings:
   # names it pointed at. If you do add one: budget every key that can reach it, and read
   # `api_base` in /spend/logs to find out after the fact where a request actually ran.
   #
-  # MLFLOW CAN EXPRESS A CHAIN AND EXPRESSES NONE. Each Endpoint(...) in mlflow/ takes a
-  # `fallbacks=[...]` list and every one leaves it empty, matching this file. The Envoy
-  # gateway can express one too and expresses none. Add a chain here without adding the
-  # matching one in the other two and the gateways behave differently under exactly the
-  # failure a chain exists to survive.
+  # ENVOY CAN EXPRESS A CHAIN AND EXPRESSES NONE, matching this file. Add a chain here
+  # without adding the matching one there and the two gateways behave differently under
+  # exactly the failure a chain exists to survive.
 
 router_settings:
   enable_pre_call_checks: true            # off (the default), every max_input_tokens is inert

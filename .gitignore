@@ -24,3 +24,7 @@ litellm/config/discovered-*.yaml
 __pycache__/
 
 .DS_Store
+
+# The benchmark's raw per-call timings. A measurement of THIS machine on one day,
+# so it is a local fact; the numbers worth keeping are summarised in README.md.
+benchmark/results.json

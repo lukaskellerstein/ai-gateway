@@ -1,0 +1,18 @@
+[project]
+name = "litellm-tests-opencode-sdk"
+version = "0.1.0"
+description = "OpenCode driven over its HTTP server API, answered by the LiteLLM gateway"
+readme = "README.md"
+requires-python = ">=3.12"
+# OpenCode has no Python SDK. It has a documented HTTP server API, so the client
+# here is `httpx` and about sixty lines — see main.py. The `opencode` binary
+# itself comes from its own installer and must already be on PATH.
+dependencies = [
+    "httpx>=0.28.1",
+    # The MCP server 04 spawns is written against `MCPServer`, the mcp 2.x API.
+    # `sys.executable` is this venv's interpreter, so the server needs mcp HERE.
+    "mcp>=2.1.1",
+]
+
+[tool.uv]
+package = false

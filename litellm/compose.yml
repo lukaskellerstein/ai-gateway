@@ -3,8 +3,8 @@
 # Works with both `podman compose up -d` and `docker compose up -d`.
 #
 # Run it from THIS directory. Nothing above it is read, and nothing here reads
-# ../mlflow or ../envoy. That is the whole point: delete a sibling folder and
-# this keeps working.
+# ../envoy. That is the whole point: delete a sibling folder and this keeps
+# working — which is exactly what happened to ../mlflow on 2026-09-04.
 #
 #   cd litellm && podman compose up -d
 #
@@ -19,7 +19,7 @@
 # word brought up postgres alone is gone with the profiles.
 #
 # EACH GATEWAY IS ITS OWN PROJECT AND ITS OWN .env, so this one can serve `lms`
-# while ../mlflow serves `ollama`. That is now allowed. It also means nothing
+# while ../envoy serves `ollama`. That is now allowed. It also means nothing
 # checks that the same alias answers on both — the check that used to do it went
 # with the shared tests/.
 #
@@ -37,8 +37,8 @@
 # LiteLLM migrates a fresh schema, and every key other projects on this laptop
 # hold stops working. Nothing errors; it just comes up empty.
 #
-# The sibling projects use `ai-gateway-mlflow` and `ai-gateway-envoy`, so
-# containers stay distinguishable and all three can run at once.
+# The sibling project uses `ai-gateway-envoy`, so containers stay distinguishable
+# and both can run at once.
 # ---------------------------------------------------------------------------
 name: ai-gateway
 
@@ -50,12 +50,13 @@ services:
   # network. Publishing buys nothing and collides with 5432 (mlflow-tutorial's).
   # For a shell: `podman compose exec postgres psql -U postgres -d litellm`.
   #
-  # ONE DATABASE NOW. Before the split this server also carried `mlflow`, created
-  # by postgres/init-databases.sh, because POSTGRES_DB takes exactly one name.
-  # ../mlflow runs its own postgres now, so that script is deleted and this needs
-  # no init hook at all. On the pre-split volume the old `mlflow` database is
-  # still there, unused and harmless — postgres only runs init hooks on an EMPTY
-  # data directory, so nothing rewrites it either way.
+  # ONE DATABASE, AND THIS SERVER IS THE ONLY ONE IN THE REPO. Before the 2026-09-03
+  # split it also carried `mlflow`, created by postgres/init-databases.sh, because
+  # POSTGRES_DB takes exactly one name. That gateway got its own postgres at the
+  # split and was deleted on 2026-09-04, so the script is gone and this needs no
+  # init hook at all. On the pre-split volume the old `mlflow` database is still
+  # there, unused and harmless — postgres only runs init hooks on an EMPTY data
+  # directory, so nothing rewrites it either way.
   # ---------------------------------------------------------------------------
   postgres:
     image: docker.io/postgres:17
@@ -85,11 +86,10 @@ services:
   # writes config/discovered-<engine>.yaml, which INCLUDES the hand-written file.
   # So discovery only ever ADDS aliases; nothing a project already calls can break.
   #
-  # THIS COPY OF THE MODULE IS THIS GATEWAY'S OWN. ../mlflow carries its own,
-  # trimmed to the probing half, because MLflow has no config file to render. The
-  # engine probes are duplicated between them on purpose: each folder is a
-  # standalone project, and a shared module would be a file neither one could
-  # delete. Fix a probe here and fix it there too.
+  # THIS MODULE IS THIS GATEWAY'S OWN, AND NOW THE ONLY COPY. ../mlflow carried a
+  # second one trimmed to the probing half, and it went with that folder on
+  # 2026-09-04. ../envoy has no discovery at all — its config would need a third
+  # renderer and its image is distroless, with no Python to run one in.
   #
   # IT USES THE LITELLM IMAGE because it needs a Python and that image ships one.
   # The module reaches for nothing outside the standard library, so there is STILL

@@ -13,17 +13,15 @@
 # opposite of the truth.
 #
 # IT NEEDS A KEY, from the shell, and the .env line stays blank. Without one LiteLLM keeps
-# the alias and 401s at call time while the MLflow seed skips the endpoint — so the same name
-# 401s on 24000 and 404s on 25000.
+# the alias and 401s at call time — the same failure shape as the Envoy gateway on 26000.
 #
 # `max_tokens` IS THE WRONG PARAMETER FOR THESE MODELS, AND ONLY THIS GATEWAY HIDES IT.
 # The gpt-5 family rejects it outright — "Unsupported parameter: 'max_tokens' is not
 # supported with this model. Use 'max_completion_tokens' instead." LiteLLM translates it for
-# you, so a caller on 24000 never notices. MLflow forwards parameters exactly as sent, so THE
-# SAME BODY 400s ON 25000, and the Envoy gateway on 26000 forwards it unchanged too (MLflow
-# verified 2026-08-31). `max_completion_tokens` works everywhere, so a caller driving more
-# than one gateway should send that. It is the one place this repo's "same alias, same body,
-# different base_url" promise does not hold.
+# you, so a caller on 24000 never notices. The Envoy gateway on 26000 forwards it unchanged,
+# so the same body reaches OpenAI as sent. `max_completion_tokens` works everywhere, so a
+# caller driving both gateways should send that. It is the one place this repo's "same alias,
+# same body, different base_url" promise does not hold.
 #
 # THE PRICES ARE NOT WRITTEN HERE, UNLIKE EVERY OTHER ENGINE. LiteLLM ships a cost map
 # covering OpenAI's own catalogue and keeps it current with the image, so a hardcoded price

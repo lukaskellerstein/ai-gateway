@@ -12,13 +12,12 @@ here runs and LiteLLM reads `config/<engine>.yaml` exactly as before. Those
 hand-written files are the documentation for how to configure this gateway by
 hand, so they stay.
 
-WHY THERE ARE TWO COPIES OF THIS MODULE ON DISK. Each gateway is a standalone
-compose project: you can delete a sibling folder and this one still comes up. A
-module shared between them would be a file neither project could remove, so the
-probes below are duplicated on purpose. THE PROBE FUNCTIONS ARE BYTE-FOR-BYTE THE
-SAME as the sibling `mlflow/` project's copy — fix a probe in one and copy it to
-the other. That copy has no renderer, because MLflow has no config file: its
-endpoints are database rows written over an API.
+THIS IS THE ONLY COPY, AND IT BELONGS TO THIS PROJECT. There was a second one in
+the sibling `mlflow/` project, trimmed to the probing half, and it went with that
+folder on 2026-09-04 — which is what the duplication was for: a module shared
+between two standalone projects is a file neither one can delete. `../envoy` has
+no discovery at all, because its config would need another renderer and its image
+is distroless with no Python to run one in.
 
 WITH IT ON, DISCOVERY IS ADDITIVE, NEVER A REPLACEMENT. The generated config
 INCLUDES the hand-written one:
@@ -36,8 +35,16 @@ ADD names. Nothing a project already calls can break.
 DISCOVERY IS LOCAL-ONLY, ON PURPOSE. `lms`, `unsloth` and `ollama` are free, so
 exposing everything on the disk costs nothing but a longer model list. OpenRouter
 lists hundreds of models and every one of them bills a real account, so a paid
-engine keeps its hand-written file and MONEY IS NEVER DISCOVERED. Ask for
-discovery on `openrouter` or `openai` and this script refuses by name.
+engine keeps its hand-written file and MONEY IS NEVER DISCOVERED.
+
+A PAID ENGINE IS A NO-OP HERE, NOT AN ERROR — changed 2026-09-05. It used to exit 2,
+which left no `discovered-<engine>.yaml` for the filename compose had ALREADY built,
+and LiteLLM crash-looped on `Config file not found`. `GATEWAY_DISCOVERY=true` plus
+`GATEWAY_ENGINE=openrouter` therefore meant no gateway at all, and every test failed
+with "the gateway is not answering" — which reads as a dead proxy rather than a
+config decision. Now `openrouter` and `openai` get a PASS-THROUGH file that includes
+the hand-written config and adds nothing. Still nothing enumerated; the gateway still
+comes up. See PAID_ENGINES below.
 
 `GATEWAY_DISCOVERY=off` DOES NOT TURN IT OFF, and that is worth knowing before it
 bites. compose builds the config filename with `${GATEWAY_DISCOVERY:+discovered-}`,
@@ -59,7 +66,7 @@ numbers were read and which were assumed:
 RUN IT THROUGH COMPOSE, not on the host. The default base URLs are
 `host.containers.internal`, which resolves inside a container and nowhere else:
 
-    docker compose run --rm discover python /app/discover/gateway_discovery.py --engine lms
+    podman compose run --rm discover python /app/discover/gateway_discovery.py --engine lms
 """
 
 from __future__ import annotations
@@ -79,6 +86,25 @@ from pathlib import Path
 # the header. This is deliberately NOT seed.py's ENGINES tuple: that one lists what
 # the repo can serve, this one lists what it is safe to enumerate.
 LOCAL_ENGINES = ("lms", "unsloth", "ollama")
+
+# THE TWO ENGINES THAT ARE NEVER ENUMERATED, and are still SERVED with discovery on.
+#
+# Their models bill a real account, so discovering them is refused — that part has
+# always been right. What was wrong until 2026-09-05 is what the refusal DID: this
+# script exited 2, no `discovered-<engine>.yaml` was ever written, and compose had
+# already built `--config /app/config/discovered-openrouter.yaml` from
+# `${GATEWAY_DISCOVERY:+discovered-}`. LiteLLM then crash-looped on
+#
+#     Exception: Config file not found: /app/config/discovered-openrouter.yaml
+#
+# so `GATEWAY_DISCOVERY=true` plus a paid engine meant NO GATEWAY AT ALL, and every
+# test failed in 0.0 s with "the gateway is not answering" — which reads as a dead
+# proxy, not a config decision. Measured 2026-09-05.
+#
+# Now they get a PASS-THROUGH file instead: it includes the hand-written config and
+# adds nothing. Discovery still enumerates nothing here, and the gateway still comes
+# up serving exactly the aliases the hand-written file names.
+PAID_ENGINES = ("openrouter", "openai")
 
 # Words a reader will type expecting discovery to be OFF. compose cannot tell them
 # apart from `on`, so they are refused here rather than half-honoured.
@@ -148,10 +174,12 @@ def env(name: str, default: str = "") -> str:
 def slug(text: str) -> str:
     """Turn a model id into an alias suffix.
 
-    MLflow accepts letters, digits, dot, dash and underscore in an endpoint name
-    and nothing else, so the slash in `google/gemma-4-e4b` and the colon in
-    `gemma4:26b` both have to go. Lowercased so one model cannot produce two
-    aliases that differ only in case.
+    Letters, digits, dot, dash and underscore only, so the slash in
+    `google/gemma-4-e4b` and the colon in `gemma4:26b` both have to go — an alias
+    is typed into a URL and a JSON body, and neither character survives that
+    cleanly. Lowercased so one model cannot produce two aliases that differ only
+    in case. The rule was originally the MLflow gateway's, kept because it makes a
+    name that is safe everywhere.
     """
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-").lower()
 
@@ -379,6 +407,36 @@ def existing_aliases(path: Path) -> set[str]:
         return set()
 
 
+def render_passthrough(engine: str, manual: str) -> str:
+    """A generated config for a PAID engine: the hand-written list and nothing else.
+
+    It exists so that `GATEWAY_DISCOVERY` being set never decides WHETHER the gateway
+    runs, only WHAT it serves. `settings.yaml` is listed explicitly because LiteLLM
+    does not recurse into an included file's own `include:`.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return "\n".join(
+        [
+            f"# GENERATED by discover/gateway_discovery.py on {stamp}. DO NOT EDIT — every",
+            "# `up -d` overwrites this file, and it is gitignored.",
+            "#",
+            f"# NOTHING WAS DISCOVERED, ON PURPOSE. {engine} bills a real account per model,",
+            "# so its models are never enumerated — the hand-written list is the whole",
+            f"# vocabulary. This file exists only so that a set GATEWAY_DISCOVERY still points",
+            f"# LiteLLM at a file that EXISTS: compose builds the name from",
+            "# ${GATEWAY_DISCOVERY:+discovered-} before anything knows which engine it is.",
+            "#",
+            f"# To serve {engine}, this and {manual} are equivalent. Leave GATEWAY_DISCOVERY",
+            f"# EMPTY and compose reads {manual} directly instead.",
+            "",
+            "include:",
+            "  - settings.yaml",
+            f"  - {manual}",
+            "",
+        ]
+    )
+
+
 def render(engine: str, models: list[Model], manual: str) -> str:
     """The whole generated LiteLLM config, comments included."""
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -450,6 +508,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     engine = args.engine.strip()
+    out_dir = Path(args.out)
+
+    # A PAID ENGINE IS NOT AN ERROR, IT IS A NO-OP. See PAID_ENGINES at the top: the
+    # refusal to enumerate is right, but it must not decide whether the proxy boots.
+    if engine in PAID_ENGINES:
+        try:
+            check_word(env("GATEWAY_DISCOVERY"))
+        except ValueError as error:
+            print(f"discovery failed: {error}", file=sys.stderr)
+            return 2
+        target = out_dir / f"discovered-{engine}.yaml"
+        target.write_text(render_passthrough(engine, f"{engine}.yaml"))
+        print(
+            f"{engine} bills a real account per model, so nothing was discovered.\n"
+            f"wrote {target}: a pass-through that serves exactly what {engine}.yaml declares."
+        )
+        return 0
+
     try:
         check_word(env("GATEWAY_DISCOVERY"))
         models = discover(engine)
@@ -464,7 +540,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    out_dir = Path(args.out)
     manual = f"{engine}.yaml"
     taken = existing_aliases(out_dir / manual)
     kept = [model for model in models if model.alias not in taken]

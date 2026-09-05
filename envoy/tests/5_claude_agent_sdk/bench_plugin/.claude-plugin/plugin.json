@@ -1,0 +1,5 @@
+{
+  "name": "gateway-bench",
+  "version": "1.0.0",
+  "description": "The skill 06_skill.py asks the agent to load. Nothing here is used by the gateway itself."
+}

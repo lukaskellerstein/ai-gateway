@@ -1,0 +1,17 @@
+[project]
+name = "litellm-tests-langchain-langgraph"
+version = "0.1.0"
+description = "LangChain and LangGraph pointed at the LiteLLM gateway"
+readme = "README.md"
+requires-python = ">=3.12"
+# `langchain[openai]` pulls in `langchain-openai`, which is the whole trick: the
+# gateway is OpenAI-compatible, so `ChatOpenAI(base_url=...)` is all it takes.
+# `langgraph` is listed explicitly even though langchain depends on it, because
+# main.py imports it directly and an implicit dependency is one a resolver may drop.
+dependencies = [
+    "langchain[openai]>=1.4.0",
+    "langgraph>=1.2.11",
+]
+
+[tool.uv]
+package = false
