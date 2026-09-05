@@ -152,6 +152,50 @@ spec:
           modelNameOverride: nomic-embed-text
       timeouts:
         request: 60m
+    # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
+    #
+    # THESE EXIST FOR CLAUDE CODE, AND ONLY AN AGENT NEEDS THEM. The plain aliases
+    # above reach `ollama`, whose schema is `OpenAI`, so a call to
+    # /anthropic/v1/messages is TRANSLATED Anthropic -> OpenAI on the way in. That
+    # translation passes `thinking` blocks straight through into the OpenAI body —
+    # and an OpenAI `content` part may only be `text` or `image_url`, so the ENGINE
+    # rejects it:
+    #     400 messages.N.content.str: Input should be a valid string
+    # Envoy builds those blocks itself, out of the engine's `reasoning_content`, so
+    # a one-shot works and an agent turn cannot: Claude Code sends the assistant's
+    # previous reply back and the engine refuses its own words. Measured direct on
+    # the engine, no gateway in the path, 2026-09-04 — byte-identical error.
+    #
+    # These rules reach `ollama-anthropic` instead, whose schema is `Anthropic`,
+    # so the body goes upstream UNTRANSLATED. Ollama serves POST /v1/messages itself
+    # — verified 2026-09-04, 200 with a full Anthropic response body — so there is
+    # nothing to bridge.
+    #
+    # A SECOND ALIAS IS THE ONLY WAY TO SAY IT. An AIGatewayRoute rule matches on
+    # HEADERS ALONE (`AIGatewayRouteRuleMatch` has no path field), and the header
+    # it matches is the body's `model`. So the protocol has to be chosen by the
+    # name the caller asks for. `modelNameOverride` sends the engine its own id
+    # either way, so the two aliases are one model on one engine.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-4b-anthropic
+      backendRefs:
+        - name: ollama-anthropic
+          modelNameOverride: gemma4:e4b
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-26b-anthropic
+      backendRefs:
+        - name: ollama-anthropic
+          modelNameOverride: gemma4:26b
+      timeouts:
+        request: 60m
   # What lands in the access log above. Without these the token fields are empty.
   llmRequestCosts:
     - metadataKey: llm_input_token
@@ -196,6 +240,35 @@ spec:
     group: gateway.envoyproxy.io
     namespace: default
 ---
+# THE SAME ENGINE, ADDRESSED IN ITS OWN PROTOCOL.
+#
+# One `Backend` — the endpoint above — can carry several `AIServiceBackend`s, and
+# the schema is what each one MEANS by the bytes it forwards. This one says
+# `Anthropic`, so /anthropic/v1/messages goes upstream as it arrived, and the
+# `-anthropic` aliases in the route above are what select it.
+#
+# THE POINT IS WHAT DOES NOT HAPPEN HERE. No translation means no block can be
+# reshaped in translation, which is the whole reason Claude Code could not hold a
+# conversation through the OpenAI-schema backend — see the long note on those
+# rules. tests/5_claude_agent_sdk REFUSES TO RUN without this alias.
+#
+# It needs no `prefix`: Anthropic's own paths already start /v1.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: ollama-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 60m
+  schema:
+    name: Anthropic
+  backendRef:
+    name: ollama
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: ClientTrafficPolicy
 metadata:
@@ -233,6 +306,12 @@ spec:
     - group: aigateway.envoyproxy.io
       kind: AIServiceBackend
       name: ollama
+    # BOTH BACKENDS, or the `-anthropic` aliases 401 on every call. The policy
+    # attaches to an AIServiceBackend and not to the `Backend` they share, so a
+    # second backend over the same endpoint needs naming here too.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: ollama-anthropic
   type: APIKey
   apiKey:
     secretRef:

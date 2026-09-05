@@ -1,0 +1,12 @@
+[project]
+name = "litellm-tests-http-client"
+version = "0.1.0"
+description = "The LiteLLM gateway called with urllib and nothing else"
+readme = "README.md"
+requires-python = ">=3.12"
+# DELIBERATELY EMPTY. This folder is the proof that the gateway needs no client
+# library, so adding one — even `requests` — would remove the thing it shows.
+dependencies = []
+
+[tool.uv]
+package = false

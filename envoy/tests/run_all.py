@@ -1,19 +1,26 @@
-"""Run every numbered test script against this project's gateway, in one table.
+"""Run every folder here against this project's gateway, in one table.
 
-Each script is a separate child process and a separate row, so one failure names
-itself instead of hiding inside a combined result.
+Each folder is a separate uv project and a separate row, so one failure names
+itself instead of hiding inside a combined result. `uv run --directory` builds
+whichever venv is missing, so a fresh clone needs no `uv sync` first.
 
     uv run run_all.py
     uv run run_all.py --model lms-26b
+    uv run run_all.py --only 6_codex_sdk
     uv run run_all.py --verbose
 
-IT DRIVES 26000 AND NOTHING ELSE. The other two suites are
-`../../litellm/tests/` and `../../mlflow/tests/`, and no suite compares them.
+IT DRIVES 26000 AND NOTHING ELSE. Each gateway is a standalone compose project,
+so the other suite is `../../litellm/tests/`, and NOTHING ANYWHERE compares the
+two — see the note in README.md.
+
+THIS SCRIPT HAS NO DEPENDENCIES, and must not grow any: it is the entry point that
+runs before any venv exists.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -21,21 +28,35 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from common import DEFAULT_MODEL, GATEWAY
-
 HERE = Path(__file__).resolve().parent
 
-# THE DATA PLANE, NOT THE ADMIN PORT. aigw's admin server on 26064 answers
-# /health OK several seconds BEFORE Envoy's listener on 26000 accepts a
-# connection, so probing the admin port races the thing being tested and the
-# first script then fails with a connection reset (measured 2026-09-04).
-# /v1/models needs no key and only answers once the data plane is really up.
+# THE DATA PLANE ON 26000, NOT `/health` ON 26064. The admin server answers `OK`
+# several seconds before Envoy's listener accepts a connection, so probing it
+# races the thing being tested and the first folder then fails with a connection
+# reset (measured 2026-09-04). /v1/models needs no key.
 HEALTH_URL = "http://localhost:26000/v1/models"
 
+# Folders in the order they should be read, which is also the order of increasing
+# distance from the wire: raw HTTP, then the OpenAI client, then five agents.
+FOLDERS = (
+    "1_http_client",
+    "2_openai_client",
+    "3_langchain_langgraph",
+    "4_deepagents",
+    "5_claude_agent_sdk",
+    "6_codex_sdk",
+    "7_opencode_sdk",
+)
 
-def scripts() -> list[Path]:
-    """Every `NN_*.py` in this folder, in order. A new test needs no edit here."""
-    return sorted(HERE.glob("[0-9][0-9]_*.py"))
+
+def entry_point(folder: Path) -> str:
+    """`run_all.py` if the folder has its own suite, else `main.py`.
+
+    Only `2_openai_client` has one — four numbered scripts and a runner of its
+    own. Everything else is a single `main.py`, so a new folder needs no edit here
+    beyond its name in FOLDERS above.
+    """
+    return "run_all.py" if (folder / "run_all.py").is_file() else "main.py"
 
 
 def is_up() -> bool:
@@ -46,15 +67,30 @@ def is_up() -> bool:
         return False
 
 
-def run_one(script: Path, model: str, verbose: bool) -> tuple[bool, float, str]:
-    command = [sys.executable, str(script), "--model", model]
+def run_one(name: str, model: str | None, verbose: bool) -> tuple[bool, float, str]:
+    folder = HERE / name
+    command = ["uv", "run", "--directory", str(folder), entry_point(folder)]
+    if model:
+        command += ["--model", model]
+
+    # VIRTUAL_ENV IS DROPPED, or uv warns on every row. This script is itself run
+    # with `uv run`, so VIRTUAL_ENV points at THIS folder's venv while the child
+    # is told to use the sub-folder's — and uv prints a paragraph about the
+    # mismatch before doing the right thing anyway.
+    environment = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+
+    # `--model` MUST ALSO REACH THE CHILD AS AN ENVIRONMENT VARIABLE, not only on argv.
+    # gateway.py resolves the alias at IMPORT time, before any scenario's argparse runs, so
+    # on an engine whose default alias is None — `openai` — it raised there and every folder
+    # died in 0.0 s with "no alias that passes every scenario here", while the message told
+    # you to pass the `--model` that had just been ignored. Measured 2026-09-05, all four
+    # paid folders. `AI_GATEWAY_TEST_MODEL` is the one hook gateway.py reads FIRST.
+    if model:
+        environment["AI_GATEWAY_TEST_MODEL"] = model
+
     started = time.perf_counter()
     finished = subprocess.run(
-        command,
-        cwd=HERE,
-        capture_output=not verbose,
-        text=True,
-        check=False,
+        command, capture_output=not verbose, text=True, check=False, env=environment
     )
     seconds = time.perf_counter() - started
     output = "" if verbose else (finished.stdout or "") + (finished.stderr or "")
@@ -63,28 +99,30 @@ def run_one(script: Path, model: str, verbose: bool) -> tuple[bool, float, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--verbose", action="store_true", help="stream each script's output instead of capturing it")
+    parser.add_argument("--model", help="alias to call in every folder (default: follows GATEWAY_ENGINE)")
+    parser.add_argument("--only", choices=FOLDERS, help="run one folder instead of all seven")
+    parser.add_argument("--verbose", action="store_true", help="stream each folder's output instead of capturing it")
     args = parser.parse_args()
 
     if not is_up():
         print(
-            f"{GATEWAY.name} is not answering on {HEALTH_URL} — start it with "
+            f"the Envoy gateway is not answering on {HEALTH_URL} — start it with "
             "`cd .. && podman compose up -d`",
             file=sys.stderr,
         )
         return 1
 
-    print(f"model={args.model}  gateway={GATEWAY.name}\n")
+    chosen = [args.only] if args.only else list(FOLDERS)
+    print(f"gateway=envoy  model={args.model or 'from GATEWAY_ENGINE'}  folders={len(chosen)}\n")
+
     rows: list[tuple[str, bool, float]] = []
     failures: list[tuple[str, str]] = []
-
-    for script in scripts():
-        passed, seconds, output = run_one(script, args.model, args.verbose)
-        rows.append((script.name, passed, seconds))
-        print(f"{'PASS' if passed else 'FAIL'}  {script.name:22s} {seconds:6.1f}s")
+    for name in chosen:
+        passed, seconds, output = run_one(name, args.model, args.verbose)
+        rows.append((name, passed, seconds))
+        print(f"{'PASS' if passed else 'FAIL'}  {name:24s} {seconds:6.1f}s")
         if not passed and output:
-            failures.append((script.name, output))
+            failures.append((name, output))
 
     for name, output in failures:
         print(f"\n{'=' * 70}\noutput of the failed run: {name}\n{'=' * 70}\n{output}")

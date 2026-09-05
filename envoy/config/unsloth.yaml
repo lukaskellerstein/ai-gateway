@@ -149,6 +149,59 @@ spec:
           modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
       timeouts:
         request: 60m
+    # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
+    #
+    # THESE EXIST FOR CLAUDE CODE, AND ONLY AN AGENT NEEDS THEM. The plain
+    # aliases above reach `unsloth`, whose schema is `OpenAI`, so a call to
+    # /anthropic/v1/messages is TRANSLATED Anthropic -> OpenAI on the way in. That
+    # translation carries text, images, tool_use and tool_result — and it passes
+    # `thinking` blocks STRAIGHT INTO the OpenAI body, where an OpenAI `content`
+    # part may only be `text` or `image_url`. Envoy builds those blocks itself,
+    # out of the engine's `reasoning_content`.
+    #
+    # So a one-shot call works and an agent turn cannot: Claude Code sends the
+    # assistant's previous reply back on turn two, thinking block and all, and
+    # the ENGINE answers
+    #     400 messages.N.content.str: Input should be a valid string
+    # which reads like "content must be a string" and means "no branch of the
+    # content union matched".
+    #
+    # IT IS NOT THE GATEWAY'S BUG. The identical error comes back from Unsloth on
+    # port 8888 with no gateway in the path at all, and from LMStudio and Ollama
+    # too — measured 2026-09-04. It was INTERMITTENT, about 1 run in 5, because
+    # the engine emits `reasoning_content` on some replies and not others.
+    #
+    # These rules reach `unsloth-anthropic` instead, whose schema is `Anthropic`,
+    # so the body goes upstream UNTRANSLATED. Unsloth speaks Anthropic Messages
+    # natively on /v1/messages and accepts both the thinking blocks and
+    # `thinking: {"type": "adaptive"}` that Claude Code sends — verified against
+    # the engine directly on 2026-09-04, before this was configured.
+    #
+    # A SECOND ALIAS IS THE ONLY WAY TO SAY IT. An AIGatewayRoute rule matches on
+    # HEADERS ALONE (`AIGatewayRouteRuleMatch` has no path field), and the header
+    # it matches is the body's `model`. So the protocol has to be chosen by the
+    # name the caller asks for. `modelNameOverride` sends the engine its own id
+    # either way, so the two aliases are one model on one engine.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-26b-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-4b-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
+      timeouts:
+        request: 60m
   # What lands in the access log above. Without these the token fields are empty.
   llmRequestCosts:
     - metadataKey: llm_input_token
@@ -193,6 +246,35 @@ spec:
     group: gateway.envoyproxy.io
     namespace: default
 ---
+# THE SAME ENGINE, ADDRESSED IN ITS OWN PROTOCOL.
+#
+# One `Backend` — the endpoint above — can carry several `AIServiceBackend`s, and
+# the schema is what each one MEANS by the bytes it forwards. This one says
+# `Anthropic`, so /anthropic/v1/messages goes upstream as it arrived, and the
+# `-anthropic` aliases in the route above are what select it.
+#
+# THE POINT IS WHAT DOES NOT HAPPEN HERE. No translation means no field can be
+# dropped in translation, which is the whole reason Claude Code could not hold a
+# conversation through the OpenAI-schema backend — see the long note on those
+# rules. Unsloth serves /v1/messages itself, so there is nothing to bridge.
+#
+# It needs no `prefix`: Anthropic's own paths already start /v1.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: unsloth-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 60m
+  schema:
+    name: Anthropic
+  backendRef:
+    name: unsloth
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: ClientTrafficPolicy
 metadata:
@@ -229,6 +311,12 @@ spec:
     - group: aigateway.envoyproxy.io
       kind: AIServiceBackend
       name: unsloth
+    # BOTH BACKENDS, or the `-anthropic` aliases 401 on every call. The policy
+    # attaches to an AIServiceBackend and not to the `Backend` they share, so a
+    # second backend over the same endpoint needs naming here too.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: unsloth-anthropic
   type: APIKey
   apiKey:
     secretRef:

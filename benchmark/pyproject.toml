@@ -1,0 +1,12 @@
+[project]
+name = "ai-gateway-benchmark"
+version = "0.1.0"
+description = "Times one HTTP request against all three gateways, everything else held still"
+readme = "README.md"
+requires-python = ">=3.12"
+# NO DEPENDENCIES, and that is deliberate twice over: a benchmark should not be
+# measuring a client library, and this must run when nothing is installed.
+dependencies = []
+
+[tool.uv]
+package = false

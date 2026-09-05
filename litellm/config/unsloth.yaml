@@ -18,9 +18,9 @@
 #
 #   IT REQUIRES A KEY. LMStudio takes any string; Unsloth answers 401 on every route without
 #   one, `/v1/models` included. It is personal, so it arrives from the shell and the line in
-#   .env stays blank. A BLANK KEY FAILS TWICE, DIFFERENTLY: LiteLLM keeps the alias and 401s
-#   at call time, while the MLflow seed skips the endpoint entirely — so the same name 401s
-#   on 24000 and 404s on 25000.
+#   .env stays blank. A BLANK KEY FAILS AT CALL TIME, NOT AT STARTUP: LiteLLM keeps the alias
+#   and answers 401 when you call it, and the Envoy gateway on 26000 does the same. Nothing
+#   complains while the gateway boots.
 #
 #   IT SERVES ONE MODEL AT A TIME, and that limit SPANS chat and the embedder: calling
 #   `unsloth-embed` unloads `unsloth-26b`, and the next chat call swaps it back. So a

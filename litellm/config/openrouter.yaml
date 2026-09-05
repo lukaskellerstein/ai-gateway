@@ -14,8 +14,8 @@
 # `cheap` cannot tell it is not free.
 #
 # IT NEEDS A KEY, and the key is personal, so it arrives from the shell and the line in .env
-# stays blank. With no key LiteLLM keeps the alias and answers 401 at call time, while the
-# MLflow seed skips the endpoint entirely — so the same name 401s on 24000 and 404s on 25000.
+# stays blank. With no key LiteLLM keeps the alias and answers 401 at call time, and the Envoy
+# gateway on 26000 does the same. Nothing complains while either gateway boots.
 #
 # OPENROUTER IS A BROKER, NOT A MODEL HOST. One model id is served by several upstream
 # providers and OpenRouter load-balances between them, so two calls to one alias can run on
@@ -49,6 +49,25 @@ model_list:
       extra_body:
         provider:
           require_parameters: true       # drop providers that cannot honour `tools`
+      # WHY:            `parallel_tool_calls` + `require_parameters` above is a 404. Codex
+      #                 sends the parameter on every call; NO OpenRouter provider for these
+      #                 weights supports it; and `require_parameters` turns "cannot honour
+      #                 it" into a hard refusal instead of dropping it. Measured directly
+      #                 against OpenRouter 2026-09-05 — each alone is 200, together 404
+      #                 "No endpoints found that can handle the requested parameters".
+      # SCOPE:          provider=openrouter/  route=/v1/responses  client=6_codex_sdk
+      # PER-ALIAS, NOT GLOBAL: a litellm_param on this deployment, so nothing else changes.
+      #                 It KEEPS the pin above rather than weakening it — the pin is what
+      #                 stops a provider returning tool calls as raw text, and dropping one
+      #                 unsupported parameter is the smaller price.
+      # PROVEN:         2026-09-05, openrouter-26b, 6_codex_sdk
+      # GUARDED BY:     tests/6_codex_sdk — all four scenarios fail without it
+      #
+      # THE SYMPTOM LIES, so read this before diagnosing. The 404 puts the deployment in the
+      # router's COOLDOWN list, and every call for the next few seconds returns
+      # `429 Too Many Requests — No deployments available`. That reads as an OpenRouter rate
+      # limit and is not one; the real error appears in the FIRST failure only.
+      additional_drop_params: ["parallel_tool_calls"]
     model_info:
       max_input_tokens: 245760           # 262144 − a 16384 output reserve
       max_output_tokens: 16384
@@ -71,8 +90,9 @@ model_list:
   # The cost of the pair is a 429 when Google AI Studio is at its limit, and that is the
   # intended trade: a visible failure over an invisible one.
   #
-  # MLFLOW CANNOT EXPRESS THIS PIN — it has no equivalent of extra_body — so this alias is
-  # deliberately absent from mlflow/openrouter.py and 404s on 25000. See that file's header.
+  # ENVOY CANNOT EXPRESS THIS PIN — it has no equivalent of extra_body — so this alias is
+  # deliberately absent from envoy/config/openrouter.yaml and 404s on 26000. An unpinned copy
+  # there would look like this route while carrying the failure the pin exists to stop.
   - model_name: openrouter-free
     litellm_params:
       model: openrouter/google/gemma-4-26b-a4b-it:free

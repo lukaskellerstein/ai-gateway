@@ -3,7 +3,7 @@
 # Works with both `podman compose up -d` and `docker compose up -d`.
 #
 # Run it from THIS directory. Nothing above it is read, and nothing here reads
-# ../litellm or ../mlflow.
+# ../litellm.
 #
 #   cd envoy && podman compose up -d
 #
@@ -32,8 +32,8 @@
 # the only gateway here with spend controls.
 # =============================================================================
 
-# Distinct from ../litellm's `ai-gateway` and ../mlflow's `ai-gateway-mlflow`, so
-# all three can run at once: `ai-gateway-envoy-<service>-N`.
+# Distinct from ../litellm's `ai-gateway`, so both can run at once:
+# `ai-gateway-envoy-<service>-N`.
 name: ai-gateway-envoy
 
 services:

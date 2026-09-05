@@ -7,8 +7,8 @@
 # is no fallback anywhere here — a request costs money only when a caller names
 # a route that costs money.
 #
-# `openrouter-free` IS DELIBERATELY ABSENT, exactly as it is on the MLflow
-# gateway and for the same reason. That route needs a PROVIDER PIN
+# `openrouter-free` IS DELIBERATELY ABSENT, and it is the one alias this gateway
+# does not carry. That route needs a PROVIDER PIN
 # (`order: ["google-ai-studio"]`, `allow_fallbacks: false`) because OpenRouter
 # load-balances its free tier and one provider returns tool calls as RAW TEXT
 # with `tool_calls` absent — an agent then executes nothing and reports no error.
@@ -128,6 +128,29 @@ spec:
           modelNameOverride: google/gemma-4-26b-a4b-it
       timeouts:
         request: 10m
+    # ── The `-anthropic` alias: PASS-THROUGH, because OpenRouter serves it ────
+    #
+    # OPENROUTER SPEAKS THE ANTHROPIC MESSAGES API NATIVELY, at
+    # `POST /api/v1/messages` — it calls it the "Anthropic skin", and it carries
+    # thinking blocks, tool use, streaming and multi-turn context the way Anthropic
+    # does. So this alias gets the SAME treatment as the three local engines: a
+    # second `AIServiceBackend` whose schema is `Anthropic`, reached through the
+    # same `Backend`, with the body going upstream UNTRANSLATED.
+    #
+    # It is the better of the two shapes and it is not always available — the
+    # `openai-mini-anthropic` rule in openai.yaml has to translate instead, because
+    # api.openai.com serves no Anthropic route at all. Both satisfy
+    # `tests/5_claude_agent_sdk`, which resolves `<alias>-anthropic` at runtime.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openrouter-26b-anthropic
+      backendRefs:
+        - name: openrouter-anthropic
+          modelNameOverride: google/gemma-4-26b-a4b-it
+      timeouts:
+        request: 10m
   # What lands in the access log above. Without these the token fields are empty.
   llmRequestCosts:
     - metadataKey: llm_input_token
@@ -167,6 +190,28 @@ spec:
     # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
     name: OpenAI
     # The backend serves the OpenAI API under this path, not at the root.
+    prefix: /api/v1
+  backendRef:
+    name: openrouter
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openrouter-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 10m
+  schema:
+    # ONE `Backend` CARRIES BOTH OF THESE. The schema is what each one MEANS by the
+    # bytes it forwards: `Anthropic` here, so /anthropic/v1/messages goes upstream as
+    # it arrived and OpenRouter's own Anthropic skin answers it.
+    name: Anthropic
+    # Same as the OpenAI one — OpenRouter serves its APIs under /api/v1, not at the
+    # root, so /api/v1/messages is where this lands.
     prefix: /api/v1
   backendRef:
     name: openrouter
@@ -226,6 +271,12 @@ spec:
     - group: aigateway.envoyproxy.io
       kind: AIServiceBackend
       name: openrouter
+    # THE SECOND BACKEND NEEDS THE KEY TOO. Miss this and the `-anthropic` alias
+    # reaches OpenRouter with no Authorization header and gets 401, while the plain
+    # alias beside it works — which reads as a broken alias, not a missing target.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openrouter-anthropic
   type: APIKey
   apiKey:
     secretRef:

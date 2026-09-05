@@ -17,8 +17,7 @@
 #
 #   THE KEY IS IGNORED, AND ONE IS SET ANYWAY. Ollama never reads Authorization. `sk-ollama`
 #   is here because LiteLLM's `openai/` provider needs SOME key string — with none it falls
-#   back to OPENAI_API_KEY, which is blank, and the route errors. The MLflow seed also skips
-#   any endpoint whose key is empty.
+#   back to OPENAI_API_KEY, which is blank, and the route errors.
 #
 #   IT EVICTS AN IDLE MODEL AFTER 5 MINUTES by default, so the second call of a session can
 #   be as slow as the first. `ollama ps` says what is resident; `ollama list` only says what

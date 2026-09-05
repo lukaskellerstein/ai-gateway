@@ -4,15 +4,26 @@
 on this laptop calls, so switching model or provider is a change *here* rather than in
 each repo. Laptop-only — every gateway binds localhost, and nothing is deployed anywhere.
 
-## Three compose projects, and nothing at the root
+## Two compose projects, and nothing at the root
 
 Since 2026-09-03 each gateway is a **standalone compose project**. There is no root
 `compose.yml`, no root `.env`, no root `tests/` and no root `discover/`. You start a gateway
-by entering its folder; you remove one by deleting its folder. `envoy/` was added on
-2026-09-04 and touched nothing that already existed — the first real test of the design.
+by entering its folder; you remove one by deleting its folder. The design was tested both
+ways on 2026-09-04: `envoy/` was **added** and touched nothing that already existed, and
+`mlflow/` was **deleted** and nothing else stopped working.
 
-All four images are stock: **no Dockerfile and no build step**. A `litellm/Dockerfile`
-returns the day a callback needs a package the base image lacks.
+A third project, `mlflow/` on port 25000, existed until 2026-09-04. It is gone: the folder,
+its postgres, its seed one-shot and its `tests/`. The root `README.md` § What was removed says
+why. **Do not propose bringing it back**, and treat a leftover reference to it as a doc bug.
+
+The one root folder is `benchmark/` (2026-09-04). It is **not a project**: it starts nothing,
+reads no project's files, and times one HTTP request against both ports with the engine,
+model, body and `max_tokens` held identical — see
+[`../../benchmark/README.md`](../../benchmark/README.md). Its results are in the root
+`README.md` § Gateway comparison.
+
+Both images are stock: **no Dockerfile and no build step**. A `litellm/Dockerfile` returns
+the day a callback needs a package the base image lacks.
 
 ### `litellm/` — project name **`ai-gateway`**, port 24000
 
@@ -27,14 +38,6 @@ returns the day a callback needs a package the base image lacks.
 > `ai-gateway_postgres_data` — every virtual key and spend log since before the split.
 > Rename it and compose silently creates a new empty volume.
 
-### `mlflow/` — project name `ai-gateway-mlflow`, port 25000
-
-| Service | Image | Host port | Holds / does |
-|:--|:--|:--|:--|
-| `mlflow` | `ghcr.io/mlflow/mlflow:latest` | **25000** → 5000 | the same aliases through the MLflow AI Gateway. **No key, and no `/v1/messages`** |
-| `postgres` | `docker.io/postgres:17` | **none** | database `mlflow` — endpoints, encrypted secrets, traces |
-| `mlflow-seed` | same as `mlflow` | — | one-shot: runs `config/seed.py`, then exits |
-
 ### `envoy/` — project name `ai-gateway-envoy`, ports 26000 and 26064
 
 | Service | Image | Host port | Holds / does |
@@ -48,12 +51,16 @@ declares none.
 
 **It is distroless: no shell, so `compose exec` cannot work.** Use `compose logs`.
 
-**Exited (0) is the finished state** for `discover` and `mlflow-seed`.
+**Exited (0) is the finished state** for `discover`.
 
-Each server applies its own schema migrations on first boot, and each project's postgres
-creates its one database with `POSTGRES_DB`. There is **no SQL in this repo at all** —
-`postgres/init-databases.sh` existed only because one server had to carry two databases,
-and it went with the split.
+LiteLLM applies its own schema migrations on first boot, and its postgres creates its one
+database with `POSTGRES_DB`. There is **no SQL in this repo at all** —
+`postgres/init-databases.sh` existed only because one server had to carry two databases, and
+it went with the split.
+
+**Two volumes outlive the deleted MLflow project**: `ai-gateway-mlflow_postgres_data` and
+`ai-gateway-mlflow_mlflow_artifacts`. Nothing reads them. Removing a volume is unrecoverable,
+so ask before you do.
 
 **The 2xxxx band is deliberate.** Two other stacks hold ports on this machine, and the
 failure avoided is not a loud bind error but the silent one: a probe against
@@ -63,7 +70,7 @@ failure avoided is not a loud bind error but the silent one: a probe against
 |:--|:--|
 | `~/Projects/Github/lukaskellerstein/mlflow-tutorial` | 3000, 4000, 5432, 5555, 6333/4, 7233, 8080, 9090 |
 | `~/Projects/Github/lukaskellerstein/ai-agent-platform` | 1xxxx |
-| `ai-gateway` | **2xxxx** — 24000, 25000, 26000, 26064 |
+| `ai-gateway` | **2xxxx** — 24000, 26000, 26064. 25000 is free again since 2026-09-04 |
 
 ## The words, per project
 
@@ -72,35 +79,35 @@ reads its **own** `.env`:
 
 | Variable | Values | Default | Picks | In |
 |:--|:--|:--|:--|:--|
-| `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | `lms` | which engine | all three |
-| `GATEWAY_DISCOVERY` | *(empty)*, `on` | *(empty)* | which models | `litellm/`, `mlflow/` |
+| `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | `lms` | which engine | both |
+| `GATEWAY_DISCOVERY` | *(empty)*, `on` | *(empty)* | which models | `litellm/` only |
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 `GATEWAY_DISCOVERY` is empty by default, and then the hand-written lists below are the whole
-vocabulary. Set it and the gateway ADDS every model the engine holds on disk — LiteLLM
-through a generated `litellm/config/discovered-<engine>.yaml` that **includes** the
-hand-written file, MLflow by **appending** to the hand-written `ENDPOINTS`. It never
-replaces a hand-written alias, and it is refused on the two paid engines. Full facts:
-[`../CLAUDE.md`](../CLAUDE.md) § the repo in ten points, and either
-`discover/gateway_discovery.py`.
+vocabulary. Set it and LiteLLM ADDS every model the engine holds on disk, through a generated
+`litellm/config/discovered-<engine>.yaml` that **includes** the hand-written file. It never
+replaces a hand-written alias. On the two PAID engines it enumerates nothing and writes a
+pass-through file instead, so the gateway still comes up serving the hand-written list. Full
+facts:
+[`../CLAUDE.md`](../CLAUDE.md) § the repo in a dozen points, and
+`litellm/discover/gateway_discovery.py`.
 
-**THE THREE PROJECTS CAN EACH SERVE A DIFFERENT ENGINE.** Before the split one word named a
+**THE TWO PROJECTS CAN EACH SERVE A DIFFERENT ENGINE.** Before the split one word named a
 file on one side and an environment variable on the other, so they could not diverge. Now:
 
-| | LiteLLM (24000) | MLflow (25000) | Envoy (26000) |
-|:--|:--|:--|:--|
-| reads | `litellm/.env` | `mlflow/.env` | `envoy/.env` |
-| compose selects | `litellm/config/<engine>.yaml` | `config/seed.py`, word in its env | `envoy/config/<engine>.yaml` |
-| the aliases are in | that same file | `mlflow/config/<engine>.py` | that same file |
+| | LiteLLM (24000) | Envoy (26000) |
+|:--|:--|:--|
+| reads | `litellm/.env` | `envoy/.env` |
+| compose selects | `litellm/config/<engine>.yaml` | `envoy/config/<engine>.yaml` |
+| the aliases are in | that same file | that same file |
 
-Check every `.env` before treating a difference between the ports as a bug.
+Check both `.env` files before treating a difference between the ports as a bug.
 
-**`GATEWAY_DISCOVERY` DOES NOT EXIST IN `envoy/`.** Its config would need a third renderer
+**`GATEWAY_DISCOVERY` DOES NOT EXIST IN `envoy/`.** Its config would need another renderer
 and its image has no Python. `envoy/config/<engine>.yaml` is always the whole vocabulary.
 
-A typo fails differently on each side: `mlflow-seed` exits 2 naming the five valid words
-while its server keeps serving what it held; `litellm` crash-loops on `Config file not
-found`.
+A typo crash-loops `litellm` on `Config file not found`, and stops `aigw` with the same
+complaint. `compose logs` names the file in both cases.
 
 Each `litellm/config/<engine>.yaml` carries `include: [settings.yaml]` and then its own
 `model_list`. LiteLLM extends list keys and replaces the rest, and **does not recurse** —
@@ -124,16 +131,23 @@ Callers name an **alias**, never a model — the model behind a name is expected
 across a row, so changing the word and re-running that project's `tests/` measures the
 engine and nothing else.
 
-**`openrouter-free` is deliberately absent on 25000 AND 26000.** Neither MLflow nor Envoy
-has an equivalent of `extra_body`, so neither can carry the provider pin, and an unpinned
-copy would carry exactly the raw-text tool-call failure the pin exists to stop. It is the one
-alias where "the config is incomplete" is the wrong diagnosis.
+**ENVOY ADDS TWO NAMES PER LOCAL ENGINE THAT LITELLM DOES NOT HAVE**:
+`lms-4b-anthropic`, `lms-26b-anthropic` and the same for `unsloth` and `ollama`. They are the
+SAME model on the SAME engine, reached through an `Anthropic`-schema `AIServiceBackend` so the
+body is not translated — the only way Claude Code can hold a conversation through Envoy. They
+are plumbing, not vocabulary: LiteLLM does not need them, and nothing but
+`envoy/tests/5_claude_agent_sdk` calls them. Full note: `envoy/README.md`.
+
+**`openrouter-free` is deliberately absent on 26000.** Envoy has no equivalent of
+`extra_body`, so it cannot carry the provider pin, and an unpinned copy would carry exactly
+the raw-text tool-call failure the pin exists to stop. It is the one alias where "the config
+is incomplete" is the wrong diagnosis.
 
 ## Seven things that look like bugs and are not
 
-- **An alias that answers on one port and 404s on another.** The three projects keep
-  separate lists and none reads another's. Either the alias was added on one side only, or
-  the `.env` files name different engines. **No test catches this any more.**
+- **An alias that answers on one port and 404s on the other.** The two projects keep
+  separate lists and neither reads the other's. Either the alias was added on one side only,
+  or the `.env` files name different engines. **No test catches this any more.**
 - **Envoy answering `OK` on 26064 while 26000 refuses.** The admin server starts before
   Envoy's listener. Probe `26000/v1/models`, not `26064/health`.
 - **Nothing in `compose logs envoy` after a request.** `AIGW_DEBUG` is `false`, so Envoy's
@@ -166,9 +180,9 @@ through `host.containers.internal` (verified from inside the container, 2026-08-
 Every `compose.yml` declares both hostnames so Podman and Docker behave identically.
 `HF_TOKEN` backed nothing and was removed at the split.
 
-**A missing key fails twice, differently**: LiteLLM keeps the alias and 401s at call time,
-while the MLflow seed skips the endpoint entirely — so the same name 401s on 24000 and
-404s on 25000.
+**A missing key fails at CALL time on both gateways, not at startup**: the alias stays
+registered and answers 401 when something calls it. Nothing complains while either gateway
+boots, which is why an auth failure usually means the shell that ran `up -d` had no direnv.
 
 ## Config, secrets, tooling
 
@@ -180,24 +194,31 @@ while the MLflow seed skips the endpoint entirely — so the same name 401s on 2
   `--services`. This leaked `UNSLOTH_API_KEY` into a transcript on 2026-09-03.
 - `.env` is gitignored at every depth. Each project's `.env.example` is tracked and must
   never carry a real value. Full policy → [`12-security.md`](12-security.md).
-- **`uv`, and only inside the three `tests/` directories** — the only places with a language
-  manifest (`pyproject.toml`, Python 3.12, `openai` + `python-dotenv`). Each is its own uv
-  project and needs its own `uv sync`. `mlflow/config/` runs inside the MLflow image and has
-  no manifest of its own; the repo root carries none.
+- **`uv`, and only under the two `tests/` directories** — the only places with a language
+  manifest. Since 2026-09-04 each `tests/` is **seven folders, each its own uv project** with
+  its own `pyproject.toml` and `.venv`, plus a manifest-only `pyproject.toml` at `tests/`
+  itself so `uv run run_all.py` works there. **There is no `uv sync` step**: the runner shells
+  out to `uv run --directory <folder>`, which builds whichever venv is missing. The repo root
+  carries no manifest, and `benchmark/` has one with no dependencies.
 - **Run**: `cd <folder> && podman compose up -d`. There is no command that starts more than
   one.
-- **Test**: `cd <folder>/tests && uv sync && uv run run_all.py` — four scripts against that
-  one port, exit 1 on any failure. Each drives one alias per run, so none is a substitute for
-  the checks in [`06-testing.md`](06-testing.md). **The three gateways share a vocabulary but
-  not a calling contract**, and they are genuinely three different contracts:
+- **Test**: `cd <folder>/tests && uv run run_all.py` — seven folders against that one port,
+  exit 1 on any failure. Each drives one alias per run, so none is a substitute for the checks
+  in [`06-testing.md`](06-testing.md). **The two gateways share a vocabulary but not a
+  calling contract**, and the contracts are genuinely different:
 
-  | | LiteLLM | MLflow | Envoy |
-  |:--|:--|:--|:--|
-  | `checks_api_key` | yes | no | no |
-  | `lists_models` | yes | no | **yes** |
-  | `echoes_alias` | yes | no | no |
-  | `exposes_route_limits` | yes | no | no |
-  | caller must send `max_tokens` | no | yes | yes |
+  | | LiteLLM | Envoy |
+  |:--|:--|:--|
+  | `checks_api_key` | yes | no |
+  | `lists_models` | yes | **yes** |
+  | `echoes_alias` | yes | no |
+  | `exposes_route_limits` | yes | no |
+  | caller must send `max_tokens` | no | yes |
+  | `/v1/responses` — Codex needs it | **yes** | **yes** |
+  | an Anthropic route — the Claude SDK needs it | `/v1/messages` | `/anthropic/v1/messages`, on a pass-through alias |
+  | SSE streaming | yes | yes |
 
-  A check that assumed "LiteLLM or not-LiteLLM" would be wrong about Envoy. Each
-  `tests/common.py` § `Gateway` declares its own row, and `04_gateway_contract.py` checks it.
+  The first five rows are declared on each `tests/2_openai_client/common.py` § `Gateway` and
+  checked by `04_gateway_contract.py`; the last three are what folders 1, 5 and 6 exercise.
+  **Only one of the first five matches**, which is why neither project reads the other's
+  table.

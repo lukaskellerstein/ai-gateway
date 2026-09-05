@@ -1,0 +1,29 @@
+[project]
+name = "litellm-tests-deepagents"
+version = "0.1.0"
+description = "A DeepAgents deep agent driven by the LiteLLM gateway"
+readme = "README.md"
+requires-python = ">=3.12"
+# DeepAgents is built on LangGraph and takes any LangChain chat model, so the
+# gateway reaches it the same way folder 3 does — through `ChatOpenAI(base_url=…)`.
+dependencies = [
+    "deepagents>=0.7.13",
+    "langchain[openai]>=1.4.0",
+    # MCP tools arrive as ordinary LangChain tools through this adapter, which is
+    # how ~/Projects/.../3_deepagents/3_mcp does it. deepagents has no MCP client
+    # of its own — 05_mcp.py loads the tools and passes them in `tools=`.
+    "langchain-mcp-adapters>=0.3.2",
+    # NO UPPER BOUND HERE, AND IT STILL RESOLVES TO 1.x. langchain-mcp-adapters 0.3.2 —
+    # the newest there is — declares `mcp>=1.24.0,<2.0.0`, so the adapter itself
+    # caps it. Naming `mcp` anyway because `mcp_server.py` imports it directly, and
+    # a transitive dependency a file imports by name is one release away from
+    # vanishing.
+    #
+    # THE CAP IS THE ADAPTER'S, NOT THE PROTOCOL'S. An mcp 1.29.1 client here
+    # discovered and called folder 5's mcp 2.1.1 server across two venvs without
+    # complaint (measured 2026-09-04). Version skew is a packaging concern.
+    "mcp>=1.29.1",
+]
+
+[tool.uv]
+package = false

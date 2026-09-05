@@ -1,130 +1,104 @@
-# tests — drive the LiteLLM gateway through the OpenAI client
+# tests — seven ways to call the LiteLLM gateway
 
-Four scripts, each run against **this project's gateway on 24000**. Three prove a
-kind of call works; the fourth proves this gateway's calling contract is still
-what `common.py` says it is.
+Seven folders, each a working program against **this project's gateway on 24000**.
+They are ordered by distance from the wire: raw HTTP first, then OpenAI's own
+client, then five agent frameworks.
 
-| Script | What it proves |
-|:--|:--|
-| `01_simple_call.py` | a plain chat completion, with a multi-turn conversation |
-| `02_tools_call.py` | tools: a structured `tool_calls` reply, then the second turn that uses the tool result |
-| `03_multimodal.py` | an image plus a question, sent as a base64 `data:` URL |
-| `04_gateway_contract.py` | **this gateway's contract**, and that `common.py`'s table still describes it |
-| `run_all.py` | runs all four and prints a pass/fail table |
-
-Every script prints the **full** response and then the extracted text, so it
-doubles as a sample to copy from.
-
-> **This suite drives one gateway.** Until 2026-09-03 there was one `tests/` at the
-> repo root that ran every script against 24000 **and** 25000, and it was the thing
-> that caught the two alias lists drifting apart. Each gateway is a standalone
-> compose project now, so that check has no owner: **nothing here, and nothing
-> anywhere in the repo, verifies that an alias answering on 24000 also answers on
-> 25000.** Call both ports by hand when it matters.
-
-## The calling contract
-
-`common.py` declares four things about how to call this gateway, and
-`04_gateway_contract.py` checks every one against reality:
-
-| | LiteLLM `:24000` |
-|:--|:--|
-| `checks_api_key` | **True** — a bogus Bearer token gets 401, so the master key is enforced |
-| `lists_models` | **True** — `GET /models` returns the alias list |
-| `echoes_alias` | **True** — `response.model` is `lms-4b`, the alias that was sent |
-| `exposes_route_limits` | **True** — `/model/info` reports each route's stored `max_tokens` |
-
-The failure message is always "the table says X and the gateway did Y", which is
-the sentence you want. `../../mlflow/tests/` declares the opposite four against its
-own gateway and checks them the same way.
-
-**`body_extras` is empty here**, and that is deliberate. LiteLLM stores a
-`max_tokens` on the route and every local route in `../config/` carries one, so a
-caller who sends none still gets a bounded reply. Scripts 01-03 therefore run
-against the stored default, which is worth testing: it is what every caller who
-forgets `max_tokens` actually gets.
-
-```python
-response = client_for(gateway).chat.completions.create(
-    model=model,
-    messages=CONVERSATION,
-    **gateway.body_extras,      # {} on this gateway
-)
-```
-
-A scenario spreads `body_extras` and reads nothing else off `gateway`, so it cannot
-grow gateway-specific behaviour by accident.
+| Folder | Reaches the gateway through | Proves |
+|:--|:--|:--|
+| [`1_http_client`](1_http_client/README.md) | `urllib` — **no dependencies at all** | the request every other folder wraps, plain and streaming |
+| [`2_openai_client`](2_openai_client/README.md) | `openai` | four scenarios: chat, tools, an image, and this gateway's calling contract |
+| [`3_langchain_langgraph`](3_langchain_langgraph/README.md) | `ChatOpenAI(base_url=…)` | LangChain's prebuilt agent, and the same ReAct loop built by hand in LangGraph |
+| [`4_deepagents`](4_deepagents/README.md) | the same `ChatOpenAI` | a deep agent — seven scenarios: query, todos, filesystem, tools, mcp, subagent, skill |
+| [`5_claude_agent_sdk`](5_claude_agent_sdk/README.md) | `ANTHROPIC_BASE_URL` → `/v1/messages` | **the Anthropic surface** and the worked agent: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
+| [`6_codex_sdk`](6_codex_sdk/README.md) | a `model_providers` override → `/v1/responses` | **the Responses surface** — the only protocol Codex speaks |
+| [`7_opencode_sdk`](7_opencode_sdk/README.md) | an `@ai-sdk/openai-compatible` provider | OpenCode over its HTTP server API — query, session, agent, MCP, structured output |
 
 ## Run
 
-The gateway must be up first — `docker compose up -d` in the parent directory.
+The gateway must be up first — `podman compose up -d` in the parent directory.
 
 ```bash
 cd tests
-uv sync                     # once
-uv run run_all.py           # all four
+uv run run_all.py                      # all seven, one row each
+uv run run_all.py --only 6_codex_sdk   # one folder
+uv run run_all.py --model lms-26b      # a different alias everywhere
+uv run run_all.py --verbose            # stream each folder instead of capturing it
 ```
 
-One at a time:
+Or one folder on its own — this is the normal way to read them:
 
 ```bash
-uv run 01_simple_call.py
-uv run 02_tools_call.py --model lms-26b
-uv run 03_multimodal.py --model ollama-4b
+cd 3_langchain_langgraph
+uv run main.py
 ```
 
-Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
-`run_all.py` refuses to start if 24000 is not answering, rather than letting four
-scripts fail the same way.
+Every program exits `0` on pass and `1` on fail, so they work in a shell chain.
+`run_all.py` refuses to start if 24000 is not answering, rather than letting seven
+folders fail the same way.
 
-## Flags
+## Seven folders, seven projects
 
-| Flag | Default | Meaning |
+Each folder carries its **own** `pyproject.toml` and its own `.venv`. That is
+deliberate: the dependency sets have nothing in common — `1_http_client` has none
+at all, and DeepAgents, the Codex runtime and the Claude Agent SDK have no reason
+to share a resolver. `uv run --directory` builds whichever venv is missing, so a
+fresh clone needs no `uv sync` first.
+
+**What they DO share is [`gateway.py`](gateway.py)**, one level up: the base URL,
+the key and the alias. Three facts written down seven times would be six places to
+forget when `GATEWAY_ENGINE` changes, and nothing would report the ones you missed.
+It imports **nothing but the standard library**, which is what lets it import
+inside `1_http_client`'s empty venv, and it reads only this project's own files —
+nothing here looks at `../../envoy`.
+
+Adding a folder is two edits: write it, and add its name to `FOLDERS` in
+`run_all.py`.
+
+## What this gateway offers that the others do not
+
+Every folder here runs, and every folder runs on the sibling suite too. Measured
+2026-09-04:
+
+| Surface | LiteLLM `:24000` | Envoy `:26000` |
 |:--|:--|:--|
-| `--model <alias>` | follows `GATEWAY_ENGINE` | the alias to call — see below. Also settable with `AI_GATEWAY_TEST_MODEL` |
-| `--verbose` (`run_all.py` only) | off | stream each script's output instead of capturing it |
+| `/v1/chat/completions` | 200 | 200 |
+| `/v1/models` | 200 | 200 |
+| `/v1/responses` — Codex needs this | **200** | **200** |
+| Anthropic messages — the Claude SDK needs this | `/v1/messages` | `/anthropic/v1/messages`, on a pass-through alias |
+| a stored `max_tokens` per route | **yes** | no |
 
-There is no `--gateway` flag any more. The folder you are in is the gateway.
+The last row is why `BODY_EXTRAS` in `gateway.py` is **empty** here and carries
+`{"max_tokens": 2048}` in the sibling: LiteLLM stores a ceiling on every route in
+`../config/`, so a caller who sends none still gets a bounded reply.
 
-## Reasoning aliases and the stored ceiling
+> **This suite drives one gateway.** Until 2026-09-03 there was one `tests/` at the
+> repo root that ran every script against two ports at once, and it was the thing
+> that caught two alias lists drifting apart. Each gateway is a standalone compose
+> project now, so that check has no owner: **nothing here, and nothing anywhere in
+> the repo, verifies that an alias answering on 24000 also answers on 26000.** Call
+> the other port by hand when it matters.
 
-**The scripts send no `max_tokens` at all** and get the route's stored value — 4096
-on `lms-*`, 8192 on `ollama-*` and `unsloth-*`. `openai-mini` is the one route
-storing none; OpenAI's own default applies there.
+## Which alias gets called
 
-That matters because every `unsloth-*` and `ollama-*` route, and `lms-4b` too,
-spends the same allowance on a reasoning block before writing a word. Run out
-mid-thought and the reply is **empty**, with `finish_reason: "length"` and no error
-at all.
-
-`answer_of()` names that case rather than reporting a bare "empty content":
-
-```
-CheckFailed: empty content, finish_reason='length': the model spent its whole token
-allowance on a reasoning block (612 chars) and never started the reply. Raise the
-route's `max_tokens` in ../config/<engine>.yaml.
-```
-
-Raising the ceiling costs nothing when a model does not need it — generation stops
-at `stop`, not at the ceiling.
-
-## Why the default alias follows `GATEWAY_ENGINE`
-
-**One engine runs at a time**, so the aliases of every other engine are not in the
-config at all. A fixed `lms-4b` default would therefore fail with "model not found"
-on a perfectly healthy gateway serving Ollama.
-
-`common.py` reads `GATEWAY_ENGINE` from `../.env` — this project's own, not a
+`gateway.py` reads `GATEWAY_ENGINE` from `../.env` — this project's own, not a
 repo-root one — and picks that engine's small chat route: `lms-4b`, `unsloth-4b`,
 `ollama-4b` or `openrouter-26b`. Each is the one alias on its engine that is both
-vision- and tool-capable, which all three scripts need from a single loaded model.
+vision- and tool-capable, which is what every folder here needs from a single
+loaded model.
 
-**An unrecognised engine is an error, not a fallback.** Defaulting quietly produced
-"Invalid model name passed in model=lms-4b" from a healthy gateway, which reads as
-a broken gateway rather than a stale `.env`. `openai` maps to nothing on purpose —
-`gpt-5.4-mini` has no vision, so `03_multimodal.py` cannot pass against it.
+**One engine runs at a time**, so a fixed `lms-4b` default would fail with "model
+not found" on a perfectly healthy gateway serving Ollama. An unrecognised engine is
+an **error, not a fallback** — defaulting quietly reads as a broken gateway rather
+than a stale `.env`.
 
-`AI_GATEWAY_TEST_MODEL` overrides the choice permanently; `--model` for one run.
+| Override | Scope |
+|:--|:--|
+| `--model <alias>` | one run |
+| `AI_GATEWAY_TEST_MODEL` | permanently, for this shell |
+
+`openai` maps to nothing on purpose: `gpt-5.4-mini` has no vision, so
+`2_openai_client/03_multimodal.py` cannot pass against it.
 
 **On LMStudio the model must be loaded first** — `lms ps --json` is the truth, not
 the LMStudio UI. A JIT load comes back at 8192 context with a 1 h TTL. Ollama loads
@@ -134,56 +108,59 @@ on demand and needs none of this.
 lms load google/gemma-4-e4b --context-length 131072 --parallel 1 --gpu max
 ```
 
-## The same test on another engine
+## Two binaries these folders need, and `uv` cannot install
 
-The suite doubles as an engine comparison, but only one engine is served at a time —
-so it is a restart between runs, not a second `--model`:
+| Folder | Needs | Install |
+|:--|:--|:--|
+| `5_claude_agent_sdk` | the `claude` CLI — the SDK spawns it | `npm install -g @anthropic-ai/claude-code` |
+| `7_opencode_sdk` | the `opencode` binary | `curl -fsSL https://opencode.ai/install \| bash` |
 
-```bash
-# in ../.env: GATEWAY_ENGINE=lms      then  (cd .. && docker compose up -d)
-uv run run_all.py
-# in ../.env: GATEWAY_ENGINE=ollama   then  (cd .. && docker compose up -d)
-uv run run_all.py
-```
+Both scripts check PATH first and print the install line rather than failing inside
+a library. `6_codex_sdk` needs nothing extra: `openai-codex` ships its own pinned
+runtime.
 
-Verified 2026-09-03: **4/4 on `unsloth-4b`**, with the MLflow project also running.
-Verified 2026-08-27 on the pre-split suite: 6/6 on each of `lms`, `ollama` and
-`unsloth`, across both gateways.
+## Verified
 
-Two extra requirements for the Unsloth one, and both fail quietly:
+2026-09-04, `unsloth-4b`, all seven folders passing. Timings on this machine:
 
-1. **`UNSLOTH_API_KEY` must be in the shell** that ran `docker compose up -d`, or
+| Folder | Seconds, warm |
+|:--|--:|
+| `1_http_client` | 0.2 |
+| `2_openai_client` | 4 |
+| `3_langchain_langgraph` | 1.5 |
+| `4_deepagents` | 15-60 — SEVEN scenarios |
+| `5_claude_agent_sdk` | 40-120 — SEVEN scenarios, each spawning the `claude` CLI |
+| `6_codex_sdk` | 20-50 — FOUR scenarios, Codex sends a large harness per turn |
+| `7_opencode_sdk` | 15-60 — FIVE scenarios, each spawns an `opencode` server |
+
+> **These are wall-clock seconds for the whole folder, warm** — one process, its
+> imports, and every model call it makes. **They are not a gateway benchmark, and
+> they cannot be compared with the sibling suite's numbers.** Both gateways proxy
+> the *same* engine, and measured round-robin on 2026-09-04 the request itself took
+> 0.08 s on LiteLLM and 0.32 s on Envoy at the median — tens of milliseconds
+> apart. What moves a folder's number is the
+> engine's warm/cold state, how many calls the folder makes, and whether it spawns
+> an external CLI. Never which proxy is in front.
+>
+> A folder's **first** run in a session also builds its venv, and the first call
+> after the engine loads a model pays for the load. Both add tens of seconds and
+> neither repeats. Compare a folder against itself, warm — not against a sibling.
+
+`2_openai_client` is four scripts in four processes; `5_claude_agent_sdk` spawns the
+`claude` CLI once per demo. Every other row is one process and one or two calls.
+
+Two extra requirements when `GATEWAY_ENGINE=unsloth`, and both fail quietly:
+
+1. **`UNSLOTH_API_KEY` must be in the shell** that ran `podman compose up -d`, or
    every `unsloth-*` route 401s at call time.
 2. **`Settings → API → Model auto-switch` must be on**, or the first call returns
-   `400 No model loaded`. With it on, the first call unloads whatever was there and
-   reads the new weights from disk, which shows up as one slow row and then nothing.
-   Note that this covers the embedder too: `unsloth-embed` and `unsloth-4b` evict
-   each other — and so does the MLflow project, if it is up on the same engine.
-
-## `test_image.png`
-
-256x256, one red circle on a white background, 977 bytes. Deliberately
-unambiguous so `03_multimodal.py` can check for `red` and for a round shape
-without depending on how wordy the model is.
-
-## Adding a test
-
-Name it `05_something.py`, write one `scenario(gateway, model)` function, and end
-it with `sys.exit(run(scenario, "Test 5 — ..."))`. `run_all.py` globs `NN_*.py`,
-so it picks the new file up with no edit.
-
-**Send `**gateway.body_extras` in every request**, even though it is empty here.
-The parameter is what keeps a scenario from reaching into the gateway object for
-anything else, and it is what lets the same scenario file be copied to the MLflow
-project unchanged.
+   `400 No model loaded`. Unsloth holds **one model at a time**, so more than one
+   gateway on `unsloth` will thrash it — run one suite at a time.
 
 ## What is NOT tested here
 
-- **`/v1/messages`**, the Anthropic route. The OpenAI client cannot speak it.
-  [`../README.md`](../README.md) covers driving it from Claude Code.
 - **Embeddings.** Every `*-embed` alias needs a different route from the chat one
-  these scripts share.
-- **Fallback chains.** No alias has one, so there is nothing to prove.
+  these folders share.
 - **Budgets and virtual keys.** [`../README.md`](../README.md) has the `curl`.
-- **That the same alias answers on 25000.** See the note at the top — no suite
-  checks this any more.
+- **MCP**, in any folder.
+- **That the same alias answers on 26000.** See the note above.

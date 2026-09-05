@@ -1,10 +1,14 @@
 [project]
-name = "ai-gateway-tests"
+name = "envoy-tests"
 version = "0.1.0"
-description = "Scripts that drive both gateways through the OpenAI client"
+description = "The runner that drives every folder here against the Envoy gateway"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "openai>=2.20.0",
-    "python-dotenv>=1.0.1",
-]
+# EMPTY, AND IT MUST STAY EMPTY. This project exists only so `uv run run_all.py`
+# works from this directory. The runner shells out to `uv run --directory <folder>`
+# for each folder, and every real dependency lives in that folder's own
+# pyproject.toml — see README.md § Seven folders, seven projects.
+dependencies = []
+
+[tool.uv]
+package = false

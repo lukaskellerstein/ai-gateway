@@ -8,8 +8,7 @@
 #
 # SEND `max_completion_tokens`, NOT `max_tokens`. The gpt-5 family rejects
 # `max_tokens` outright. ../../litellm translates one to the other; this gateway
-# forwards the parameter as sent, so the same body that works on 24000 400s here
-# — the same trap the MLflow gateway has.
+# forwards the parameter as sent, so the same body that works on 24000 400s here.
 #
 # `openai-mini` HAS NO VISION, so it is not a drop-in for the local chat aliases:
 # ../tests/03_multimodal.py cannot pass against it, and `common.py` maps this
@@ -135,6 +134,37 @@ spec:
       backendRefs:
         - name: openai
           modelNameOverride: text-embedding-3-small
+      timeouts:
+        request: 10m
+    # ── The `-anthropic` alias: TRANSLATED, and here that is the ONLY option ──
+    #
+    # IT POINTS AT THE SAME `openai` BACKEND as the plain alias above, and there is
+    # no second `AIServiceBackend` beside it. That is the whole difference from the
+    # three local engines, and the reason is upstream: api.openai.com does not serve
+    # `POST /v1/messages` at all, so there is nothing to pass through TO. The route
+    # takes Anthropic in — the input schema comes from the PATH — and Envoy
+    # translates it onto the OpenAI schema this backend declares.
+    #
+    # THE LOCAL ENGINES NEED A PASS-THROUGH AND THIS DOES NOT. There the translated
+    # path fails on turn two: it passes `thinking` blocks straight into an OpenAI
+    # body, where a `content` part may only be `text` or `image_url`, and the ENGINE
+    # answers `400 messages.N.content.str`. OpenAI's own API accepts what Envoy
+    # produces. Verified 2026-09-05, before this rule existed: a one-shot call to
+    # /anthropic/v1/messages on the PLAIN `openai-mini` returned a normal Anthropic
+    # message, and `max_tokens` was translated correctly on the way through.
+    #
+    # SO WHY A SECOND NAME AT ALL? Because `tests/5_claude_agent_sdk` resolves
+    # `<alias>-anthropic` at runtime and refuses to run without it. Keeping the name
+    # means the folder needs no per-engine special case — the alias is one model on
+    # one backend either way, exactly as `modelNameOverride` says.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-mini-anthropic
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-5.4-mini
       timeouts:
         request: 10m
   # What lands in the access log above. Without these the token fields are empty.

@@ -1,11 +1,11 @@
-# envoy — the third gateway, on port 26000
+# envoy — the second gateway, on port 26000
 
 A standalone compose project. Run it from **this** directory; nothing above it is read, and
-nothing here reads `../litellm` or `../mlflow`.
+nothing here reads `../litellm`.
 
 ```bash
 cp .env.example .env      # edit GATEWAY_ENGINE if you do not run LMStudio
-docker compose up -d
+podman compose up -d
 
 curl -fsS http://localhost:26000/v1/models        # the alias list
 ```
@@ -17,21 +17,21 @@ This is [Envoy AI Gateway](https://aigateway.envoyproxy.io/docs) in **standalone
 Envoy Gateway install**. One stock image, one service, no database, no build step — the image
 ships the Envoy binary already downloaded.
 
-**The same alias names as `../litellm` and `../mlflow`.** The table of what they point at is
+**The same alias names as `../litellm`.** The table of what they point at is
 in [`../README.md`](../README.md).
 
 ## Why this one is here
 
-It is the only gateway of the three that is a **production proxy you could actually deploy**.
-The config below is the same Kubernetes custom-resource API the Envoy AI Gateway controller
-reads in a cluster — what is proven on this laptop is what would ship.
+It is the only gateway here that is a **production proxy you could actually deploy**. The
+config below is the same Kubernetes custom-resource API the Envoy AI Gateway controller reads
+in a cluster — what is proven on this laptop is what would ship.
 
-| It has | The other two do not |
+| It has | `../litellm` does not |
 |:--|:--|
-| **`/mcp`** — an MCP gateway that aggregates several MCP servers behind one endpoint, prefixes tool names by server, and can filter which tools are exposed | neither has anything like it |
-| **`/anthropic/v1/messages`** translated onto *any* OpenAI-compatible backend | LiteLLM has `/v1/messages`; MLflow has nothing |
-| **`:26064/metrics`** — Prometheus | neither |
-| **OpenTelemetry tracing** with OpenInference spans, into Arize Phoenix with one variable | neither |
+| **`/mcp`** — an MCP gateway that aggregates several MCP servers behind one endpoint, prefixes tool names by server, and can filter which tools are exposed | nothing like it |
+| **`/anthropic/v1/messages`** translated onto *any* OpenAI-compatible backend | it has `/v1/messages`, which is the same job done natively |
+| **`:26064/metrics`** — Prometheus | no |
+| **OpenTelemetry tracing** with OpenInference spans, into Arize Phoenix with one variable | no |
 
 **What it does not have, and cannot in standalone mode: virtual keys, budgets and spend
 logs.** `QuotaPolicy` and token rate limiting need Redis plus an Envoy Gateway install
@@ -80,7 +80,6 @@ carrying no `max_tokens`:
 | Gateway | finish_reason | completion tokens |
 |:--|:--|--:|
 | LiteLLM 24000 | `length` | 4095 — the route's stored `max_tokens: 4096` |
-| MLflow 25000 | `stop` | 13961 — nothing bounded it |
 | **Envoy 26000** | `stop` | **13946** — nothing bounded it |
 
 Get it wrong downwards and it is worse than slow: a reasoning model spends the whole allowance
@@ -159,7 +158,7 @@ encrypted store. See [`.env.example`](.env.example).
 
 **With `AIGW_DEBUG=false` you see nothing per-request.** Envoy runs as a child of aigw, and its
 stdout — where the JSON access log goes — lands in a file inside the container that no shell
-can reach, because the image is distroless. `docker compose logs envoy` shows only the startup
+can reach, because the image is distroless. `podman compose logs envoy` shows only the startup
 lines, however much traffic you send. Verified 2026-09-04, both ways round.
 
 Set it to `true` and you get one JSON line per request:
@@ -176,13 +175,12 @@ is also the reason not to leave it on.
 
 ## Auto-discovery
 
-**This project does not have it**, and that is a gap rather than a decision. `../litellm` and
-`../mlflow` each carry a copy of a prober that asks the engine what it holds and adds one alias
-per model. Adding it here needs two things neither of them needed:
+**This project does not have it**, and that is a gap rather than a decision. `../litellm`
+carries a prober that asks the engine what it holds and adds one alias per model. Adding it
+here needs two things that one did not:
 
-1. **A third renderer.** LiteLLM's copy emits YAML `model_list` entries and MLflow's emits
-   `Endpoint(...)` objects. This gateway needs `AIGatewayRoute` rules — a different shape
-   again.
+1. **Another renderer.** LiteLLM's copy emits YAML `model_list` entries. This gateway needs
+   `AIGatewayRoute` rules — a different shape entirely.
 2. **Somewhere to run it.** The aigw image is distroless: no shell, no Python. A discovery
    one-shot here means a fourth image in the stack purely to run a script.
 
@@ -193,22 +191,53 @@ configuring this gateway by hand.
 
 ```bash
 cd tests
-uv sync                                 # once
-uv run run_all.py                       # 4 rows against 26000
-uv run run_all.py --model lms-26b       # any alias
-uv run 02_tools_call.py                 # one script
+uv run run_all.py                       # 7 rows against 26000
+uv run run_all.py --only 6_codex_sdk    # one folder
+uv run run_all.py --model lms-26b       # any alias, everywhere
 ```
 
-It drives **this gateway only**. `04_gateway_contract.py` asserts the four claims
-`tests/common.py` makes about how to call it, and **this gateway is a third row, not a copy of
-either other one**: it lists its models like LiteLLM and checks no key like MLflow.
+`tests/` is **seven folders, one per way of calling this gateway**, ordered by distance from
+the wire. Each is its own uv project; `uv run --directory` builds whichever venv is missing,
+so a fresh clone needs no `uv sync`.
 
-| | LiteLLM | MLflow | **Envoy** |
-|:--|:--|:--|:--|
-| `checks_api_key` | True | False | **False** |
-| `lists_models` | True | False | **True** |
-| `echoes_alias` | True | False | **False** |
-| `exposes_route_limits` | True | False | **False** |
+| Folder | Reaches this gateway through |
+|:--|:--|
+| `1_http_client` | `urllib` — no dependencies at all |
+| `2_openai_client` | `openai` — 4 call kinds plus the contract test |
+| `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop built by hand |
+| `4_deepagents` | a deep agent. Seven scenarios: query, todos, filesystem, tools, MCP, subagent, skill |
+| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → **`/anthropic/v1/messages`**, on `<alias>-anthropic`. Seven scenarios: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
+| `6_codex_sdk` | a `model_providers` override → **`/v1/responses`** |
+| `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider |
+
+**All seven run here**, and all seven run on `../litellm` too.
+
+**The Claude Agent SDK folder needs the `-anthropic` pass-through alias, and refuses to run
+without it.** Measured 2026-09-04, and the reason is the engine rather than this gateway: on a
+plain alias `/anthropic/v1/messages` is TRANSLATED Anthropic → OpenAI, and the reply's own
+`thinking` blocks — which Envoy builds out of the engine's `reasoning_content` — go straight
+into the OpenAI body on the next turn. An OpenAI `content` part may only be `text` or
+`image_url`, so the ENGINE answers `400 messages.N.content.str`. The identical error comes
+back from Unsloth on port 8888 with no gateway in the path at all, and from LMStudio and
+Ollama too. It was intermittent — about 1 run in 5 — because the engine emits
+`reasoning_content` on some replies and not others.
+
+`<alias>-anthropic` reaches an `Anthropic`-schema `AIServiceBackend`, so the body goes
+upstream untranslated. **All three local engine configs now carry two of them**, because all
+three engines serve `POST /v1/messages` natively (verified 2026-09-04, 200 from each).
+`MAX_THINKING_TOKENS=0` used to be required here and no longer is. Full note:
+`tests/5_claude_agent_sdk/README.md`.
+
+It drives **this gateway only**. `2_openai_client/04_gateway_contract.py` asserts the four
+claims `common.py` makes about how to call it, and **this gateway is not a copy of the other
+one**: it lists its models like LiteLLM and checks no caller key at all.
+
+| | LiteLLM | **Envoy** |
+|:--|:--|:--|
+| `checks_api_key` | True | **False** |
+| `lists_models` | True | **True** |
+| `echoes_alias` | True | **False** |
+| `exposes_route_limits` | True | **False** |
 
 What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 
@@ -218,10 +247,10 @@ What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 |:--|:--|:--|
 | The container restarts in a loop, log says `--debug: bool value must be true, 1, yes, false, 0 or no but got ""` | `AIGW_DEBUG` is set to an empty string | set it to `false`, or remove the line |
 | `Connection reset by peer` right after `up -d` | the data plane needs a few seconds after the admin port answers | probe `26000/v1/models`, not `26064/health` |
-| The container restarts in a loop, log names a config file | `GATEWAY_ENGINE` is misspelled | `docker compose logs envoy` names the file it could not open |
+| The container restarts in a loop, log names a config file | `GATEWAY_ENGINE` is misspelled | `podman compose logs envoy` names the file it could not open |
 | An alias 404s | no `AIGatewayRoute` rule matches it — you are calling another engine's name, or it is not in this engine's config | `curl localhost:26000/v1/models` for the names this engine serves |
 | `openrouter-free` 404s | **by design** — this gateway has no `extra_body`, so it cannot carry the provider pin | use it on 24000 |
-| Nothing in `docker compose logs envoy` after a request | `AIGW_DEBUG` is `false` | set it to `true` and repeat the request |
+| Nothing in `podman compose logs envoy` after a request | `AIGW_DEBUG` is `false` | set it to `true` and repeat the request |
 | Every call 401s on `unsloth-*` | `UNSLOTH_API_KEY` was blank when `up -d` ran, so `${UNSLOTH_API_KEY}` substituted empty | export it, run `up -d` again |
 | A large prompt or a base64 image fails before reaching the model | the `ClientTrafficPolicy` buffer limit was removed or lowered | it must stay at `50Mi`; Envoy's default 32 KiB is too small |
 | An unbounded reply that runs for minutes | you sent no `max_tokens` | [always send one](#always-send-max_tokens) |
@@ -237,7 +266,17 @@ envoy/
 ├── config/                 mounted at /etc/aigw, read-only
 │   └── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
 │                                Kubernetes custom resources, ~230 lines each
-└── tests/                  a uv project: 3 call kinds + the contract test
+└── tests/                  SEVEN folders, one per way of calling this gateway
+    ├── gateway.py              base URL · key · alias, shared by all seven. stdlib only
+    ├── run_all.py              runs every folder, one row each
+    ├── 1_http_client/          urllib, NO dependencies
+    ├── 2_openai_client/        openai — 4 call kinds + the contract test
+    ├── 3_langchain_langgraph/  LangChain's agent, and the same loop by hand
+    ├── 4_deepagents/           a deep agent. SEVEN scenarios + its own run_all.py
+    ├── 5_claude_agent_sdk/     the ANTHROPIC surface, /anthropic/v1/messages.
+    │                            SEVEN scenarios + its own run_all.py
+    ├── 6_codex_sdk/            the RESPONSES surface, /v1/responses
+    └── 7_opencode_sdk/         an openai-compatible provider over the HTTP server API
 ```
 
 **The mount is `/etc/aigw` and not `/app`.** `/app` *is* the binary in this image — the
