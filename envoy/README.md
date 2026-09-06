@@ -4,7 +4,7 @@ A standalone compose project. Run it from **this** directory; nothing above it i
 nothing here reads `../litellm`.
 
 ```bash
-cp .env.example .env      # edit GATEWAY_ENGINE if you do not run LMStudio
+cp .env.example .env      # the default serves EVERY engine at once
 podman compose up -d
 
 curl -fsS http://localhost:26000/v1/models        # the alias list
@@ -89,7 +89,9 @@ Keep the ceiling generous.
 ## Its config is Kubernetes custom resources
 
 `config/<engine>.yaml` is one self-contained document per engine, and it is the same API a
-cluster would read. Seven resource kinds, every one load-bearing:
+cluster would read. `config/all.yaml` is those five merged into one — see
+[One file per engine, and one that holds them all](#one-file-per-engine-and-one-that-holds-them-all)
+below. Seven resource kinds, every one load-bearing:
 
 | Resource | Does |
 |:--|:--|
@@ -118,8 +120,9 @@ and rewrites it on the way out:
     request: 60m
 ```
 
-An alias with no rule matches nothing and gets **404** (verified 2026-09-04), which is what
-every other engine's names correctly do here.
+An alias with no rule matches nothing and gets **404** (verified 2026-09-04). Under
+`config/all.yaml` that means a genuine typo; under a single engine's file it usually means
+another engine's name, which is correct.
 
 Three numbers differ from upstream's own example, and each has a reason in the file:
 
@@ -136,12 +139,12 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=ollama
+GATEWAY_ENGINE=all        # the default: every engine at once, 20 route rules
 ```
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `lms` | **which engine this gateway serves** — one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list. It is this project's alone: the other two have their own, and nothing checks that they agree |
+| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../litellm` has its own, and nothing checks that they agree |
 | `AIGW_DEBUG` | `false` | per-request logging. **Never leave it empty** — aigw parses it as a bool and crash-loops on `""` before reading any config. See below |
 | `UNSLOTH_API_KEY` | *(blank)* | **required** by every `unsloth-*` alias. Blank substitutes empty and every call 401s at request time |
 | `OPENROUTER_API_KEY` | *(blank)* | every `openrouter-*` alias. **Real spend** |
@@ -173,19 +176,64 @@ Set it to `true` and you get one JSON line per request:
 Authorization header redacted. That is this gateway's equivalent of LiteLLM's Logs tab, and it
 is also the reason not to leave it on.
 
-## Auto-discovery
+## One file per engine, and one that holds them all
 
-**This project does not have it**, and that is a gap rather than a decision. `../litellm`
-carries a prober that asks the engine what it holds and adds one alias per model. Adding it
-here needs two things that one did not:
+`config/` carries six files. Five are one engine each; `all.yaml` is the default and holds
+every one of them.
 
-1. **Another renderer.** LiteLLM's copy emits YAML `model_list` entries. This gateway needs
-   `AIGatewayRoute` rules — a different shape entirely.
+| `GATEWAY_ENGINE` | Reads | Serves |
+|:--|:--|:--|
+| `all` *(default)* | `config/all.yaml` | **20 route rules** — 12 model aliases and 8 `-anthropic` pass-through aliases |
+| `lms` `unsloth` `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
+| `openrouter` `openai` | that engine's file | 1–2 aliases, **paid** |
+
+**`all.yaml` copies the other five, and that is the price of this gateway.** `aigw run` takes
+**one file path** — not a directory, not a repeated flag; checked against `aigw run --help` on
+2026-09-06 — and Envoy's config has no `include:` mechanism the way LiteLLM's does. So where
+`../litellm/config/all.yaml` is six include lines that copy nothing, this one carries the rules
+and the backends themselves.
+
+**So an alias is three edits, not two:**
+
+1. `../litellm/config/<engine>.yaml` — the other gateway's list
+2. `config/<engine>.yaml` — this gateway, one engine at a time
+3. `config/all.yaml` — this gateway, the default
+
+**Nothing checks that you did all three.** Miss step 3 and the alias answers when `.env` names
+its engine and 404s on the default config, with nothing in any log to say why. The five
+per-engine files stay the place the comments and the reasoning live; `all.yaml` is where they
+are assembled, so copy a rule across rather than writing a new one there.
+
+What the merge did, for anyone diffing it: four resources are identical in all five engine
+files — `GatewayClass`, `Gateway`, `EnvoyProxy` and `ClientTrafficPolicy` — so they appear once,
+taken from `lms.yaml` because it carries the fullest comments. Each engine keeps its **own**
+`AIGatewayRoute`, renamed `aigw-run-<engine>`, all five attached to the same `Gateway`.
+Everything else is already named per engine and needed no change.
+
+> **An `AIGatewayRoute` holds at most 15 aliases, and this is a hard upstream limit.** It
+> becomes a Gateway API `HTTPRoute`, whose `spec.rules` the CRD caps at **16 items**; aigw adds
+> one rule of its own. Merging all five engines into a single route produced 21 and aigw
+> **crash-looped before serving anything**, measured 2026-09-06:
+>
+> ```
+> HTTPRoute "aigw-run" is invalid: spec.rules: Too many: 21: must have at most 16 items
+> ```
+>
+> Hence five routes. **Watch that ceiling per route, not in total** — five engines at 15 aliases
+> each is fine; one engine at 16 is not.
+
+### There is no auto-discovery, here or in `../litellm`
+
+This project never had it. Adding it needs two things:
+
+1. **A renderer for this shape.** `AIGatewayRoute` rules, not a YAML `model_list`.
 2. **Somewhere to run it.** The aigw image is distroless: no shell, no Python. A discovery
-   one-shot here means a fourth image in the stack purely to run a script.
+   one-shot here means a second image in the stack purely to run a script.
 
-Until then, `config/<engine>.yaml` is the whole vocabulary, and it is the worked example of
-configuring this gateway by hand.
+`../litellm` did have it — a `discover` service that asked a local engine what it held on disk
+and generated an alias list — and it was **removed on 2026-09-06**, along with the only Python
+in the repo. Every alias in both gateways is now hand-written. See
+[`../litellm/README.md`](../litellm/README.md) § Every alias is hand-written.
 
 ## Tests
 
@@ -264,8 +312,9 @@ envoy/
 ├── compose.yml             ONE service. name: ai-gateway-envoy
 ├── .env.example            tracked; the key lines are blank BY DESIGN
 ├── config/                 mounted at /etc/aigw, read-only
-│   └── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
-│                                Kubernetes custom resources, ~230 lines each
+│   ├── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
+│   │                            Kubernetes custom resources, ~300 lines each
+│   └── all.yaml                THE DEFAULT. All five merged — it COPIES them
 └── tests/                  SEVEN folders, one per way of calling this gateway
     ├── gateway.py              base URL · key · alias, shared by all seven. stdlib only
     ├── run_all.py              runs every folder, one row each
@@ -283,4 +332,4 @@ envoy/
 Dockerfile copies the CLI there and sets it as the entrypoint — so mounting a directory over it
 replaces the program with a folder.
 
-There is no `discover/` here; see [Auto-discovery](#auto-discovery) above.
+There is no `discover/` here, and none in `../litellm` either since 2026-09-06.

@@ -1,0 +1,1127 @@
+# EVERY ENGINE AT ONCE — the default config, and what this gateway serves unless
+# .env names a single engine instead.
+#
+# 20 ROUTE RULES: 12 model aliases and 8 `-anthropic` pass-through aliases.
+#
+#   lms-4b        lms-26b        lms-embed          LMStudio        free
+#   unsloth-4b    unsloth-26b    unsloth-embed      Unsloth Studio  free
+#   ollama-4b     ollama-26b     ollama-embed       Ollama          free
+#   openrouter-26b                                  OpenRouter      PAID
+#   openai-mini   openai-embed                      OpenAI          PAID
+#
+# `openrouter-free` IS DELIBERATELY ABSENT, here as in openrouter.yaml. That route
+# needs a provider pin sent as a vendor-specific object in the request body, and
+# this gateway has no equivalent of LiteLLM's `extra_body`. An unpinned copy would
+# return tool calls as raw text — an agent that executes nothing and reports no
+# error. It is the one alias where "the config is incomplete" is the wrong
+# diagnosis.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# FIVE AIGatewayRoutes, NOT ONE, AND THAT IS A HARD UPSTREAM LIMIT.
+#
+# An AIGatewayRoute becomes a Gateway API `HTTPRoute`, and `HTTPRoute.spec.rules`
+# is capped at **16 items** by the Gateway API CRD itself. aigw adds one rule of
+# its own, so ONE route carries at most 15 aliases. Merging all five engines into
+# a single `aigw-run` route produced 21 and aigw CRASH-LOOPED, before serving
+# anything, on:
+#
+#   HTTPRoute "aigw-run" is invalid: spec.rules: Too many: 21: must have at
+#   most 16 items
+#
+# Measured 2026-09-06. So each engine keeps its OWN route — `aigw-run-<engine>` —
+# and all five attach to the same Gateway through `parentRefs`. Several HTTPRoutes
+# on one Gateway is ordinary Gateway API, every match here is an exact header
+# value, and all 20 values are distinct, so nothing is ambiguous.
+#
+# IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Five engines at
+# 15 aliases each is fine; one engine at 16 is not.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS A COPY OF THE OTHER FIVE, AND THAT IS THE PRICE OF ENVOY.
+#
+# `aigw run` takes ONE file path. Not a directory, not a repeated flag — checked
+# against `aigw run --help`, 2026-09-06 — and Envoy's config has no `include:`
+# mechanism the way LiteLLM's does. So where ../../litellm/config/all.yaml is six
+# include lines that copy nothing, this file has to carry the rules and backends
+# themselves.
+#
+# SO AN ALIAS IS THREE EDITS, NOT TWO:
+#
+#   1. ../../litellm/config/<engine>.yaml    the other gateway's list
+#   2. config/<engine>.yaml                  this gateway, one engine at a time
+#   3. THIS FILE                             this gateway, the default
+#
+# NOTHING CHECKS THAT YOU DID ALL THREE. Miss step 3 and the alias answers when
+# .env names its engine and 404s on the default config, with nothing in any log to
+# say why. The five per-engine files stay the place the comments and the reasoning
+# live; this file is where they are assembled, so copy a rule across rather than
+# writing a new one here.
+#
+# WHAT WAS MERGED, AND HOW. Four resources are identical in all five engine files
+# — GatewayClass, Gateway, EnvoyProxy and ClientTrafficPolicy — so they appear once
+# below, taken from lms.yaml because it carries the fullest comments. Each engine's
+# AIGatewayRoute is carried over whole with only its `metadata.name` changed.
+# Everything else — Backend, AIServiceBackend, Secret, BackendSecurityPolicy,
+# BackendTLSPolicy — is already named per engine and needed no change at all.
+#
+# BRINGING THE PAID ENGINES UP COSTS NOTHING. A route that exists is not a route
+# that was called, no rule falls back to another, and a missing key substitutes
+# EMPTY and fails at call time with the provider's own 401. For a gateway that
+# cannot spend at all, put one free engine in .env: `GATEWAY_ENGINE=lms`.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      # 1975 INSIDE the container; compose publishes it on 26000. Changing this
+      # number means changing compose.yml's port mapping too.
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      # `error` keeps the container log to access lines plus real failures. Raise
+      # to `debug` and Envoy dumps request headers — INCLUDING the Authorization
+      # header the extproc injects with the backend key. Upstream's own template
+      # pins http and ext_proc back to `info` for exactly that reason.
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        # One JSON line per LLM request, carrying TOKEN COUNTS AND TIMINGS ONLY —
+        # never the prompt or the response.
+        #
+        # IT ONLY REACHES `compose logs` WHEN AIGW_DEBUG=true. Envoy runs as a
+        # child of aigw, and with debug off its stdout goes to a file inside the
+        # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
+        # can reach — the image is distroless. Verified 2026-09-04: a call with
+        # AIGW_DEBUG unset logged nothing; the same call with it true logged
+        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        #
+        # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
+        # and replies included, with only the Authorization header redacted. That
+        # is the closest thing here to LiteLLM's Logs tab, and the reason not to
+        # leave it on.
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              # These dynamic-metadata keys must match the llmRequestCosts names
+              # declared on the AIGatewayRoute below, or they log as empty.
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              request.path: "%REQ(:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# LMSTUDIO — free, native on the host, port 1234.
+# Copied from config/lms.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-lms
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, and the alias is matched EXACTLY on the
+  # `x-ai-eg-model` header — which the gateway fills in from the request body's
+  # `model` field before routing. `modelNameOverride` is then what actually goes
+  # upstream, so the caller says `lms-4b` and LMStudio sees `google/gemma-4-e4b`.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404, which is what every other
+  # engine's names do here — correctly, because one engine runs at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-4b
+      backendRefs:
+        - name: lms
+          modelNameOverride: google/gemma-4-e4b
+      timeouts:
+        # 60 MINUTES, NOT THE 120s UPSTREAM'S EXAMPLE USES. Prompt processing
+        # measures ~100 tok/s on this machine, so an agent-scale prompt needs
+        # 5-15 minutes before its first token. This is the same fact that puts
+        # `timeout: 3600` on every local route in ../../litellm/config/.
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-26b
+      backendRefs:
+        - name: lms
+          modelNameOverride: google/gemma-4-26b-a4b-qat
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-embed
+      backendRefs:
+        - name: lms
+          modelNameOverride: text-embedding-nomic-embed-text-v1.5
+      timeouts:
+        request: 60m
+    # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
+    #
+    # THESE EXIST FOR CLAUDE CODE, AND ONLY AN AGENT NEEDS THEM. The plain aliases
+    # above reach `lms`, whose schema is `OpenAI`, so a call to
+    # /anthropic/v1/messages is TRANSLATED Anthropic -> OpenAI on the way in. That
+    # translation passes `thinking` blocks straight through into the OpenAI body —
+    # and an OpenAI `content` part may only be `text` or `image_url`, so the ENGINE
+    # rejects it:
+    #     400 messages.N.content.str: Input should be a valid string
+    # Envoy builds those blocks itself, out of the engine's `reasoning_content`, so
+    # a one-shot works and an agent turn cannot: Claude Code sends the assistant's
+    # previous reply back and the engine refuses its own words. Measured direct on
+    # the engine, no gateway in the path, 2026-09-04 — byte-identical error.
+    #
+    # These rules reach `lms-anthropic` instead, whose schema is `Anthropic`,
+    # so the body goes upstream UNTRANSLATED. LMStudio serves POST /v1/messages itself
+    # — verified 2026-09-04, 200 with a `thinking` block in the history — so there
+    # is nothing to bridge.
+    #
+    # A SECOND ALIAS IS THE ONLY WAY TO SAY IT. An AIGatewayRoute rule matches on
+    # HEADERS ALONE (`AIGatewayRouteRuleMatch` has no path field), and the header
+    # it matches is the body's `model`. So the protocol has to be chosen by the
+    # name the caller asks for. `modelNameOverride` sends the engine its own id
+    # either way, so the two aliases are one model on one engine.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-4b-anthropic
+      backendRefs:
+        - name: lms-anthropic
+          modelNameOverride: google/gemma-4-e4b
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-26b-anthropic
+      backendRefs:
+        - name: lms-anthropic
+          modelNameOverride: google/gemma-4-26b-a4b-qat
+      timeouts:
+        request: 60m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# UNSLOTH STUDIO — free, native on the host, port 8888. NEEDS UNSLOTH_API_KEY.
+# Copied from config/unsloth.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-unsloth
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-4b
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-26b
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-embed
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
+      timeouts:
+        request: 60m
+    # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
+    #
+    # THESE EXIST FOR CLAUDE CODE, AND ONLY AN AGENT NEEDS THEM. The plain
+    # aliases above reach `unsloth`, whose schema is `OpenAI`, so a call to
+    # /anthropic/v1/messages is TRANSLATED Anthropic -> OpenAI on the way in. That
+    # translation carries text, images, tool_use and tool_result — and it passes
+    # `thinking` blocks STRAIGHT INTO the OpenAI body, where an OpenAI `content`
+    # part may only be `text` or `image_url`. Envoy builds those blocks itself,
+    # out of the engine's `reasoning_content`.
+    #
+    # So a one-shot call works and an agent turn cannot: Claude Code sends the
+    # assistant's previous reply back on turn two, thinking block and all, and
+    # the ENGINE answers
+    #     400 messages.N.content.str: Input should be a valid string
+    # which reads like "content must be a string" and means "no branch of the
+    # content union matched".
+    #
+    # IT IS NOT THE GATEWAY'S BUG. The identical error comes back from Unsloth on
+    # port 8888 with no gateway in the path at all, and from LMStudio and Ollama
+    # too — measured 2026-09-04. It was INTERMITTENT, about 1 run in 5, because
+    # the engine emits `reasoning_content` on some replies and not others.
+    #
+    # These rules reach `unsloth-anthropic` instead, whose schema is `Anthropic`,
+    # so the body goes upstream UNTRANSLATED. Unsloth speaks Anthropic Messages
+    # natively on /v1/messages and accepts both the thinking blocks and
+    # `thinking: {"type": "adaptive"}` that Claude Code sends — verified against
+    # the engine directly on 2026-09-04, before this was configured.
+    #
+    # A SECOND ALIAS IS THE ONLY WAY TO SAY IT. An AIGatewayRoute rule matches on
+    # HEADERS ALONE (`AIGatewayRouteRuleMatch` has no path field), and the header
+    # it matches is the body's `model`. So the protocol has to be chosen by the
+    # name the caller asks for. `modelNameOverride` sends the engine its own id
+    # either way, so the two aliases are one model on one engine.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-26b-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-4b-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# OLLAMA — free, native on the host, port 11434.
+# Copied from config/ollama.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-ollama
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-4b
+      backendRefs:
+        - name: ollama
+          modelNameOverride: gemma4:e4b
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-26b
+      backendRefs:
+        - name: ollama
+          modelNameOverride: gemma4:26b
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-embed
+      backendRefs:
+        - name: ollama
+          modelNameOverride: nomic-embed-text
+      timeouts:
+        request: 60m
+    # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
+    #
+    # THESE EXIST FOR CLAUDE CODE, AND ONLY AN AGENT NEEDS THEM. The plain aliases
+    # above reach `ollama`, whose schema is `OpenAI`, so a call to
+    # /anthropic/v1/messages is TRANSLATED Anthropic -> OpenAI on the way in. That
+    # translation passes `thinking` blocks straight through into the OpenAI body —
+    # and an OpenAI `content` part may only be `text` or `image_url`, so the ENGINE
+    # rejects it:
+    #     400 messages.N.content.str: Input should be a valid string
+    # Envoy builds those blocks itself, out of the engine's `reasoning_content`, so
+    # a one-shot works and an agent turn cannot: Claude Code sends the assistant's
+    # previous reply back and the engine refuses its own words. Measured direct on
+    # the engine, no gateway in the path, 2026-09-04 — byte-identical error.
+    #
+    # These rules reach `ollama-anthropic` instead, whose schema is `Anthropic`,
+    # so the body goes upstream UNTRANSLATED. Ollama serves POST /v1/messages itself
+    # — verified 2026-09-04, 200 with a full Anthropic response body — so there is
+    # nothing to bridge.
+    #
+    # A SECOND ALIAS IS THE ONLY WAY TO SAY IT. An AIGatewayRoute rule matches on
+    # HEADERS ALONE (`AIGatewayRouteRuleMatch` has no path field), and the header
+    # it matches is the body's `model`. So the protocol has to be chosen by the
+    # name the caller asks for. `modelNameOverride` sends the engine its own id
+    # either way, so the two aliases are one model on one engine.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-4b-anthropic
+      backendRefs:
+        - name: ollama-anthropic
+          modelNameOverride: gemma4:e4b
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: ollama-26b-anthropic
+      backendRefs:
+        - name: ollama-anthropic
+          modelNameOverride: gemma4:26b
+      timeouts:
+        request: 60m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# OPENROUTER — PAID — a completion here bills a real account.
+# Copied from config/openrouter.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-openrouter
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openrouter-26b
+      backendRefs:
+        - name: openrouter
+          modelNameOverride: google/gemma-4-26b-a4b-it
+      timeouts:
+        request: 10m
+    # ── The `-anthropic` alias: PASS-THROUGH, because OpenRouter serves it ────
+    #
+    # OPENROUTER SPEAKS THE ANTHROPIC MESSAGES API NATIVELY, at
+    # `POST /api/v1/messages` — it calls it the "Anthropic skin", and it carries
+    # thinking blocks, tool use, streaming and multi-turn context the way Anthropic
+    # does. So this alias gets the SAME treatment as the three local engines: a
+    # second `AIServiceBackend` whose schema is `Anthropic`, reached through the
+    # same `Backend`, with the body going upstream UNTRANSLATED.
+    #
+    # It is the better of the two shapes and it is not always available — the
+    # `openai-mini-anthropic` rule in openai.yaml has to translate instead, because
+    # api.openai.com serves no Anthropic route at all. Both satisfy
+    # `tests/5_claude_agent_sdk`, which resolves `<alias>-anthropic` at runtime.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openrouter-26b-anthropic
+      backendRefs:
+        - name: openrouter-anthropic
+          modelNameOverride: google/gemma-4-26b-a4b-it
+      timeouts:
+        request: 10m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# OPENAI — PAID — a completion here bills a real account.
+# Copied from config/openai.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-openai
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-mini
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-5.4-mini
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-embed
+      backendRefs:
+        - name: openai
+          modelNameOverride: text-embedding-3-small
+      timeouts:
+        request: 10m
+    # ── The `-anthropic` alias: TRANSLATED, and here that is the ONLY option ──
+    #
+    # IT POINTS AT THE SAME `openai` BACKEND as the plain alias above, and there is
+    # no second `AIServiceBackend` beside it. That is the whole difference from the
+    # three local engines, and the reason is upstream: api.openai.com does not serve
+    # `POST /v1/messages` at all, so there is nothing to pass through TO. The route
+    # takes Anthropic in — the input schema comes from the PATH — and Envoy
+    # translates it onto the OpenAI schema this backend declares.
+    #
+    # THE LOCAL ENGINES NEED A PASS-THROUGH AND THIS DOES NOT. There the translated
+    # path fails on turn two: it passes `thinking` blocks straight into an OpenAI
+    # body, where a `content` part may only be `text` or `image_url`, and the ENGINE
+    # answers `400 messages.N.content.str`. OpenAI's own API accepts what Envoy
+    # produces. Verified 2026-09-05, before this rule existed: a one-shot call to
+    # /anthropic/v1/messages on the PLAIN `openai-mini` returned a normal Anthropic
+    # message, and `max_tokens` was translated correctly on the way through.
+    #
+    # SO WHY A SECOND NAME AT ALL? Because `tests/5_claude_agent_sdk` resolves
+    # `<alias>-anthropic` at runtime and refuses to run without it. Keeping the name
+    # means the folder needs no per-engine special case — the alias is one model on
+    # one backend either way, exactly as `modelNameOverride` says.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-mini-anthropic
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-5.4-mini
+      timeouts:
+        request: 10m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    # ENVOY'S DEFAULT IS 32 KiB AND THAT IS TOO SMALL FOR AI TRAFFIC. A base64
+    # image or a long agent transcript exceeds it and the request fails before it
+    # reaches the model. Upstream ships this same 50Mi policy in its own example.
+    bufferLimit: 50Mi
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: lms
+  namespace: default
+spec:
+  endpoints:
+    # LMStudio runs NATIVELY on the host for the GPU and binds 127.0.0.1 only.
+    # compose.yml maps host.docker.internal to the host gateway so this resolves.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has no
+    # equivalent of ../../litellm's LM_STUDIO_API_BASE: there is no URL to put in
+    # one variable. Change the port here.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 1234
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: lms
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have to
+    # be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 60m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. LMStudio speaks it, so no translation
+    # happens — the request is forwarded as sent, with the model name rewritten.
+    name: OpenAI
+  backendRef:
+    name: lms
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+# THE SAME ENGINE, ADDRESSED IN ITS OWN PROTOCOL.
+#
+# One `Backend` — the endpoint above — can carry several `AIServiceBackend`s, and
+# the schema is what each one MEANS by the bytes it forwards. This one says
+# `Anthropic`, so /anthropic/v1/messages goes upstream as it arrived, and the
+# `-anthropic` aliases in the route above are what select it.
+#
+# THE POINT IS WHAT DOES NOT HAPPEN HERE. No translation means no block can be
+# reshaped in translation, which is the whole reason Claude Code could not hold a
+# conversation through the OpenAI-schema backend — see the long note on those
+# rules. tests/5_claude_agent_sdk REFUSES TO RUN without this alias.
+#
+# It needs no `prefix`: Anthropic's own paths already start /v1.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: lms-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 60m
+  schema:
+    name: Anthropic
+  backendRef:
+    name: lms
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lms-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # LMStudio accepts ANY string and never checks it, so this is a literal rather
+  # than a ${VAR}. Ollama is the same; Unsloth needs a real key.
+  apiKey: sk-lmstudio
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: lms-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: lms
+    # BOTH BACKENDS, or the `-anthropic` aliases 401 on every call. The policy
+    # attaches to an AIServiceBackend and not to the `Backend` they share, so a
+    # second backend over the same endpoint needs naming here too.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: lms-anthropic
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: lms-apikey
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: unsloth
+  namespace: default
+spec:
+  endpoints:
+    # Unsloth Studio runs NATIVELY on the host for the GPU and binds 127.0.0.1 only.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 8888
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: unsloth
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 60m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
+    name: OpenAI
+  backendRef:
+    name: unsloth
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+# THE SAME ENGINE, ADDRESSED IN ITS OWN PROTOCOL.
+#
+# One `Backend` — the endpoint above — can carry several `AIServiceBackend`s, and
+# the schema is what each one MEANS by the bytes it forwards. This one says
+# `Anthropic`, so /anthropic/v1/messages goes upstream as it arrived, and the
+# `-anthropic` aliases in the route above are what select it.
+#
+# THE POINT IS WHAT DOES NOT HAPPEN HERE. No translation means no field can be
+# dropped in translation, which is the whole reason Claude Code could not hold a
+# conversation through the OpenAI-schema backend — see the long note on those
+# rules. Unsloth serves /v1/messages itself, so there is nothing to bridge.
+#
+# It needs no `prefix`: Anthropic's own paths already start /v1.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: unsloth-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 60m
+  schema:
+    name: Anthropic
+  backendRef:
+    name: unsloth
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unsloth-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. Unsloth 401s every route without it.
+  apiKey: ${UNSLOTH_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: unsloth-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: unsloth
+    # BOTH BACKENDS, or the `-anthropic` aliases 401 on every call. The policy
+    # attaches to an AIServiceBackend and not to the `Backend` they share, so a
+    # second backend over the same endpoint needs naming here too.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: unsloth-anthropic
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: unsloth-apikey
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: ollama
+  namespace: default
+spec:
+  endpoints:
+    # Ollama runs NATIVELY on the host for the GPU and binds 127.0.0.1 only.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 11434
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: ollama
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 60m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
+    name: OpenAI
+  backendRef:
+    name: ollama
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+# THE SAME ENGINE, ADDRESSED IN ITS OWN PROTOCOL.
+#
+# One `Backend` — the endpoint above — can carry several `AIServiceBackend`s, and
+# the schema is what each one MEANS by the bytes it forwards. This one says
+# `Anthropic`, so /anthropic/v1/messages goes upstream as it arrived, and the
+# `-anthropic` aliases in the route above are what select it.
+#
+# THE POINT IS WHAT DOES NOT HAPPEN HERE. No translation means no block can be
+# reshaped in translation, which is the whole reason Claude Code could not hold a
+# conversation through the OpenAI-schema backend — see the long note on those
+# rules. tests/5_claude_agent_sdk REFUSES TO RUN without this alias.
+#
+# It needs no `prefix`: Anthropic's own paths already start /v1.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: ollama-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 60m
+  schema:
+    name: Anthropic
+  backendRef:
+    name: ollama
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ollama-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # A LITERAL: Ollama does not read the Authorization header at all.
+  # The route needs some key string, and this is it.
+  apiKey: sk-ollama
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: ollama-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: ollama
+    # BOTH BACKENDS, or the `-anthropic` aliases 401 on every call. The policy
+    # attaches to an AIServiceBackend and not to the `Backend` they share, so a
+    # second backend over the same endpoint needs naming here too.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: ollama-anthropic
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: ollama-apikey
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: openrouter
+  namespace: default
+spec:
+  endpoints:
+    # OpenRouter, over the public internet. TLS, so a BackendTLSPolicy below.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: openrouter.ai
+        port: 443
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openrouter
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 10m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
+    name: OpenAI
+    # The backend serves the OpenAI API under this path, not at the root.
+    prefix: /api/v1
+  backendRef:
+    name: openrouter
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openrouter-anthropic
+  namespace: default
+spec:
+  timeouts:
+    request: 10m
+  schema:
+    # ONE `Backend` CARRIES BOTH OF THESE. The schema is what each one MEANS by the
+    # bytes it forwards: `Anthropic` here, so /anthropic/v1/messages goes upstream as
+    # it arrived and OpenRouter's own Anthropic skin answers it.
+    name: Anthropic
+    # Same as the OpenAI one — OpenRouter serves its APIs under /api/v1, not at the
+    # root, so /api/v1/messages is where this lands.
+    prefix: /api/v1
+  backendRef:
+    name: openrouter
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: openrouter-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: openrouter
+  validation:
+    # WITHOUT THIS the connection is plain HTTP to port 443 and every call fails
+    # with an upstream connect error. The three local engines need no such policy.
+    wellKnownCACertificates: "System"
+    hostname: openrouter.ai
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openrouter-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. REAL SPEND.
+  apiKey: ${OPENROUTER_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openrouter-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openrouter
+    # THE SECOND BACKEND NEEDS THE KEY TOO. Miss this and the `-anthropic` alias
+    # reaches OpenRouter with no Authorization header and gets 401, while the plain
+    # alias beside it works — which reads as a broken alias, not a missing target.
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openrouter-anthropic
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: openrouter-apikey
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: openai
+  namespace: default
+spec:
+  endpoints:
+    # OpenAI, over the public internet. TLS, so a BackendTLSPolicy below.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: api.openai.com
+        port: 443
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openai
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 10m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1.
+    name: OpenAI
+  backendRef:
+    name: openai
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: openai-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: openai
+  validation:
+    # WITHOUT THIS the connection is plain HTTP to port 443 and every call fails
+    # with an upstream connect error. The three local engines need no such policy.
+    wellKnownCACertificates: "System"
+    hostname: api.openai.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openai-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. REAL SPEND.
+  apiKey: ${OPENAI_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openai-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openai
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: openai-apikey
+

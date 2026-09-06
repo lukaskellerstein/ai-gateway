@@ -157,7 +157,8 @@ OPENROUTER.** Only two cells are red, both on Envoy + OpenAI, and both are upstr
 either paid engine. PASS on all four combinations, 2026-09-05.
 
 Both paid engines were also verified with **`GATEWAY_DISCOVERY=true`** left on, which is the
-case §6.6 fixed.
+case §6.6 fixed. **That variable no longer exists** — auto-discovery was removed on 2026-09-06
+— so §6.6 is history rather than a live constraint.
 
 **What the paid runs cost:** OpenRouter **$0.051635** for the whole session
 (2.337468 → 2.389103), agent loops included. OpenAI has no equivalent cheap endpoint; the runs
@@ -460,6 +461,13 @@ Regression-checked on `unsloth-4b`: 4/4 on both gateways afterwards.
 
 ### 6.6 `GATEWAY_DISCOVERY` set + a PAID engine crash-looped LiteLLM
 
+> **OBSOLETE since 2026-09-06 — auto-discovery was removed entirely.** The service, the module,
+> the variable and the generated files are gone, so neither this bug nor its fix can recur. The
+> record stays because the *shape* of the failure is still worth knowing: compose built a
+> filename from a variable, and the thing that was supposed to create that file declined. Any
+> future generated config would have the same trap. Root `README.md` § What was removed has the
+> reasoning for the removal.
+
 **Symptom.** With `GATEWAY_DISCOVERY=true` — the value in this repo's `.env` — and
 `GATEWAY_ENGINE=openrouter` or `openai`, LiteLLM never came up. Every suite then failed in
 0.0 s with "the gateway is not answering", which reads as a dead proxy rather than a config
@@ -591,6 +599,48 @@ a month of assuming paid engines simply could not have these aliases):
 
 ---
 
+### 6.10 One merged `AIGatewayRoute` crash-looped Envoy — the rule cap is 16
+
+**Symptom.** `envoy/config/all.yaml`, built by merging the five engine files into a single
+`AIGatewayRoute` with all 20 alias rules, never served anything. The container reported `Up`
+and restarted in a loop; `26000/v1/models` returned nothing at all.
+
+```
+exiting on provider runner error: failed to load resources from file
+  .../envoy-ai-gateway-resources/config.yaml: local validation error:
+  HTTPRoute.gateway.networking.k8s.io "aigw-run" is invalid:
+  [spec.rules: Too many: 21: must have at most 16 items, ...]
+```
+
+**Cause.** An `AIGatewayRoute` is translated into a Gateway API `HTTPRoute`, and
+`HTTPRoute.spec.rules` is capped at **16 items by the CRD itself**. aigw adds one rule of its
+own, so **one route carries at most 15 aliases**. 20 aliases became 21 rules. Nothing in the
+AIGatewayRoute schema mentions this — the limit only appears when the translated resource is
+validated, which is after the config parses cleanly.
+
+**Fix.** Five routes instead of one: `aigw-run-lms`, `aigw-run-unsloth`, `aigw-run-ollama`,
+`aigw-run-openrouter`, `aigw-run-openai`, all attached to the same `Gateway` through
+`parentRefs`. Several `HTTPRoute`s on one `Gateway` is ordinary Gateway API; every match here
+is an exact `x-ai-eg-model` value and all 20 are distinct, so nothing is ambiguous. Each
+engine's route is carried into `all.yaml` whole, with only `metadata.name` changed — which also
+keeps the file diffable against the five it came from.
+
+**Verified 2026-09-06:**
+
+| Check | Result |
+|:--|:--|
+| `26000/v1/models` on `all.yaml` | **20 aliases**, all five engines |
+| `lms-4b` completion on 26000 | **PASS** — `OK26000`, `finish_reason: stop` |
+| `ollama-4b` on the SAME gateway | **HTTP 200** — a second engine through one config |
+| `24000/v1/models` on LiteLLM's `all.yaml` | **13 aliases**, all five engines |
+| `lms-4b` then `ollama-4b` on 24000 | **PASS** both |
+| isolation: `GATEWAY_ENGINE=unsloth` | 5 aliases on 26000, 3 on 24000 |
+| isolation: `lms-4b` under `unsloth` | **404** on 26000, **400** on 24000 |
+
+**Watch the ceiling per route, not per file.** Five engines at 15 aliases each is fine; one
+engine at 16 is not. `envoy/config/<engine>.yaml` has 5 rules at most today, so only `all.yaml`
+was ever near it.
+
 ## 7. How config fixes are kept straight
 
 Added 2026-09-05, after a global flag was set for one client with no record of who it was
@@ -677,11 +727,16 @@ AI_GATEWAY_TEST_MODEL=openai-mini uv run 01_simple_call.py   # ONE scenario, non
 
 ## 11. State to restore when you finish
 
-Both projects on **`GATEWAY_ENGINE=unsloth`**, both gateways healthy — **this is the state as
-of 2026-09-05 01:15**, restored and verified. Also:
+Both projects on **`GATEWAY_ENGINE=unsloth`**, both gateways healthy — **restored and verified
+2026-09-06**. Also:
 
-- `litellm/.env` carries **`GATEWAY_DISCOVERY=true`**, as found. It no longer needs blanking
-  for a paid engine — §6.6.
+- **LiteLLM now serves 3 aliases on `unsloth`, not ~15.** It ran `discovered-unsloth.yaml`
+  until 2026-09-06; auto-discovery was removed, so the hand-written `unsloth.yaml` is the whole
+  list. Set `GATEWAY_ENGINE=all` in `litellm/.env` for all 13, and in `envoy/.env` for all 20.
+  **`all` is the new default**, but an explicit `unsloth` in each `.env` still wins.
+
+- `litellm/.env` carries a **`GATEWAY_DISCOVERY=true`** line that is now **inert** — compose
+  stopped reading it on 2026-09-06 when auto-discovery was removed. Delete the line.
 - `envoy/.env` must keep **`AIGW_DEBUG=false`**. `true` dumps every prompt and reply.
 - A pre-upgrade database dump sits in this session's scratchpad as
   `litellm-before-upgrade.sql` (170 MB). Only needed if the 1.99.1 upgrade has to be rolled

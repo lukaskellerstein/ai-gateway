@@ -31,12 +31,12 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
 
   | Folder | Project name | Port | Services |
   |:--|:--|:--|:--|
-  | `litellm/` | **`ai-gateway`** | 24000 | `postgres`, `discover`, `litellm` |
+  | `litellm/` | **`ai-gateway`** | 24000 | `postgres`, `litellm` |
   | `envoy/` | `ai-gateway-envoy` | 26000, 26064 | `envoy` — **one service, no database** |
 
-  `discover` is a one-shot whose finished state is **exited (0)**. Only `litellm/` runs a
-  postgres, and it does not publish a port. `envoy/` is `aigw run`, Envoy AI Gateway's
-  standalone mode: a real Envoy data plane from one config file, no Kubernetes, no build step.
+  Only `litellm/` runs a postgres, and it does not publish a port. `envoy/` is `aigw run`,
+  Envoy AI Gateway's standalone mode: a real Envoy data plane from one config file, no
+  Kubernetes, no build step.
 
   **A THIRD PROJECT, `mlflow/` ON 25000, WAS DELETED ON 2026-09-04.** It lost on every
   contract row and carried all the Python in the repo; the root `README.md` § What was removed
@@ -47,53 +47,56 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
   It starts nothing and reads no project's files — only the two documented URLs — so the two
   stay as independent as before. It times ONE HTTP request against both ports with the engine,
   model, body and `max_tokens` held identical, and it is the closest thing here to the
-  cross-gateway check that went away at the split. Results live in the root `README.md`.
+  cross-gateway check that went away at the split. Results live in `COMPARISON.md`.
 - **`name: ai-gateway` IN `litellm/compose.yml` IS LOAD-BEARING.** The volume resolves to
   `<project>_postgres_data`, so that word is what keeps it attached to
   `ai-gateway_postgres_data` — every virtual key, spend log and budget ceiling ever issued.
   Rename the project and compose creates a NEW EMPTY volume, LiteLLM migrates a fresh
   schema, and every key other projects hold stops working. **Nothing errors.**
 - **THERE IS NO `COMPOSE_PROFILES` ANY MORE.** It was the gateway switch until the split;
-  the directory is now that switch. Two words remain, per project, in that project's own
-  `.env`:
+  the directory is now that switch. **ONE WORD** decides what a project serves, in that
+  project's own `.env`:
 
-  | Variable | Values | Default | Picks |
-  |:--|:--|:--|:--|
-  | `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | `lms` | which engine |
-  | `GATEWAY_DISCOVERY` | *(empty)*, `on` | *(empty)* | which models |
+  | Variable | Values | Default | Picks | In |
+  |:--|:--|:--|:--|:--|
+  | `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | **`all`** | which engines | both |
+  | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 - **THE TWO PROJECTS CAN SERVE DIFFERENT ENGINES, and nothing notices.** Each has its own
   `.env` and its own `GATEWAY_ENGINE`. Before the split one word drove both and they could
   not diverge. If a comparison is the point, check both `.env` files first.
-- **AUTO-DISCOVERY IS OFF BY DEFAULT AND IS PURELY ADDITIVE.** With `GATEWAY_DISCOVERY`
-  empty nothing changes: each gateway serves exactly the aliases its hand-written file
-  names, and those files stay as the worked example of hand configuration. Set it and the
-  gateway ADDS every model the engine holds on disk, named `<engine>-<slugged model id>`
-  (`lms-google-gemma-4-e4b`, `ollama-gemma4-26b`). LiteLLM's generated
-  `litellm/config/discovered-<engine>.yaml` **includes** the hand-written file, so a
-  hand-written alias can never be replaced or shadowed. **Discovery is local-only** —
-  `openrouter` and `openai` are never enumerated, because money is never discovered. Since
-  2026-09-05 they get a **PASS-THROUGH** `discovered-<engine>.yaml` that includes the
-  hand-written file and adds nothing: discovery decides WHAT is served, never WHETHER the
-  gateway runs. Before that they exited 2, no file was written, and LiteLLM crash-looped on
-  `Config file not found` — so discovery on plus a paid engine meant NO GATEWAY.
-  **Only `litellm/` has discovery at all.**
-- **`GATEWAY_DISCOVERY=off` DOES NOT TURN IT OFF.** compose builds the config filename with
-  `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being non-empty, not to its
-  meaning. `litellm/` catches `off`, `false`, `0` and `no` and refuses. **The way to turn it
-  off is an EMPTY value.**
-- **ONE ENGINE AT A TIME, per project.** No list, no `all`. `GATEWAY_ENGINE` names one file
-  — `litellm/config/<engine>.yaml` or `envoy/config/<engine>.yaml`. Each engine has two or
-  three aliases; every other alias is absent from the running config, and a 404 on one is
-  correct.
+- **THERE IS NO AUTO-DISCOVERY ANY MORE, AND NO GENERATED CONFIG ANYWHERE.** Until 2026-09-06
+  `litellm/` ran a `discover` one-shot that asked a local engine what it held on disk and wrote
+  `config/discovered-<engine>.yaml`. The service, `discover/gateway_discovery.py` (561 lines,
+  the LAST PYTHON IN THE REPO), the `GATEWAY_DISCOVERY` variable and the generated files are all
+  gone. **Do not propose bringing it back**, and treat a leftover reference as a doc bug. The
+  trap it carried is worth remembering for any future generated config: compose built the
+  filename from `${GATEWAY_DISCOVERY:+discovered-}`, so **`GATEWAY_DISCOVERY=off` switched it
+  ON**, and a paid engine refused to write the file compose had already named. Root `README.md`
+  § What was removed has the reasoning. **`envoy/` never had it** — its config would need
+  another renderer and the aigw image is distroless with no Python to run one in.
+- **`all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE** (since 2026-09-06). `GATEWAY_ENGINE`
+  names ONE FILE — `<project>/config/<word>.yaml` — and `all.yaml` is a real file, not a list
+  you write. LiteLLM's is **six `include:` lines that copy nothing**; Envoy's **COPIES the five
+  engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
+  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 13 aliases on `all`, Envoy 20
+  route rules.
+- **NAMING ONE ENGINE IS STILL SUPPORTED AND IS THE MONEY GUARD.** Set `GATEWAY_ENGINE=lms` and
+  every other alias is ABSENT from the running config — not disabled, absent — and a 404 on one
+  is correct. That is the only way to get a gateway that cannot reach a paid provider. On `all`
+  the two paid engines are REGISTERED, which costs nothing: registering is free, only a
+  completion bills, and no alias falls back to another.
 - **NOTHING IS SHARED BETWEEN THE FOLDERS.** Each carries everything it needs, so either can
   be deleted whole — which is exactly what happened to `mlflow/` on 2026-09-04, and nothing
-  else stopped working. `discover/gateway_discovery.py` existed twice for that reason and is
-  now down to LiteLLM's copy alone.
-- **`envoy/` HAS NO DISCOVERY AT ALL, and that is a gap not a decision.** It would need
-  another renderer (AIGatewayRoute rules), and the aigw image is distroless — no shell, no
-  Python — so there is nowhere to run one without a third image. `envoy/README.md` says so.
-- **ENVOY'S OWN TRAPS, all measured 2026-09-04:**
+  else stopped working. `discover/gateway_discovery.py` existed twice for that reason, and both
+  copies are gone now.
+- **ENVOY'S OWN TRAPS, all measured 2026-09-04 unless dated otherwise:**
+  - **AN `AIGatewayRoute` HOLDS AT MOST 15 ALIASES** (measured 2026-09-06). It becomes a Gateway
+    API `HTTPRoute`, whose `spec.rules` the CRD caps at **16 items**, and aigw adds one of its
+    own. `envoy/config/all.yaml` therefore carries FIVE routes — `aigw-run-<engine>` — all
+    attached to the same `Gateway`, not one merged route. A single route with all 20 rules
+    crash-looped aigw before it served anything: `HTTPRoute "aigw-run" is invalid: spec.rules:
+    Too many: 21: must have at most 16 items`. **The ceiling is per route, not per file.**
   - `AIGW_DEBUG` must never be EMPTY. aigw parses it as a bool and crash-loops on `""`
     before reading any config. `${AIGW_DEBUG:-false}`, not `${AIGW_DEBUG:-}`.
   - **`/health` on 26064 goes green BEFORE 26000 accepts a connection.** Probe
@@ -103,11 +106,14 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
     prompt/response dump.
   - **`compose exec` cannot work** — distroless, no shell. Use `compose logs`.
   - The config mounts at `/etc/aigw`, never `/app`: `/app` IS the binary.
-- **AN ALIAS IS TWO EDITS, AND NOTHING CHECKS THAT YOU DID BOTH.** Add it to
-  `litellm/config/<engine>.yaml` **and** `envoy/config/<engine>.yaml`. Do one and the name
-  answers on that port and 404s on the other, with nothing in any log to say why. The shared
-  test suite that used to catch this went with the split — each project now tests only itself.
-  Do not "fix" this by making one project read another's files.
+- **AN ALIAS IS THREE EDITS SINCE 2026-09-06, AND NOTHING CHECKS THAT YOU DID ALL THREE.**
+  `litellm/config/<engine>.yaml`, `envoy/config/<engine>.yaml`, **and
+  `envoy/config/all.yaml`** — which copies the engine files because `aigw run` reads one path
+  and Envoy has no `include:`. LiteLLM's `all.yaml` needs no edit: it includes the engine files,
+  so an alias added there appears in `all` by itself. Miss the Envoy copy and the name answers
+  when `.env` names its engine and 404s on the default config, with nothing in any log to say
+  why. The shared test suite that used to catch cross-gateway drift went with the split. Do not
+  "fix" this by making one project read another's files, or by generating one of them.
 - **Every alias names its engine** — `lms-*`, `unsloth-*`, `ollama-*`, `openrouter-*`,
   `openai-*`. There is no engine-neutral name (`local` was removed) and no capability name
   (`cheap`, `standard`, `frontier` were removed): the first hid which engine answered, the
@@ -117,10 +123,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
 - **Local routes are shadow-priced** — free, but carrying a cloud twin's rate so budget
   ceilings still trip. Anything summing `/spend/logs` must say whether it reports money
   billed or the cost of the same workload in the cloud.
-- **Almost no code, and then `tests/`.** Two `compose.yml`, six YAML in `litellm/config/`,
-  five YAML in `envoy/config/`, one discovery module, three `README.md`. Every image is stock
-  — there is no build step, and `discover/` reaches for nothing outside the standard library.
-  Deleting `mlflow/` removed about 1200 lines of Python, which was all of it.
+- **NO CODE AT ALL OUTSIDE `tests/` AND `benchmark/`, since 2026-09-06.** Two `compose.yml`,
+  seven YAML in `litellm/config/`, six YAML in `envoy/config/`, four `README.md`. Every image is
+  stock and there is no build step. Deleting `mlflow/` removed about 1200 lines of Python on
+  2026-09-04 and removing `discover/` took the last 561 on 2026-09-06.
 - **EACH `tests/` IS SEVEN FOLDERS, ONE PER WAY OF CALLING THE GATEWAY** (added 2026-09-04):
   `1_http_client` (urllib, **no dependencies**), `2_openai_client` (the four scripts that used
   to be `tests/` itself), `3_langchain_langgraph`, `4_deepagents`, `5_claude_agent_sdk`,
@@ -142,9 +148,12 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
   identical error comes back from Unsloth on 8888 with NO GATEWAY in the path, and from
   LMStudio and Ollama too. It was intermittent, about 1 run in 5, because the engine emits
   `reasoning_content` on some replies and not others. **The cure is `<alias>-anthropic` on an
-  `Anthropic`-schema `AIServiceBackend`**, now present for all three local engines: every one
-  serves `POST /v1/messages` natively, so nothing is translated and nothing is mangled.
-  `tests/5_claude_agent_sdk` RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
+  `Anthropic`-schema `AIServiceBackend`**, present for all three local engines AND for
+  `openrouter`: every one serves `POST /v1/messages` natively, so nothing is translated and
+  nothing is mangled. `openai-mini-anthropic` EXISTS BUT IS NOT THIS — OpenAI serves no
+  `/v1/messages`, so that rule points at the plain `OpenAI`-schema backend and still
+  translates. **Eight `-anthropic` rules in all**, which is why `envoy/config/all.yaml` has 20
+  and not 12. `tests/5_claude_agent_sdk` RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
   **`MAX_THINKING_TOKENS=0` IS NO LONGER NEEDED** — it existed for `400 thinking.type` from
   the same translator, and the pass-through path accepts the field as sent.
 - **LITELLM CARRIES REASONING ON ITS OPENAI ROUTES AND DROPS IT ON `/v1/messages`; ENVOY
@@ -261,7 +270,7 @@ Calling a **free** alias to check something is always fine. A **paid** one
 
 **Pre-approved mutations:** editing `litellm/`, `envoy/`, `benchmark/`, `README.md`,
 `LICENSE`, `.claude/`; `up -d`, `restart`, and `down` **without `-v`** in either project;
-re-running `discover`; bringing a gateway up on another engine for a test — **then putting it
+bringing a gateway up on another engine for a test — **then putting it
 back the way you found it**; minting a virtual key that carries **both** `max_budget` ≤ 2.00
 and `duration` ≤ `7d`.
 

@@ -13,11 +13,10 @@ every number carries a comment saying where it came from.
 
 | Change | Goes in |
 |:--|:--|
-| an alias | `litellm/config/<engine>.yaml` **and** `envoy/config/<engine>.yaml` — two files |
+| an alias | `litellm/config/<engine>.yaml`, `envoy/config/<engine>.yaml` **and** `envoy/config/all.yaml` — three files |
 | a LiteLLM settings block (`router_settings`, `general_settings`, …) | `litellm/config/settings.yaml` — once; every engine file includes it |
 | how an engine is chosen | the `--config` path in `litellm/compose.yml`, and `AIGW_CONFIG` in `envoy/compose.yml` |
-| what auto-discovery finds, or how it renders | `litellm/discover/gateway_discovery.py` — one copy now. `envoy/` has no discovery |
-| an Envoy route, backend, timeout or buffer limit | `envoy/config/<engine>.yaml` — Kubernetes custom resources, self-contained per engine |
+| an Envoy route, backend, timeout or buffer limit | `envoy/config/<engine>.yaml` **and** `envoy/config/all.yaml` — Kubernetes custom resources, self-contained per engine |
 | services, ports, healthchecks, env | that project's `compose.yml` — never several in one edit unless the change is genuinely several |
 | anything a caller reads | the README of the gateway it concerns, or `README.md` if it is shared |
 
@@ -26,14 +25,18 @@ Add it on one side only and the name answers on that port and 404s on the other,
 in any log to say why — and **no test catches it**, because the shared suite that used to went
 with the split. Call it on **both** ports afterwards — [`06-testing.md`](06-testing.md).
 
-**Adding an alias is a five-part edit**, and skipping any part is a bug that hides:
+**Adding an alias is a SIX-part edit**, and skipping any part is a bug that hides:
 
 1. the `model_list` entry in `litellm/config/<engine>.yaml`
 2. its price — an unpriced route logs `$0`, which makes a budget ceiling a no-op
 3. its `max_input_tokens` — what `enable_pre_call_checks` uses to catch an over-long prompt
 4. the matching `AIGatewayRoute` rule in `envoy/config/<engine>.yaml` — an exact
    `x-ai-eg-model` match, a `modelNameOverride`, and a `request` timeout
-5. the alias table in `README.md` — a route nobody documents is a route nobody calls
+5. **the SAME rule copied into `envoy/config/all.yaml`**, under that engine's banner. This is
+   the part that is easy to miss and impossible to see: `aigw run` reads one file and Envoy has
+   no `include:`, so `all.yaml` carries its own copy of every rule. `litellm/config/all.yaml`
+   needs NO edit — it includes the engine files rather than copying them
+6. the alias table in `README.md` — a route nobody documents is a route nobody calls
 
 **The alias name must carry its engine.** `lms-*`, `unsloth-*`, `ollama-*`,
 `openrouter-*`, `openai-*`. No engine-neutral name, no capability name.
@@ -48,7 +51,11 @@ The costs are known and written down; they are not a defect to fix.
 
 Duplication between the folders is the price of that, and it is the right price. When
 `mlflow/` existed, `discover/gateway_discovery.py` sat in two copies for exactly this reason —
-and when the folder went, its copy went with it and nothing had to be untangled.
+and when the folder went, its copy went with it and nothing had to be untangled. The same logic
+now applies to `envoy/config/all.yaml`: it duplicates the five engine files, and that
+duplication is the price of `aigw run` taking one path. **Do not "fix" it with a generator** —
+that was considered on 2026-09-06 and rejected, because it needs a second image in a project
+whose whole point is one stock service.
 
 ## The `compose.yml` files
 
@@ -146,7 +153,8 @@ you measure one — including the negative result.
 ## `envoy/` — gateway 2, and the only one you could deploy
 
 `config/<engine>.yaml` is the same Kubernetes custom-resource API a cluster would read, so
-what is proven here is what would ship. Five files, one per engine, each self-contained.
+what is proven here is what would ship. Six files: one per engine, each self-contained, plus
+`all.yaml` which merges them and is the default.
 
 - **The alias mechanism is an `AIGatewayRoute` rule**: an exact `x-ai-eg-model` header match
   plus `modelNameOverride`. An alias with no rule gets 404.
@@ -154,8 +162,20 @@ what is proven here is what would ship. Five files, one per engine, each self-co
   on BOTH the route and the backend (the smaller wins, and upstream's default is 3m);
   `bufferLimit: 50Mi` on the `ClientTrafficPolicy` (Envoy's 32 KiB default fails on a base64
   image); `logging.level: error` (at `debug` Envoy dumps request headers).
-- **It has no discovery and no database.** Adding discovery needs another renderer and a
-  second image, because the aigw image is distroless. That gap is documented, not hidden.
+- **It has no database, and no project here generates config.** Envoy never could — another
+  renderer, and the aigw image is distroless — and `litellm/` stopped on 2026-09-06.
+- **`config/all.yaml` is the default and is a MERGE of the other five.** Four resources are
+  identical everywhere (`GatewayClass`, `Gateway`, `EnvoyProxy`, `ClientTrafficPolicy`) and
+  appear once, taken from `lms.yaml` because it has the fullest comments; every other resource
+  is already named per engine. Keep the per-engine grouping when you edit it — it is what makes
+  the file diffable against the five it came from.
+- **EACH ENGINE KEEPS ITS OWN `AIGatewayRoute` IN `all.yaml`, AND THAT IS FORCED.**
+  `aigw-run-lms`, `aigw-run-unsloth` and so on, all attached to the same `Gateway`. An
+  `AIGatewayRoute` becomes a Gateway API `HTTPRoute`, whose `spec.rules` the CRD caps at **16
+  items**, and aigw adds one of its own — so **one route holds at most 15 aliases**. A single
+  merged route produced 21 rules and aigw crash-looped before serving anything, measured
+  2026-09-06: `HTTPRoute "aigw-run" is invalid: spec.rules: Too many: 21`. **The ceiling is per
+  route, not per file.**
 - **It cannot do budgets.** `QuotaPolicy` and token rate limiting need Redis plus an Envoy
   Gateway install — the Kubernetes path. Do not add a shim that pretends otherwise.
 
@@ -241,13 +261,20 @@ tests/
   suite-level `run_all.py` one level up uses an explicit `FOLDERS` tuple instead, because
   the order is the teaching order and a glob would not preserve it.
 
-## The four `README.md`
+## The four `README.md`, and the two root documents beside them
 
 **`README.md` at the root is the front door**, written for a stranger: what the repo is,
 which gateway to pick, the shared alias table, the host-engine facts, the design decisions,
 and § What was removed. Each gateway's own `README.md` carries everything specific to it — its
-endpoints, its configuration table, its discovery, its troubleshooting, its layout.
+endpoints, its configuration table, its troubleshooting, its layout.
 `benchmark/README.md` is the fourth.
+
+**Two root documents are NOT READMEs and must not be folded into one.**
+`COMPARISON.md` answers *which gateway and when* — features, observability, measured
+resources, the benchmark results, a pick-by-situation table. `TESTING.md` is the testing
+handover — versions, the coverage matrix, open and fixed bugs. The front door LINKS to both
+and carries only the headline; **the benchmark table lives in `COMPARISON.md` and nowhere
+else.**
 
 Keep all four slim: a new fact replaces a vaguer one rather than being appended. Deep
 per-alias measurement belongs in the comments of `litellm/config/<engine>.yaml`. No absolute
@@ -261,21 +288,24 @@ date vouching for something untested.
 
 ```text
 ai-gateway/
-├── README.md               the front door, the shared vocabulary, the BENCHMARK RESULTS
+├── README.md               the front door and the shared vocabulary
+├── COMPARISON.md           LiteLLM or Envoy: features, resources, speed, when to
+│                            pick which. THE BENCHMARK RESULTS LIVE HERE
+├── TESTING.md              the testing handover: versions, coverage, open bugs
 ├── benchmark/              what the gateway itself costs. Calls both ports;
 │                            reads no project's files. No dependencies
 ├── litellm/                compose project `ai-gateway`         PORT 24000
-│   ├── compose.yml             postgres · discover · litellm. name: DO NOT RENAME
+│   ├── compose.yml             postgres · litellm. name: DO NOT RENAME
 │   ├── .env.example            tracked; the key lines are blank BY DESIGN
-│   ├── config/                 settings.yaml + <engine>.yaml, mounted read-only
-│   ├── discover/               probes + the YAML renderer; stdlib only. THE ONLY COPY
+│   ├── config/                 settings.yaml + <engine>.yaml + all.yaml, read-only
 │   ├── tests/                  SEVEN uv projects, one per way of calling the gateway
 │   └── README.md
 ├── envoy/                  compose project `ai-gateway-envoy`   PORT 26000/26064
 │   ├── compose.yml             ONE service, no database
 │   ├── .env.example
 │   ├── config/                 <engine>.yaml — Kubernetes custom resources
-│   ├── tests/                  the same SEVEN, all working. NO discover/ — see envoy/README.md
+│   │                            + all.yaml, THE DEFAULT, which COPIES all five
+│   ├── tests/                  the same SEVEN, all working
 │   └── README.md
 └── .claude/                this contract
 ```

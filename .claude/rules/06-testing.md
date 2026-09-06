@@ -21,7 +21,7 @@ gateway's folder** — there is no root `compose.yml`.
 cd litellm                              # or envoy
 podman compose config --services        # parses and interpolates. --services, NOT bare
 podman compose up -d
-podman compose ps -a                    # discover -> Exited (0) is DONE
+podman compose ps                       # every service Up; litellm healthy
 curl -fsS http://localhost:24000/health/readiness    # -> {"status":"healthy","db":"connected"}
 curl -fsS http://localhost:26000/v1/models          # Envoy: the DATA plane, NOT 26064
 podman compose logs litellm             # what it loaded, and what it refused
@@ -110,13 +110,17 @@ embeddings, budgets or keys, and **neither compares the gateways**.
 
 ## Extra checks, when they apply
 
-- **You touched what selects a config** (either `compose.yml`, `discover/`) — prove more
-  than one combination. At minimum bring the other project up too and confirm both answer at
-  once, then check that stopping one leaves the other serving. **Then put them both back the
-  way you found them**, including each project's `GATEWAY_ENGINE`.
-- **You touched `litellm/discover/`** — prove it. It writes
-  `litellm/config/discovered-<engine>.yaml`; drive it with `GATEWAY_DISCOVERY=on` and read the
-  generated file. There is only one copy now: the second went with `mlflow/`.
+- **You touched what selects a config** (either `compose.yml`) — prove more than one
+  combination. At minimum bring the other project up too and confirm both answer at once, then
+  check that stopping one leaves the other serving. **Then put them both back the way you found
+  them**, including each project's `GATEWAY_ENGINE`.
+- **You touched either `config/all.yaml`** — prove BOTH modes on that gateway. Bring it up on
+  `all` and confirm the full alias list on `/v1/models` (**13** on 24000, **20** on 26000),
+  then bring it up on ONE engine and confirm the short list. A default config that serves
+  everything hides a broken per-engine file, and the other way round.
+- **You added an alias to `envoy/config/<engine>.yaml`** — confirm it answers under BOTH
+  `GATEWAY_ENGINE=<engine>` and `GATEWAY_ENGINE=all`. That file and `all.yaml` are separate
+  copies and nothing keeps them in step.
 - **You touched `litellm/compose.yml`** — check `name: ai-gateway` is still there, then
   prove the volume is still attached:
   `podman compose exec -T postgres psql -U postgres -d litellm -c 'SELECT count(*) FROM "LiteLLM_VerificationToken";'`
