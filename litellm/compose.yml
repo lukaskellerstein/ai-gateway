@@ -8,10 +8,17 @@
 #
 #   cd litellm && podman compose up -d
 #
-# TWO WORDS IN ./.env DECIDE WHAT THIS SERVES:
+# ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
 #
-#   GATEWAY_ENGINE     lms | unsloth | ollama | openrouter | openai   default lms
-#   GATEWAY_DISCOVERY  (empty) | on                                   default EMPTY
+#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai   default all
+#
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 13 aliases, one gateway.
+# Name a single engine instead and only that engine's aliases exist, which is how
+# you get a gateway that CANNOT reach a paid provider even by mistake.
+#
+# THERE IS NO GATEWAY_DISCOVERY ANY MORE. A `discover` one-shot used to ask each
+# local engine what it held and generate a config; it went on 2026-09-06 along with
+# the only Python in this repo. Every alias is now written by hand in config/.
 #
 # THERE IS NO COMPOSE_PROFILES ANY MORE. Before the split one variable chose which
 # gateway ran; now the DIRECTORY is that choice. `up -d` here starts this gateway
@@ -76,54 +83,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   # ---------------------------------------------------------------------------
-  # discover — writes this gateway's config when auto-discovery is on, then exits.
-  #
-  # A CONTAINER THAT EXITS 0 IS THE FINISHED STATE, not a failure.
-  #
-  # With GATEWAY_DISCOVERY empty — the default — it exits in about a second having
-  # written nothing, and litellm reads the hand-written config/<engine>.yaml
-  # exactly as it always has. Set it and this asks the engine what it holds and
-  # writes config/discovered-<engine>.yaml, which INCLUDES the hand-written file.
-  # So discovery only ever ADDS aliases; nothing a project already calls can break.
-  #
-  # THIS MODULE IS THIS GATEWAY'S OWN, AND NOW THE ONLY COPY. ../mlflow carried a
-  # second one trimmed to the probing half, and it went with that folder on
-  # 2026-09-04. ../envoy has no discovery at all — its config would need a third
-  # renderer and its image is distroless, with no Python to run one in.
-  #
-  # IT USES THE LITELLM IMAGE because it needs a Python and that image ships one.
-  # The module reaches for nothing outside the standard library, so there is STILL
-  # NO BUILD STEP.
-  #
-  # ./config IS MOUNTED READ-WRITE HERE and read-only on litellm below: this is the
-  # one thing in the stack that writes into the repo, and the file it writes is
-  # gitignored.
-  # ---------------------------------------------------------------------------
-  discover:
-    image: ghcr.io/berriai/litellm:main-stable
-    restart: "no"
-    entrypoint: ["python"]
-    command: ["/app/discover/gateway_discovery.py"]
-    volumes:
-      - ./discover:/app/discover:ro
-      - ./config:/app/config
-    extra_hosts:
-      # It dials the engine on the host, so it needs the same two names the
-      # gateway does.
-      - "host.docker.internal:host-gateway"
-      - "host.containers.internal:host-gateway"
-    environment:
-      GATEWAY_ENGINE: ${GATEWAY_ENGINE:-lms}
-      GATEWAY_DISCOVERY: ${GATEWAY_DISCOVERY:-}
-      LITELLM_CONFIG_DIR: /app/config
-      # Where to ask. Only the three LOCAL engines are ever discovered — OpenRouter
-      # and OpenAI bill a real account per model, so they keep hand-written lists.
-      LM_STUDIO_API_BASE: ${LM_STUDIO_API_BASE:-http://host.containers.internal:1234/v1}
-      UNSLOTH_API_BASE: ${UNSLOTH_API_BASE:-http://host.containers.internal:8888/v1}
-      UNSLOTH_API_KEY: ${UNSLOTH_API_KEY:-}
-      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.containers.internal:11434/v1}
-
-  # ---------------------------------------------------------------------------
   # LiteLLM proxy — one OpenAI-compatible endpoint (also /v1/messages) for every
   # provider. http://localhost:24000, admin UI at /ui.
   # ---------------------------------------------------------------------------
@@ -132,41 +91,28 @@ services:
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
-      # The config file may be GENERATED, so wait for the generator whether or not
-      # it had anything to do. With discovery off that is a one-second no-op; the
-      # price of no dependency is litellm crash-looping on a file that arrives a
-      # moment later.
-      discover: { condition: service_completed_successfully }
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
-    # .env. config/ carries one self-contained file per engine:
+    # .env. config/ carries one file per engine, plus one that joins them:
     #
-    #   config/lms.yaml         3 aliases: 2 chat, 1 embedder      free
-    #   config/unsloth.yaml     3 aliases: 2 chat, 1 embedder      free
-    #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
-    #   config/openrouter.yaml  2 aliases: 2 chat                  PAID
-    #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
+    #   config/all.yaml         13 aliases: everything below         THE DEFAULT
+    #   config/lms.yaml          3 aliases: 2 chat, 1 embedder      free
+    #   config/unsloth.yaml      3 aliases: 2 chat, 1 embedder      free
+    #   config/ollama.yaml       3 aliases: 2 chat, 1 embedder      free
+    #   config/openrouter.yaml   2 aliases: 2 chat                  PAID
+    #   config/openai.yaml       2 aliases: 1 chat, 1 embedder      PAID
     #
-    # Each includes config/settings.yaml for the three settings blocks and then
-    # declares its own model_list. ONE ENGINE RUNS AT A TIME.
+    # Each engine file includes config/settings.yaml for the three settings blocks
+    # and then declares its own model_list. all.yaml includes settings.yaml AND all
+    # five engine files and COPIES NOTHING: LiteLLM extends a list across included
+    # files, so the five model_lists join into one. Verified 2026-09-06 against
+    # ghcr.io/berriai/litellm:main-stable — 13 aliases in /v1/models.
     #
     # A TYPO IS A CLEAN CRASH: the file does not exist and litellm exits saying so.
     # (It was NOT clean before 2026-08-31, when this mounted a single file: compose
     # bind-mounts a missing source by CREATING AN EMPTY DIRECTORY, and the proxy
     # then crash-looped on `IsADirectoryError` while `compose ps` still said Up.
     # Mounting the directory is what removed that trap.)
-    #
-    # THE `discovered-` PREFIX IS THE WHOLE AUTO-DISCOVERY SWITCH. `${VAR:+text}`
-    # substitutes `text` when VAR is set and NON-EMPTY, so one word moves the
-    # filename and no second variable can fall out of step with it:
-    #
-    #   GATEWAY_DISCOVERY unset/empty  ->  /app/config/lms.yaml
-    #   GATEWAY_DISCOVERY=on           ->  /app/config/discovered-lms.yaml
-    #
-    # IT REACTS TO THE WORD BEING NON-EMPTY, NOT TO ITS MEANING, so
-    # `GATEWAY_DISCOVERY=off` switches discovery ON here. The `discover` service
-    # catches `off`, `false`, `0` and `no` and exits 2 saying to leave the value
-    # EMPTY, which is why litellm waits on it.
-    command: ["--config", "/app/config/${GATEWAY_DISCOVERY:+discovered-}${GATEWAY_ENGINE:-lms}.yaml", "--port", "4000", "--num_workers", "1"]
+    command: ["--config", "/app/config/${GATEWAY_ENGINE:-all}.yaml", "--port", "4000", "--num_workers", "1"]
     ports:
       - "24000:4000"
     volumes:
@@ -212,10 +158,14 @@ services:
       # the Authorization header at all. The literal `sk-ollama` in the config is
       # there only because LiteLLM's `openai/` provider needs some key string.
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.containers.internal:11434/v1}
-      # The two PAID engines. Neither is in the running config at all unless
-      # GATEWAY_ENGINE names it. Blank in .env on purpose: ~/Projects/.envrc
-      # exports the real values and compose reads the SHELL before the file, so no
-      # second plaintext copy exists to go stale after a rotation.
+      # The two PAID engines. With GATEWAY_ENGINE=all — the default — both ARE in
+      # the running config, and that costs nothing: registering an alias is free
+      # and only a completion bills. Name a single free engine and the hosted
+      # routes are absent entirely, not merely disabled.
+      #
+      # Blank in .env on purpose: ~/Projects/.envrc exports the real values and
+      # compose reads the SHELL before the file, so no second plaintext copy
+      # exists to go stale after a rotation.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     healthcheck:

@@ -7,7 +7,7 @@ each repo. Laptop-only — every gateway binds localhost, and nothing is deploye
 ## Two compose projects, and nothing at the root
 
 Since 2026-09-03 each gateway is a **standalone compose project**. There is no root
-`compose.yml`, no root `.env`, no root `tests/` and no root `discover/`. You start a gateway
+`compose.yml`, no root `.env` and no root `tests/`. You start a gateway
 by entering its folder; you remove one by deleting its folder. The design was tested both
 ways on 2026-09-04: `envoy/` was **added** and touched nothing that already existed, and
 `mlflow/` was **deleted** and nothing else stopped working.
@@ -19,8 +19,8 @@ why. **Do not propose bringing it back**, and treat a leftover reference to it a
 The one root folder is `benchmark/` (2026-09-04). It is **not a project**: it starts nothing,
 reads no project's files, and times one HTTP request against both ports with the engine,
 model, body and `max_tokens` held identical — see
-[`../../benchmark/README.md`](../../benchmark/README.md). Its results are in the root
-`README.md` § Gateway comparison.
+[`../../benchmark/README.md`](../../benchmark/README.md). Its results are in
+[`../../COMPARISON.md`](../../COMPARISON.md) § What they cost per request.
 
 Both images are stock: **no Dockerfile and no build step**. A `litellm/Dockerfile` returns
 the day a callback needs a package the base image lacks.
@@ -31,7 +31,6 @@ the day a callback needs a package the base image lacks.
 |:--|:--|:--|:--|
 | `litellm` | `ghcr.io/berriai/litellm:main-stable` | **24000** → 4000 | the primary endpoint; UI at `/ui`; `/v1/messages` alongside the OpenAI routes |
 | `postgres` | `docker.io/postgres:17` | **none** | database `litellm` — keys, teams, spend, ceilings |
-| `discover` | same as `litellm` | — | one-shot: writes `config/discovered-<engine>.yaml` when `GATEWAY_DISCOVERY` is set, and exits in a second doing nothing when it is not. `litellm` waits for it either way |
 
 > **`name: ai-gateway` is load-bearing.** The volume resolves to
 > `<project>_postgres_data`, so that word is what keeps this attached to
@@ -50,8 +49,6 @@ server (`/metrics`, `/health`) and nothing else. The image ships Envoy pre-downl
 declares none.
 
 **It is distroless: no shell, so `compose exec` cannot work.** Use `compose logs`.
-
-**Exited (0) is the finished state** for `discover`.
 
 LiteLLM applies its own schema migrations on first boot, and its postgres creates its one
 database with `POSTGRES_DB`. There is **no SQL in this repo at all** —
@@ -79,18 +76,34 @@ reads its **own** `.env`:
 
 | Variable | Values | Default | Picks | In |
 |:--|:--|:--|:--|:--|
-| `GATEWAY_ENGINE` | `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | `lms` | which engine | both |
-| `GATEWAY_DISCOVERY` | *(empty)*, `on` | *(empty)* | which models | `litellm/` only |
+| `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | **`all`** | which engines | both |
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
-`GATEWAY_DISCOVERY` is empty by default, and then the hand-written lists below are the whole
-vocabulary. Set it and LiteLLM ADDS every model the engine holds on disk, through a generated
-`litellm/config/discovered-<engine>.yaml` that **includes** the hand-written file. It never
-replaces a hand-written alias. On the two PAID engines it enumerates nothing and writes a
-pass-through file instead, so the gateway still comes up serving the hand-written list. Full
-facts:
-[`../CLAUDE.md`](../CLAUDE.md) § the repo in a dozen points, and
-`litellm/discover/gateway_discovery.py`.
+**`all` IS THE DEFAULT AND IS A REAL FILE**, `config/all.yaml`, not a list you write. It
+serves every engine at once: 13 aliases on LiteLLM, 20 route rules on Envoy — the latter split
+across **five `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
+(`HTTPRoute.spec.rules` allows 16 and aigw uses one). The two files are
+built differently and the difference matters when you add an alias:
+
+| | `litellm/config/all.yaml` | `envoy/config/all.yaml` |
+|:--|:--|:--|
+| shape | six `include:` lines | the five engine files MERGED |
+| copies aliases | **no** | **yes** |
+| adding an alias needs it edited | no | **yes** |
+
+Envoy's copies because `aigw run` takes ONE path — not a directory, not a repeated flag,
+checked against `aigw run --help` on 2026-09-06 — and Envoy's config has no `include:`
+mechanism.
+
+**NAMING ONE ENGINE IS THE MONEY GUARD.** Set `GATEWAY_ENGINE=lms` and every other alias is
+absent from the running config, not disabled. On `all` the two paid engines are registered,
+which costs nothing: only a completion bills, and no alias falls back to another.
+
+**AUTO-DISCOVERY WAS REMOVED ON 2026-09-06.** `litellm/` had a `discover` one-shot and a
+`GATEWAY_DISCOVERY` variable that generated an alias list from what an engine held on disk;
+the service, the module, the variable and the generated files are gone, and with them the last
+Python outside `tests/` and `benchmark/`. Do not propose bringing it back. Root `README.md`
+§ What was removed has the reasoning.
 
 **THE TWO PROJECTS CAN EACH SERVE A DIFFERENT ENGINE.** Before the split one word named a
 file on one side and an environment variable on the other, so they could not diverge. Now:
@@ -98,21 +111,28 @@ file on one side and an environment variable on the other, so they could not div
 | | LiteLLM (24000) | Envoy (26000) |
 |:--|:--|:--|
 | reads | `litellm/.env` | `envoy/.env` |
-| compose selects | `litellm/config/<engine>.yaml` | `envoy/config/<engine>.yaml` |
-| the aliases are in | that same file | that same file |
+| compose selects | `litellm/config/<word>.yaml` | `envoy/config/<word>.yaml` |
+| the aliases are in | that file, or the five it includes | that file |
 
 Check both `.env` files before treating a difference between the ports as a bug.
 
-**`GATEWAY_DISCOVERY` DOES NOT EXIST IN `envoy/`.** Its config would need another renderer
-and its image has no Python. `envoy/config/<engine>.yaml` is always the whole vocabulary.
+**NEITHER PROJECT GENERATES ANY CONFIG.** `envoy/` never could — its config would need
+another renderer and its image is distroless with no Python — and `litellm/` stopped on
+2026-09-06. What a gateway serves is readable from the files in `config/` without running
+anything.
 
 A typo crash-loops `litellm` on `Config file not found`, and stops `aigw` with the same
 complaint. `compose logs` names the file in both cases.
 
 Each `litellm/config/<engine>.yaml` carries `include: [settings.yaml]` and then its own
-`model_list`. LiteLLM extends list keys and replaces the rest, and **does not recurse** —
-so an included file must never itself carry an `include:`, or the settings vanish silently
-and the proxy boots with no master key.
+`model_list`. LiteLLM extends list keys and replaces the rest, and **does not recurse** — a
+nested `include:` is merged as data and dropped.
+
+`config/all.yaml` lives with that rather than around it: it lists `settings.yaml` **directly
+and first**, then the five engine files, whose own `include: [settings.yaml]` is then dropped
+harmlessly. Verified 2026-09-06 — 13 aliases in `/v1/models`, prices and windows intact. The
+rule still bites anywhere else: include a file that carries an `include:` you were relying on,
+and the settings vanish silently and the proxy boots with no master key.
 
 ## The aliases are the vocabulary
 
@@ -127,16 +147,21 @@ Callers name an **alias**, never a model — the model behind a name is expected
 | extra | — | — | — | `openrouter-free` | — |
 | costs | free | free | free | **paid** | **paid** |
 
-`GATEWAY_ENGINE` selects **one column**. The rows are the point: the same weights sit
-across a row, so changing the word and re-running that project's `tests/` measures the
-engine and nothing else.
+`GATEWAY_ENGINE=all` — the default — serves **every column at once**. Naming one engine
+selects **one column**, and the rows are the point: the same weights sit across a row, so
+changing the word and re-running that project's `tests/` measures the engine and nothing else.
+A comparison run still wants one column, because `all` leaves the caller free to pick.
 
-**ENVOY ADDS TWO NAMES PER LOCAL ENGINE THAT LITELLM DOES NOT HAVE**:
-`lms-4b-anthropic`, `lms-26b-anthropic` and the same for `unsloth` and `ollama`. They are the
-SAME model on the SAME engine, reached through an `Anthropic`-schema `AIServiceBackend` so the
-body is not translated — the only way Claude Code can hold a conversation through Envoy. They
-are plumbing, not vocabulary: LiteLLM does not need them, and nothing but
-`envoy/tests/5_claude_agent_sdk` calls them. Full note: `envoy/README.md`.
+**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — EIGHT OF THEM.** Two per local
+engine (`lms-4b-anthropic`, `lms-26b-anthropic`, and the same for `unsloth` and `ollama`), plus
+`openrouter-26b-anthropic` and `openai-mini-anthropic`. They are the SAME model on the SAME
+engine. Seven of the eight reach an `Anthropic`-schema `AIServiceBackend`, so the body is NOT
+translated — the only way Claude Code can hold a conversation through Envoy.
+**`openai-mini-anthropic` is the exception**: OpenAI serves no `/v1/messages`, so that rule
+points at the plain `OpenAI`-schema backend and still translates. They are plumbing, not
+vocabulary: LiteLLM does not need them, and nothing but `envoy/tests/5_claude_agent_sdk` calls
+them. **12 model aliases + 8 `-anthropic` = the 20 rules in `envoy/config/all.yaml`.** Full
+note: `envoy/README.md`.
 
 **`openrouter-free` is deliberately absent on 26000.** Envoy has no equivalent of
 `extra_body`, so it cannot carry the provider pin, and an unpinned copy would carry exactly
@@ -146,14 +171,17 @@ is incomplete" is the wrong diagnosis.
 ## Seven things that look like bugs and are not
 
 - **An alias that answers on one port and 404s on the other.** The two projects keep
-  separate lists and neither reads the other's. Either the alias was added on one side only,
-  or the `.env` files name different engines. **No test catches this any more.**
+  separate lists and neither reads the other's. Three causes now: the alias was added on one
+  side only, the `.env` files name different engines, or — since 2026-09-06 — it was added to
+  `envoy/config/<engine>.yaml` but not to `envoy/config/all.yaml`, which copies rather than
+  includes. **No test catches any of the three.**
 - **Envoy answering `OK` on 26064 while 26000 refuses.** The admin server starts before
   Envoy's listener. Probe `26000/v1/models`, not `26064/health`.
 - **Nothing in `compose logs envoy` after a request.** `AIGW_DEBUG` is `false`, so Envoy's
   stdout goes to a file inside a distroless container. Set it `true` to see anything.
-- **A local engine cannot accrue spend.** The hosted routes are not disabled, they are
-  absent — not in the running config at all.
+- **A local engine cannot accrue spend — but only when `GATEWAY_ENGINE` names it.** Then the
+  hosted routes are not disabled, they are absent. On `all`, the default, they ARE registered:
+  still free until a caller names one, because nothing falls back, but present.
 - **Local routes are shadow-priced**: free to run, carrying a cloud twin's rate so a
   budget ceiling still trips. An unpriced route would log `$0` and make ceilings a no-op.
 - **Unsloth holds one model at a time**, and the limit spans chat and the embedder.

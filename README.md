@@ -36,8 +36,9 @@ the word and `up -d` again: the names differ only in the prefix.
   Local routes are shadow-priced, so a ceiling still trips on free traffic.
 - **Every calling style is a worked example** — 29 test scenarios per gateway, from raw
   `urllib` to the Claude Agent SDK, Codex, OpenCode, LangGraph and DeepAgents.
-- **Auto-discovery, off by default** — turn it on and the gateway also serves every model
-  already on your disk, without shadowing a single hand-written alias.
+- **Every engine at once, or exactly one** — the default config on both gateways serves all
+  five engines. Name a single engine instead and every other alias is absent, which is how you
+  get a gateway that cannot reach a paid provider.
 - **A measured overhead of 10–20 ms**, flat, on both gateways —
   [`benchmark/`](benchmark/README.md) is the proof.
 - **No build step and almost no code** — stock images, two `compose.yml`, eleven config files.
@@ -57,6 +58,7 @@ one by deleting its folder. Nothing at the repo root starts anything.
 **Start with `litellm/`.** It is the one every project should call, and the only one with
 spend controls — `envoy/` cannot cap a caller at all. `envoy/` is a second implementation of
 the same vocabulary, useful for comparing gateways rather than for running work through.
+**[`COMPARISON.md`](COMPARISON.md) is the long answer** to which one and when.
 
 A third gateway, the MLflow AI Gateway on port 25000, was here until 2026-09-04 and was
 removed. [The bottom of this file](#what-was-removed) says why.
@@ -82,10 +84,8 @@ flowchart LR
     subgraph p1["compose project: ai-gateway"]
         direction TB
         litellm["<b>litellm</b><br/>24000 → 4000"]
-        disc["discover<br/>runs once, exits"]
         pg1[("<b>postgres</b><br/>keys · spend · ceilings")]
         litellm <--> pg1
-        disc -.->|"writes the config<br/>only when discovery is on"| litellm
     end
 
     subgraph p2["compose project: ai-gateway-envoy"]
@@ -140,13 +140,15 @@ key and `GATEWAY_ENGINE=openrouter`.
 
 ```bash
 cd litellm
-cp .env.example .env            # edit GATEWAY_ENGINE if you do not run LMStudio
+cp .env.example .env            # the default serves EVERY engine at once
 podman compose up -d            # first boot takes ~60 s: LiteLLM runs schema migrations
 
 curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db":"connected"}
 ```
 
-Then get the models for **the one engine you selected** — three each, and you need no others.
+Then get the models for **whichever engines you actually run** — three each. The default config
+registers all five engines, and an alias whose engine is not running simply fails when called;
+nothing else breaks. To serve one engine only, set `GATEWAY_ENGINE` to its name.
 The commands are in that engine's config file, which also carries every trap it has:
 [`litellm/config/lms.yaml`](litellm/config/lms.yaml),
 [`litellm/config/unsloth.yaml`](litellm/config/unsloth.yaml),
@@ -187,8 +189,7 @@ commented, and this table is the short version.
 
 | Variable | Values | Default | In | Decides |
 |:--|:--|:--|:--|:--|
-| `GATEWAY_ENGINE` | `lms` · `unsloth` · `ollama` · `openrouter` · `openai` | `lms` | both | which engine runs, and so which two or three aliases exist |
-| `GATEWAY_DISCOVERY` | *empty* · `on` | *empty* | `litellm/` | empty serves the hand-written list; set, it **adds** every model the engine holds on disk |
+| `GATEWAY_ENGINE` | `all` · `lms` · `unsloth` · `ollama` · `openrouter` · `openai` | `all` | both | which engines run, and so which aliases exist. `all` is a real file, `config/all.yaml`, not a list you write |
 | `AIGW_DEBUG` | `false` · `true` — **never empty** | `false` | `envoy/` | per-request logging. An empty value crash-loops the container: aigw parses it as a bool |
 | `LITELLM_MASTER_KEY` | any string | `sk-litellm-master` | `litellm/` | the admin credential that mints virtual keys |
 | `UNSLOTH_API_KEY` | a key | *empty* | both | Unsloth answers `401` on every route without it |
@@ -199,10 +200,9 @@ second, so an exported key reaches the container without a second plaintext copy
 rotation will never reach. A missing key does not stop a gateway booting: the alias stays
 registered and answers `401` when something calls it.
 
-> **`GATEWAY_DISCOVERY=off` does not turn discovery off.** Compose builds the config filename
-> from `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being non-empty and not to
-> its meaning. `off`, `false`, `0` and `no` are caught and refused. **The way to turn it off is
-> an empty value.**
+> **`all` is the default, and it registers the two paid engines.** That costs nothing —
+> registering an alias is free, only a completion bills, and no alias falls back to another. For
+> a gateway that cannot spend at all, name one free engine: `GATEWAY_ENGINE=lms`.
 
 ## Endpoints
 
@@ -289,14 +289,15 @@ one its model card states.
 on the local routes, larger on the two OpenRouter ones. E4B caps at 131072, hence 122880.
 `openai-embed`'s 8191 is the model's own limit, not a subtraction.
 
-**Auto-discovery adds every model you already have**, and it is off by default. Only
-`litellm/` has it — the switch and the prober are described in that folder's README. It is
-purely additive: the generated config **includes** the hand-written one, so a name in the table
-above can never be shadowed. It never enumerates a paid engine either, because money is not
-discovered; on `openrouter` and `openai` it writes a pass-through config that adds nothing, so
-**discovery decides what is served, never whether the gateway runs.**
-**`envoy/` does not have it**: its config is a different shape and its image has no Python to
-run a renderer in. That folder's README explains the gap.
+**Every alias in the table is hand-written**, in `litellm/config/<engine>.yaml` and
+`envoy/config/<engine>.yaml`. There is no generated configuration anywhere in this repo: an
+auto-discovery service in `litellm/` used to add every model an engine held on disk, and it was
+removed on 2026-09-06 — see [What was removed](#what-was-removed).
+
+**The default config serves all of them at once.** `GATEWAY_ENGINE=all` reads `config/all.yaml`
+in either project. On LiteLLM that file is six `include:` lines and copies nothing; on Envoy it
+copies the five engine files, because `aigw run` takes one file path and Envoy's config has no
+include mechanism. **So adding an alias to Envoy is two edits there, not one.**
 
 ### Two traps when you pick an alias
 
@@ -472,62 +473,48 @@ suite deliberately does not cover is in each folder's own `tests/README.md`.
 > gateway** ranged from 5.8 s to 46.7 s over eight runs. For the gateway's own cost, see the
 > next section, which measures one request and holds everything else still.
 
-## Gateway comparison
+## Which gateway should you use?
 
-**Same engine, same model, same body, same `max_tokens`. Only the gateway changes.**
+**Run `litellm/`.** It is the only one with virtual keys, budget ceilings, per-request cost and
+a web UI that shows you the prompt and the reply with nothing to install. Reach for `envoy/`
+when you need what LiteLLM has no answer for: a config that deploys to Kubernetes unchanged, an
+MCP gateway, Prometheus metrics, or a proxy small enough that its footprint does not matter.
 
-Run it yourself — [`benchmark/`](benchmark/README.md), no dependencies:
+| | LiteLLM 24000 | Envoy 26000 |
+|:--|:--|:--|
+| what it is | a **control plane** — it knows things about traffic | a **data plane** that would run in production |
+| weight, measured | 2 services, a database, **~1.0 GB** RAM, 9.4 s restart | **1 service, no database, ~130 MB**, 1.3 s restart |
+| shows you the traffic | **a web UI at `/ui`, out of the box** | no UI — bring Arize Phoenix, Langfuse or any OTLP collector |
+| caps what a caller spends | **yes** | no, and it cannot in this mode |
+| deploys to a cluster | no | **yes** |
+| cost per request | 10–20 ms | 10–20 ms — **the same** |
+
+**Never choose on speed.** Both are within 20 ms of calling the engine with no gateway at all,
+and the overhead is flat — the same on a 2-token reply as on a 264-token one. The model is what
+you wait for. Run the numbers yourself with [`benchmark/`](benchmark/README.md):
 
 ```bash
 cd benchmark && uv run main.py --rounds 10
 ```
 
-Measured **2026-09-04**, alias `unsloth-4b` → `unsloth/gemma-4-E4B-it-qat-GGUF` on Unsloth
-Studio, MacBook with 128 GB. 10 rounds per scenario, round-robin, one warm-up round
-discarded, `max_tokens: 512`, `temperature: 0`. **Medians.**
-
-| Scenario | completion tokens | direct, no gateway | LiteLLM 24000 | Envoy 26000 |
-|:--|--:|--:|--:|--:|
-| `tiny` — a 2-token reply | 2 | 0.05 s | 0.05 s | **0.05 s** |
-| `chat` — one sentence | 8 | 0.06 s | 0.07 s | **0.07 s** |
-| `tools` — a `tool_calls` round trip | 157 | 0.29 s | 0.30 s | **0.29 s** |
-| `long-prompt` — a ~4 KB body | 264 | 0.31 s | 0.32 s | **0.32 s** |
-
-| Streaming | direct | LiteLLM | Envoy |
-|:--|--:|--:|--:|
-| time to **first token** | 0.03 s | 0.04 s | 0.06 s |
-| whole reply | 0.06 s | 0.08 s | 0.10 s |
-
-### What the numbers say
-
-- **Every gateway costs 10–20 ms, and that is the whole answer.** The overhead is flat: the
-  same on a 2-token reply as on a 264-token one, and the same on a 4 KB prompt as on a tiny
-  one. A proxy that *processed* the body would scale with it. None of them does.
-- **The two are within 10 ms of each other.** Any difference you see between them in a test
-  suite is the engine's warm/cold state or the harness, not the proxy.
-- **The completion-token column is the proof that the work was identical.** Every row returns
-  the same count in every scenario — same engine, same model, same generation.
-- **`max_tokens` had to be sent explicitly, or the comparison would have been a lie.** LiteLLM
-  stores a route default and Envoy stores none, so a body without a ceiling asks LiteLLM to do
-  *less work*. That single control is the difference between a benchmark and a number.
-
-**Choose a gateway on features, not on speed.** At 10–20 ms the proxy is not the thing you are
-waiting for — the model is. What actually separates them is in
-[the surface table above](#tests): virtual keys and budgets, whether a route carries its own
-`max_tokens`, and whether the config would run in a cluster.
+> **[`COMPARISON.md`](COMPARISON.md) is the full comparison** — every feature side by side, the
+> observability difference in detail, the measured resource table, the benchmark, and a
+> pick-by-situation table. Read it before committing a project to one of them.
 
 ## Repository layout
 
 ```text
 ai-gateway/
 ├── README.md                   this file — the front door and the shared vocabulary
+├── COMPARISON.md               LiteLLM or Envoy: features, resources, speed, and when
+│                               to choose which. The benchmark results live here
 ├── TESTING.md                  the handover: versions, the coverage matrix, every OPEN
 │                               bug with a reproduction, every FIXED one with the dead ends
 ├── litellm/                    compose project `ai-gateway`            PORT 24000
-│   ├── compose.yml                 postgres · discover · litellm
+│   ├── compose.yml                 postgres · litellm
 │   ├── .env.example                tracked; the key lines are blank BY DESIGN
-│   ├── config/                     the alias list — YAML, one file per engine
-│   ├── discover/                   auto-discovery: probes + the YAML renderer
+│   ├── config/                     the alias list — YAML, one file per engine,
+│   │                               plus all.yaml which INCLUDES all five
 │   ├── tests/                      SEVEN folders: raw HTTP, the OpenAI client, 5 agent SDKs
 │   └── README.md
 ├── benchmark/                  what the GATEWAY itself costs — the only thing here
@@ -535,7 +522,8 @@ ai-gateway/
 ├── envoy/                      compose project `ai-gateway-envoy`      PORT 26000
 │   ├── compose.yml                 ONE service: aigw. No database
 │   ├── .env.example
-│   ├── config/                     the alias list — Kubernetes custom resources
+│   ├── config/                     the alias list — Kubernetes custom resources,
+│   │                               plus all.yaml which COPIES all five
 │   ├── tests/                      the same SEVEN, all of them working
 │   └── README.md
 └── .claude/                    the working contract for AI agents in this repo
@@ -645,6 +633,22 @@ was worse at both jobs.
 **What was lost with it**: the MLflow trace UI, and a third data point in the benchmark above.
 Neither cost much. LiteLLM's Logs tab shows the same prompts and responses, and the benchmark's
 conclusion — every gateway costs 10–20 ms, flat — did not depend on the third column.
+
+**Auto-discovery went on 2026-09-06.** A `discover` one-shot in `litellm/` asked a local engine
+over its own HTTP API what it held on disk and generated `config/discovered-<engine>.yaml`,
+adding one alias per model beside the hand-written ones. Removed: the service, the module, the
+`GATEWAY_DISCOVERY` variable and the generated files.
+
+It was the last code in the repo — 561 lines of Python — and it bought a longer model
+list at the cost of a second, generated vocabulary that only existed on the machine that ran
+it. It also carried a trap that could not be fixed without removing the feature: compose built
+the config filename from `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being
+non-empty rather than to its meaning, so **`GATEWAY_DISCOVERY=off` switched discovery on**.
+
+**What replaced it is `all`.** The reason to want discovery was mostly "serve everything at
+once", and `GATEWAY_ENGINE=all` does that from files you can read without running anything.
+What is genuinely lost is the models on your disk that no alias names — those now need a
+hand-written entry, which is the point.
 
 ## License
 

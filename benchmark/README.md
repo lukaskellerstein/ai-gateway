@@ -12,7 +12,8 @@ uv run main.py --json results.json   # raw per-call timings as well
 ```
 
 No dependencies. Results, and how to read them, are in
-[the root README](../README.md#gateway-comparison).
+[`../COMPARISON.md`](../COMPARISON.md#what-they-cost-per-request) — which also compares the two
+gateways on everything that is not latency.
 
 ## Why this exists
 

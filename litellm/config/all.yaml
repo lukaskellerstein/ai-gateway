@@ -1,0 +1,46 @@
+# EVERY ENGINE AT ONCE — the default config, and the one this gateway serves unless
+# .env names a single engine instead.
+#
+# THIS FILE COPIES NOTHING. It is six include lines and no model_list of its own.
+# LiteLLM merges an included file key by key and EXTENDS a list, so the five engine
+# files' model_lists join into one and the settings arrive from settings.yaml. Add
+# an alias to config/lms.yaml and it appears here on the next `up -d` with no edit
+# to this file.
+#
+# 13 ALIASES, three of the engines free and two of them PAID:
+#
+#   lms-4b        lms-26b        lms-embed          LMStudio        free
+#   unsloth-4b    unsloth-26b    unsloth-embed      Unsloth Studio  free
+#   ollama-4b     ollama-26b     ollama-embed       Ollama          free
+#   openrouter-26b               openrouter-free    OpenRouter      PAID
+#   openai-mini                  openai-embed       OpenAI          PAID
+#
+# SERVING A PAID ROUTE COSTS NOTHING. Registering an alias is free; only a
+# completion through one bills a real account. Nothing here falls back to anything
+# else, so a request costs money only when a caller names a paid alias by hand. If
+# you want a gateway that CANNOT spend, put a single free engine in .env:
+# `GATEWAY_ENGINE=lms` serves three aliases and has no hosted route at all.
+#
+# THE ORDER MATTERS ONLY FOR settings.yaml, and it is first for a reason: LiteLLM
+# REPLACES a non-list key, so the last file to set one wins. The five engine files
+# set no settings blocks, so nothing overrides it today — but a file added below
+# that did would silently win.
+#
+# NOTHING INCLUDED MAY ITSELF CARRY AN `include:` THAT MATTERS. LiteLLM does not
+# recurse: the `include: [settings.yaml]` inside each engine file is merged as data
+# and dropped. That is harmless HERE only because settings.yaml is listed directly
+# above them. Verified 2026-09-06 against ghcr.io/berriai/litellm:main-stable — all
+# 13 aliases in /v1/models, prices and context windows intact.
+#
+# ../envoy HAS ITS OWN all.yaml AND IT IS NOT THIS SHAPE. Envoy's config is
+# Kubernetes custom resources and `aigw run` takes one file with no include
+# mechanism at all, so that file COPIES its five engine files. An alias is
+# therefore three edits: here-or-the-engine-file, envoy/config/<engine>.yaml, and
+# envoy/config/all.yaml. Nothing checks that you did all three.
+include:
+  - settings.yaml
+  - lms.yaml
+  - unsloth.yaml
+  - ollama.yaml
+  - openrouter.yaml
+  - openai.yaml

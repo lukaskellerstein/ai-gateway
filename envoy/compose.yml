@@ -15,10 +15,15 @@
 #
 # ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
 #
-#   GATEWAY_ENGINE   lms | unsloth | ollama | openrouter | openai   default lms
+#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai   default all
 #
-# THERE IS NO GATEWAY_DISCOVERY HERE. The other two projects can generate their
-# alias list; this one cannot yet — see README.md § Auto-discovery.
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 20 route rules, one
+# gateway. Name a single engine instead and only that engine's rules exist, which
+# is how you get a gateway that CANNOT reach a paid provider even by mistake.
+#
+# THERE IS NO AUTO-DISCOVERY ANYWHERE IN THIS REPO. ../litellm could generate its
+# alias list from whatever an engine held on disk until 2026-09-06; that service
+# and its module are gone. Every alias in both gateways is hand-written.
 #
 # WHAT THIS GATEWAY HAS THAT THE OTHER TWO DO NOT:
 #   /mcp                      an MCP gateway that aggregates MCP servers
@@ -59,18 +64,25 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one self-contained file per engine:
     #
+    #   config/all.yaml         20 rules: everything below       THE DEFAULT
     #   config/lms.yaml         3 aliases: 2 chat, 1 embedder      free
     #   config/unsloth.yaml     3 aliases: 2 chat, 1 embedder      free
     #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
     #   config/openrouter.yaml  1 alias:  1 chat                   PAID
     #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
     #
+    # `aigw run` TAKES ONE FILE PATH — not a directory, not a repeated flag
+    # (checked against `aigw run --help`, 2026-09-06) — and Envoy's config has no
+    # `include:` mechanism. So config/all.yaml COPIES the five files rather than
+    # referencing them, and AN ALIAS IS THREE EDITS: the other gateway's list,
+    # this engine's file, and all.yaml. Nothing checks that you did all three.
+    #
     # A TYPO IS A CLEAN CRASH: the file does not exist and aigw exits saying so.
     #
     # THE MOUNT IS /etc/aigw AND NOT /app. `/app` IS THE BINARY in this image —
     # the Dockerfile copies the CLI to /app and sets it as the entrypoint — so
     # mounting a directory there replaces the program with a folder.
-    command: ["run", "/etc/aigw/${GATEWAY_ENGINE:-lms}.yaml"]
+    command: ["run", "/etc/aigw/${GATEWAY_ENGINE:-all}.yaml"]
     ports:
       - "26000:1975"
       - "26064:1064"

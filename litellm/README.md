@@ -4,7 +4,7 @@ A standalone compose project. Run it from **this** directory; nothing above it i
 nothing here reads `../envoy`.
 
 ```bash
-cp .env.example .env      # edit GATEWAY_ENGINE if you do not run LMStudio
+cp .env.example .env      # the default serves EVERY engine at once
 podman compose up -d      # first boot takes ~60 s: LiteLLM runs schema migrations
 
 curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db":"connected"}
@@ -16,8 +16,7 @@ curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db
 logs, budget ceilings, `/v1/messages` and an admin UI. The alias names are shared with
 `../envoy`; the table of what they point at is in [`../README.md`](../README.md).
 
-Three services: `postgres` (keys, spend, ceilings — no published port), `discover` (a one-shot
-that exits, and does nothing unless discovery is on), and `litellm` itself.
+Two services: `postgres` (keys, spend, ceilings — no published port) and `litellm` itself.
 
 > **Do not rename this compose project.** `name: ai-gateway` in `compose.yml` is what keeps it
 > attached to the `ai-gateway_postgres_data` volume. Change the word and compose creates a new
@@ -136,29 +135,32 @@ so check a real Claude Code turn yourself before trusting an alias with agent wo
 
 ## Configuration
 
-Two words in `.env` decide what this gateway serves. Compose interpolates from the **shell
+One word in `.env` decides what this gateway serves. Compose interpolates from the **shell
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=ollama
-GATEWAY_DISCOVERY=
+GATEWAY_ENGINE=all        # the default: every engine at once, 13 aliases
 ```
 
 **There is no `COMPOSE_PROFILES` line.** It went with the split: the directory you stand in is
 now the choice of gateway, and `up -d` here starts this one whether or not `.env` exists.
 
-**Which engine.** One word, one engine. There is no list, no `all`, and no separate switch for
-the cloud — a hosted provider is an engine like any other, and the alias prefix already says
-which is which. That word names one file, `config/<engine>.yaml`. A typo is a clean crash: the
-file does not exist and `litellm` exits saying so.
+**Which engine.** One word names one file, `config/<engine>.yaml`. A typo is a clean crash:
+the file does not exist and `litellm` exits saying so.
 
-**Which models.** `GATEWAY_DISCOVERY` is empty by default, and then `config/<engine>.yaml` is
-the whole vocabulary — see [Auto-discovery](#auto-discovery) below.
+**`all` is the default and serves every engine at once** — 13 aliases from one gateway.
+`config/all.yaml` is six `include:` lines and copies nothing, so the per-engine files stay the
+one place an alias is written. **The five engine words are for isolation**: name one and every
+other alias is absent from the running config, not disabled, and a 404 on it is correct.
+`GATEWAY_ENGINE=lms` is how you get a gateway that cannot reach a paid provider at all.
+
+There is no separate switch for the cloud — a hosted provider is an engine like any other, and
+the alias prefix already says which is which. With `all`, the two paid engines are
+**registered**, which costs nothing: only a completion bills, and nothing falls back.
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `lms` | **which engine this gateway serves** — one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list. It is this project's alone: `../envoy` has its own, and nothing checks that they agree |
-| `GATEWAY_DISCOVERY` | *(blank)* | **which models** — blank means the hand-written list alone. `on` **adds** every model the engine holds on this machine. Local engines only. **`off` does not mean off** — compose reads any non-empty value as on, so leave it blank |
+| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../envoy` has its own, and nothing checks that they agree |
 | `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential. **Change it for anything but a laptop** |
 | `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every `lms-*` alias |
 | `UNSLOTH_API_BASE` | `http://host.containers.internal:8888/v1` | every `unsloth-*` alias |
@@ -215,64 +217,49 @@ directions here. The rule is in
 [`../.claude/rules/05-implement.md`](../.claude/rules/05-implement.md) § Settings that exist
 for one client.
 
-## Auto-discovery
+## Every alias is hand-written
 
-One line in `.env` adds every model the selected engine holds on **your** disk:
+`config/` is the whole vocabulary of this gateway. Six files:
 
-```bash
-GATEWAY_DISCOVERY=on
-```
-
-At `up -d` the `discover` service asks the engine over its own HTTP API what it has, and writes
-`config/discovered-<engine>.yaml` — one alias per model. The name is **the engine, a dash, and
-the model id**, with anything unusable turned into a dash:
-
-| Engine reports | Alias becomes |
+| File | Holds |
 |:--|:--|
-| `google/gemma-4-e4b` | `lms-google-gemma-4-e4b` |
-| `gemma4:26b` | `ollama-gemma4-26b` |
-| `nomic-embed-text:latest` | `ollama-nomic-embed-text-latest` |
+| `settings.yaml` | the three settings blocks, and the facts true of every alias. **No alias lives here** |
+| `lms.yaml` `unsloth.yaml` `ollama.yaml` `openrouter.yaml` `openai.yaml` | one engine each: `include: [settings.yaml]` and then its own `model_list` |
+| `all.yaml` | six `include:` lines and nothing else. **It copies no aliases** |
 
-**It only ever adds.** The generated file *includes* the hand-written one, so `lms-4b`,
-`lms-26b` and `lms-embed` keep answering exactly as before. A discovered name that would
-collide with one is dropped. Turning discovery on cannot break anything a project already
-calls. Turning it off is leaving the value **empty** and running `up -d` again.
+`all.yaml` works because LiteLLM merges an included file key by key and **extends a list**, so
+the five `model_list`s join into one while the settings arrive from `settings.yaml`. Add an
+alias to `config/lms.yaml` and it appears in `all` on the next `up -d` with no second edit.
+Verified 2026-09-06 against `ghcr.io/berriai/litellm:main-stable` — 13 aliases in `/v1/models`,
+prices and context windows intact.
 
-**Models that are downloaded but not loaded are configured too.** LMStudio and Ollama both
-report what is on disk, and both load a model on demand, so an unloaded model answers on the
-first call — slowly the first time, then warm.
+`settings.yaml` is listed **first** on purpose. LiteLLM *replaces* a non-list key, so the last
+file to set one wins; the five engine files set none today, but one added below them that did
+would silently win.
 
-Verified 2026-09-03: `GATEWAY_ENGINE=unsloth` with discovery on wrote 15 discovered aliases
-beside the 3 hand-written ones.
+**Nothing included may itself carry an `include:` that matters.** LiteLLM does not recurse: the
+`include: [settings.yaml]` inside each engine file is merged as data and dropped. That is
+harmless in `all.yaml` only because `settings.yaml` is listed directly.
 
-Three limits worth knowing before you switch it on:
+### Auto-discovery was removed on 2026-09-06
 
-- **It is local-only.** `lms`, `unsloth` and `ollama` are free, so a long list costs nothing.
-  OpenRouter lists hundreds of models and every one bills a real account, so the two paid
-  engines keep their hand-written lists and **money is never discovered**. Ask for discovery
-  on one and `discover` enumerates nothing, then writes a **pass-through**
-  `discovered-<engine>.yaml` that just includes the hand-written file — so the gateway comes
-  up serving exactly that list. **Until 2026-09-05 it exited 2 instead and LiteLLM
-  crash-looped on `Config file not found`**, because compose had already built the filename.
-- **`GATEWAY_DISCOVERY=off` does not mean off.** compose builds the config filename with
-  `${GATEWAY_DISCOVERY:+discovered-}`, which reacts to the word being *non-empty*, not to its
-  meaning. `off`, `false`, `0` and `no` are caught and refused with exit 2; **leave the value
-  empty** to turn it off.
-- **Unsloth reports the names fine; the numbers are thin.** Its `/v1/models` gives every model
-  on disk with its quantisation and whether it is loaded, so the aliases are complete. But it
-  serves **one model at a time**, and it reports the context window **only for the loaded
-  one** — 1 of 15 rows carried it on 2026-09-03, and the other 14 fall back to 8192, far below
-  the 262144 the hand-written `unsloth-26b` carries. It also has no type field, so chat
-  against embedding is guessed from the name. For the models it names,
-  [`config/unsloth.yaml`](config/unsloth.yaml) stays the better route.
+A `discover` one-shot used to ask a local engine over its own HTTP API what it held on disk and
+generate `config/discovered-<engine>.yaml`, adding one alias per model. It is gone: the service,
+`discover/gateway_discovery.py`, the `GATEWAY_DISCOVERY` variable, and the generated files.
 
-The generated file is gitignored, rewritten on every `up -d`, and worth reading once — it
-carries the window and quantisation each model reported.
+It took three things with it that were worth losing:
 
-**`discover/gateway_discovery.py` belongs to this project and is now the only copy.**
-`../mlflow/discover/` held a second one until that folder was deleted on 2026-09-04.
-`../envoy` has no discovery at all — its config needs another renderer and its image is
-distroless, with no Python to run one in.
+- **The only Python in the repo.** Every image is stock and there is still no build step; now
+  there is also no code to keep working.
+- **`GATEWAY_DISCOVERY=off` turning discovery ON.** compose built the filename with
+  `${GATEWAY_DISCOVERY:+discovered-}`, which reacted to the word being *non-empty*, not to its
+  meaning, so the module had to catch `off`, `false`, `0` and `no` by hand.
+- **A second, generated vocabulary.** What a gateway serves is now readable from the files in
+  `config/` alone, on any machine, without running anything.
+
+**Do not propose bringing it back.** `../envoy` never had it — its config is Kubernetes custom
+resources, which needs another renderer, and the aigw image is distroless with no Python to run
+one in.
 
 ## Tests
 
@@ -328,9 +315,9 @@ response included. **Look there before changing configuration.**
 | An `ollama-*` call that was fast a few minutes ago is slow again | Ollama evicted the idle model | expected — `ollama ps`, or raise `OLLAMA_KEEP_ALIVE` |
 | `ollama-*` says `model not found` | the tag is not pulled | `ollama pull <tag>` — the ids are in [`config/ollama.yaml`](config/ollama.yaml) |
 | An alias answers here and 404s on 26000 | `openrouter-free` does this **by design**. Otherwise you added it to `config/` only | add the `AIGatewayRoute` rule to `../envoy/config/<engine>.yaml` and `up -d` there |
-| An alias 404s after you changed `GATEWAY_ENGINE` | you are calling another engine's alias — only one engine is served at a time | `curl /model/info` for the names this engine serves |
-| `litellm` restarts in a loop | `GATEWAY_ENGINE` is misspelled, or is an old value like `all` | `podman compose logs litellm` — it names the config file it could not open |
-| `discover` shows as exited | it is a one-shot; exit 0 is the finished state | expected — `podman compose logs discover` |
+| An alias 404s after you changed `GATEWAY_ENGINE` | you named one engine, so every other engine's aliases are absent | `curl /model/info` for the names this config serves, or set `GATEWAY_ENGINE=all` |
+| `litellm` restarts in a loop | `GATEWAY_ENGINE` is misspelled | `podman compose logs litellm` — it names the config file it could not open |
+| A stale `GATEWAY_DISCOVERY` line in your `.env` | auto-discovery went on 2026-09-06; compose no longer reads it | inert, but delete the line |
 | `Engine protocol predict request failed: fetch failed` | a timeout fired mid-prompt and tore down the engine socket; it maps to a 400, and a 400 is never retried | raise **both** the client and the route timeout |
 | An agent runs a step or two, executes nothing, exits cleanly | tool calls came back as raw text from the wrong OpenRouter free-tier provider | check the provider pin in [`config/openrouter.yaml`](config/openrouter.yaml) |
 | A health probe is green but nothing works | it probed a port another stack answers | this project uses **24000** on purpose, leaving the usual 4000 free |
@@ -339,15 +326,13 @@ response included. **Look there before changing configuration.**
 
 ```text
 litellm/
-├── compose.yml             postgres · discover · litellm. name: ai-gateway — DO NOT RENAME
+├── compose.yml             postgres · litellm. name: ai-gateway — DO NOT RENAME
 ├── .env.example            tracked; the key lines are blank BY DESIGN
-├── config/                 mounted at /app/config, read-only
+├── config/                 mounted at /app/config, read-only. NO GENERATED FILES
 │   ├── settings.yaml           the three settings blocks; NO aliases
 │   ├── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
 │   │                            each includes settings.yaml and declares its aliases
-│   └── discovered-<engine>.yaml  GENERATED and gitignored; only when discovery is on
-├── discover/
-│   └── gateway_discovery.py    probes + the YAML renderer; standard library only
+│   └── all.yaml                THE DEFAULT. Six include lines; copies nothing
 └── tests/                  SEVEN folders, one per way of calling this gateway
     ├── gateway.py              base URL · key · alias, shared by all seven. stdlib only
     ├── run_all.py              runs every folder, one row each
