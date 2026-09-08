@@ -204,6 +204,13 @@ registered and answers `401` when something calls it.
 > registering an alias is free, only a completion bills, and no alias falls back to another. For
 > a gateway that cannot spend at all, name one free engine: `GATEWAY_ENGINE=lms`.
 
+**`GATEWAY_ENGINE` names any file in `config/`, including one you never commit.** That is how
+you serve *your* machine's models without putting a model list in the repo: write
+`config/<yourname>.yaml`, add it to `.gitignore`, and set the word. This laptop has
+`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio, 40
+aliases on 24000 and 44 route rules on 26000, and no hosted route at all so it cannot spend.
+Each gateway needs its own copy; neither reads the other's.
+
 ## Endpoints
 
 Both gateways answer these. The full per-gateway tables — with what each route needs and what

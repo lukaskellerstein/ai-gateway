@@ -222,6 +222,27 @@ Everything else is already named per engine and needed no change.
 > Hence five routes. **Watch that ceiling per route, not in total** — five engines at 15 aliases
 > each is fine; one engine at 16 is not.
 
+### A personal config that is not committed
+
+`GATEWAY_ENGINE` names **any** file in `config/`, so a gitignored one is how you serve *your*
+machine without committing it:
+
+```bash
+GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
+```
+
+`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **44 route
+rules** over every model downloaded in LMStudio and Unsloth Studio, plus the six short names
+and the four `-anthropic` aliases. It has no hosted backend at all, so **it cannot spend
+money**.
+
+**It needs four `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 44 rules
+means four. When you add a model, add it to a route that has room — the ceiling is per route,
+not per file, and going over crash-loops aigw before it serves anything.
+
+**`../litellm/config/lukas.yaml` is the same vocabulary for the other gateway**, and neither
+file reads the other. Add a model in one and add it in the other.
+
 ### There is no auto-discovery, here or in `../litellm`
 
 This project never had it. Adding it needs two things:

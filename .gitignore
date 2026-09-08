@@ -13,6 +13,14 @@
 # — it is where a gateway key would land if one were ever put in an `env` block.
 .claude/settings.local.json
 
+# PERSONAL, PER-MACHINE CONFIGS. `GATEWAY_ENGINE` names any file in config/, so a gitignored
+# one is how you serve YOUR disk without committing it: `GATEWAY_ENGINE=lukas` reads
+# config/lukas.yaml on either gateway. These describe one laptop and would be wrong on
+# another, which is the whole reason they are not tracked. The two must be kept in step by
+# hand — neither gateway reads the other's.
+litellm/config/lukas.yaml
+envoy/config/lukas.yaml
+
 # Each gateway's tests/ is its own uv project. The lockfile IS tracked; the
 # environment it builds is not.
 .venv/
