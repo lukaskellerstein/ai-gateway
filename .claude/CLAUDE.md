@@ -81,6 +81,17 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
   engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
   (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 13 aliases on `all`, Envoy 20
   route rules.
+- **`GATEWAY_ENGINE` NAMES ANY FILE IN `config/`, AND TWO OF THEM ARE GITIGNORED.**
+  `<project>/config/lukas.yaml` is the user's PERSONAL config — every chat and embedding model
+  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **40 aliases on
+  LiteLLM, 44 route rules on Envoy** (four `AIGatewayRoute`s, 15-alias cap). No Ollama, no
+  hosted engine, and none of Unsloth's four image models — so **it cannot spend money**, and a
+  chat route that could not work was never written. **YOU WILL BE ASKED TO ADD MODELS TO IT**
+  ("I downloaded a new model in unsloth"): that is TWO edits, `litellm/config/lukas.yaml` and
+  `envoy/config/lukas.yaml`, and on Envoy the new rule must go in a route with room. Both files
+  are in `.gitignore` and **must never be committed** — they describe one disk. LiteLLM's
+  includes `settings.yaml`, `lms.yaml` and `unsloth.yaml`, so the short names keep answering;
+  Envoy's copies those rules, as `all.yaml` does.
 - **NAMING ONE ENGINE IS STILL SUPPORTED AND IS THE MONEY GUARD.** Set `GATEWAY_ENGINE=lms` and
   every other alias is ABSENT from the running config — not disabled, absent — and a 404 on one
   is correct. That is the only way to get a gateway that cannot reach a paid provider. On `all`

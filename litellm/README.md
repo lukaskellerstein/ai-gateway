@@ -241,6 +241,29 @@ would silently win.
 `include: [settings.yaml]` inside each engine file is merged as data and dropped. That is
 harmless in `all.yaml` only because `settings.yaml` is listed directly.
 
+### A personal config that is not committed
+
+`GATEWAY_ENGINE` names **any** file in `config/`, so a gitignored one is how you serve *your*
+machine without committing it:
+
+```bash
+GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
+```
+
+`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it. It includes
+`settings.yaml`, `lms.yaml` and `unsloth.yaml` and then declares every other model downloaded
+in those two engines — **40 aliases**, with the short names (`lms-4b`, `unsloth-26b`, …) still
+answering because it *includes* those files rather than replacing them. It has no hosted
+route at all, so **it cannot spend money**.
+
+It is not tracked because it describes one disk. On another machine it would be wrong, and a
+model list is not something two people can share. Keep the same shape for your own: name it
+after yourself, add it to `.gitignore`, and it works with no other change.
+
+**`../envoy/config/lukas.yaml` is the same vocabulary for the other gateway**, and neither
+file reads the other. Add a model in one and add it in the other, or the name answers on
+24000 and 404s on 26000.
+
 ### Auto-discovery was removed on 2026-09-06
 
 A `discover` one-shot used to ask a local engine over its own HTTP API what it held on disk and

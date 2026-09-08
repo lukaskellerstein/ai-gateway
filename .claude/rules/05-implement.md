@@ -14,6 +14,7 @@ every number carries a comment saying where it came from.
 | Change | Goes in |
 |:--|:--|
 | an alias | `litellm/config/<engine>.yaml`, `envoy/config/<engine>.yaml` **and** `envoy/config/all.yaml` — three files |
+| a model the user just downloaded, for their own use | `litellm/config/lukas.yaml` **and** `envoy/config/lukas.yaml` — two files, both **gitignored**. Never commit them |
 | a LiteLLM settings block (`router_settings`, `general_settings`, …) | `litellm/config/settings.yaml` — once; every engine file includes it |
 | how an engine is chosen | the `--config` path in `litellm/compose.yml`, and `AIGW_CONFIG` in `envoy/compose.yml` |
 | an Envoy route, backend, timeout or buffer limit | `envoy/config/<engine>.yaml` **and** `envoy/config/all.yaml` — Kubernetes custom resources, self-contained per engine |
