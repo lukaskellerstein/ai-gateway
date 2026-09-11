@@ -9,9 +9,7 @@
       "BashOutput",
       "Edit",
       "EnterPlanMode",
-      "EnterWorktree",
       "ExitPlanMode",
-      "ExitWorktree",
       "Glob",
       "Grep",
       "KillShell",
@@ -39,6 +37,8 @@
       "Write"
     ],
     "ask": [
+      "EnterWorktree",
+      "ExitWorktree",
       "Bash(terraform apply:*)",
       "Bash(terraform destroy:*)",
       "Bash(kubectl delete:*)",
@@ -68,6 +68,54 @@
   },
   "enabledPlugins": {
     "dev-tools-plugin@claude-my-marketplace": true
+  },
+  "hooks": {
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-create.sh\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-remove.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   },
   "sandbox": {
     "enabled": true,

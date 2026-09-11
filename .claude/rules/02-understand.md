@@ -1,5 +1,7 @@
 # Step 1: Understand
 
+- Know where you stand first: `pwd` and `git branch --show-current`. In the main checkout
+  you may read and answer, not edit — [`worktree.md`](worktree.md).
 - Read the relevant config and identify what the change touches. **Identify which of the
   two projects it belongs to first** — `litellm/` and `envoy/` are independent compose
   projects and a change is almost always to one of them, not both.

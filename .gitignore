@@ -31,3 +31,6 @@ __pycache__/
 # The benchmark's raw per-call timings. A measurement of THIS machine on one day,
 # so it is a local fact; the numbers worth keeping are summarised in README.md.
 benchmark/results.json
+
+# Claude Code worktree sessions: claude -w <name>
+.worktrees/

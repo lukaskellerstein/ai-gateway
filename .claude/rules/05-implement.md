@@ -1,5 +1,7 @@
 # Step 3: Implement
 
+- Every edit lands in your own worktree (`.worktrees/<name>`, branch `<name>`), never in
+  the main checkout or another worktree — [`worktree.md`](worktree.md).
 - **Do not commit unless the user explicitly asks.**
 - Write clean code from the start; refactor as you go rather than "later".
 - Delete dead code. No commented-out blocks kept "just in case", no TODOs.

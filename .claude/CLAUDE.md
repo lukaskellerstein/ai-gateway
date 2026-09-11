@@ -21,7 +21,9 @@ aliases) · [`09-code-quality.md`](rules/09-code-quality.md) ·
 [`11-communication.md`](rules/11-communication.md) ·
 [`12-security.md`](rules/12-security.md) ·
 [`machine-tools.md`](rules/machine-tools.md) (`nvim-tools`, `lukas-ps` — pre-approved,
-read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`).
+read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) ·
+[`worktree.md`](rules/worktree.md) (where you may change files: your worktree under
+`.worktrees/<name>`, never the main checkout).
 
 ## The repo in a dozen points
 
