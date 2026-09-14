@@ -2,6 +2,10 @@
 
 - Every edit lands in your own worktree (`.worktrees/<name>`, branch `<name>`), never in
   the main checkout or another worktree — [`worktree.md`](worktree.md).
+- Before changing any signature, renaming, or deleting something shared, find
+  every caller with `findReferences` where the `LSP` tool is available — grep
+  misses the ones spelled differently and finds ones that are not calls.
+  [`lsp.md`](lsp.md)
 - **Do not commit unless the user explicitly asks.**
 - Write clean code from the start; refactor as you go rather than "later".
 - Delete dead code. No commented-out blocks kept "just in case", no TODOs.
