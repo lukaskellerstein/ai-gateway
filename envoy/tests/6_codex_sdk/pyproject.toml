@@ -7,11 +7,11 @@ requires-python = ">=3.12"
 # `openai-codex` ships its own pinned `codex` runtime as a dependency, so unlike
 # the Claude Agent SDK this folder needs nothing from npm — `uv sync` is enough.
 dependencies = [
-    "openai-codex>=0.147.0",
+    "openai-codex>=0.155.1",
     # The MCP server 04 spawns is written against `MCPServer`, the mcp 2.x API —
     # the same dialect as folder 5. This folder has no adapter capping it, so it
     # runs the newest.
-    "mcp>=2.1.1",
+    "mcp>=2.2.0",
 ]
 
 [tool.uv]

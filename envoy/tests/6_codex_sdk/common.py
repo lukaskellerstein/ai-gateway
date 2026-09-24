@@ -14,21 +14,27 @@ HOW THE GATEWAY IS SELECTED: one `--config` line per key, exactly the keys
 into a `--config key=value` argument on the runtime it spawns, so nothing is
 written to your `~/.codex` and a run cannot disturb your own Codex setup.
 
-`mcp_servers={}` AND `plugins={}` ARE NOT OPTIONAL, and they are the thing to
-copy. Codex merges `~/.codex/config.toml` into every run, so a developer with
-plugins installed hands the model their whole toolbox: on this machine that was
-**~80 tools** — a full Playwright browser API, Codex Apps, site deployment —
-and a small model cannot find one MCP tool in that crowd. Clearing both cuts it
-to the 17 the harness itself needs. This is the Codex equivalent of
-`setting_sources=[]` in folder 5, and without it the run depends on who is
-sitting at the keyboard.
+AN EMPTY `CODEX_HOME` IS NOT OPTIONAL, and it is the thing to copy. Codex reads
+`$CODEX_HOME/config.toml` — `~/.codex` by default — into every run, so a
+developer with plugins installed hands the model their whole toolbox. On this
+machine that was **~108 tools** on 2026-09-21: two plugin MCP servers, a Node
+REPL, seven Codex Apps namespaces, and a full Playwright API before that. A
+small model cannot find one MCP tool in that crowd. The file also carries
+hooks, which then RAN inside every test. `mcp_servers={}` plus `plugins={}` in
+the overrides used to be the guard and no longer is — that is exactly what
+leaked. A fresh temporary directory cuts the request to the 13 tools the
+harness itself needs (read from LiteLLM's request log, 2026-09-23 — the body
+is Codex's, whichever gateway receives it), and the custom
+provider still authenticates because the key arrives by ENVIRONMENT VARIABLE,
+not from that file. This is the Codex equivalent of `setting_sources=[]` in
+folder 5, and without it the run depends on who is sitting at the keyboard.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -62,7 +68,15 @@ START_HINT = "cd ../.. && podman compose up -d"
 # discourage it. A dedicated name is used rather than AI_GATEWAY_KEY so that
 # nothing here depends on how the surrounding shell happens to be set up.
 CODEX_KEY_ENV = "AI_GATEWAY_CODEX_KEY"
-os.environ[CODEX_KEY_ENV] = API_KEY
+
+# THE ISOLATION — see the note at the top. One fresh directory per test process,
+# removed when the interpreter exits, so no run inherits another's remembered
+# approvals or session state either. The runtime needs to WRITE here (sqlite
+# state, logs), which is why these scripts do not run inside a read-only sandbox.
+CODEX_HOME = tempfile.TemporaryDirectory(prefix="ai-gateway-codex-")
+
+# What the spawned runtime sees on top of this process's own environment.
+RUNTIME_ENV = {CODEX_KEY_ENV: API_KEY, "CODEX_HOME": CODEX_HOME.name}
 
 PROVIDER = "ai_gateway"
 
@@ -81,6 +95,7 @@ def codex_config(alias: str) -> CodexConfig:
     agent that forgets things mid-task for no visible reason.
     """
     return CodexConfig(
+        env=RUNTIME_ENV,
         config_overrides=(
             f'model_providers.{PROVIDER}.name="AI Gateway ({NAME})"',
             f'model_providers.{PROVIDER}.base_url="{RESPONSES_BASE_URL}"',
@@ -89,10 +104,13 @@ def codex_config(alias: str) -> CodexConfig:
             f'model_provider="{PROVIDER}"',
             f'model="{alias}"',
             "model_context_window=122880",
-            # See the note at the top — this is the isolation, not a tidy-up.
-            "mcp_servers={}",
-            "plugins={}",
-        )
+            # An EMPTY home is not a QUIET one: on first start Codex clones the
+            # curated plugin marketplace into `$CODEX_HOME/.tmp/plugins-clone-*`
+            # in the background, and that clone outlives the runtime — the temp
+            # directory's cleanup then raced with it and failed (2026-09-23).
+            # The tests want no plugin at all, so the feature is off.
+            "features.plugins=false",
+        ),
     )
 
 
