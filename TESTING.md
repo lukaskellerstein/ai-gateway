@@ -1,8 +1,9 @@
 # TESTING.md — where the testing stands, and what is left
 
-**Started 2026-09-04. Last measured 2026-09-05.** This file is a handover. It says exactly
-what was tested, with which model, and what happened — so the next person does not repeat
-work or trust a claim that was never measured.
+**Started 2026-09-04. Last measured 2026-09-05; folder 6, §5.1 and §6.11 re-measured
+2026-09-23.** This file is a handover. It says exactly what was tested, with which model, and
+what happened — so the next person does not repeat work or trust a claim that was never
+measured.
 
 Where a result is missing, it says **not tested** rather than guessing.
 
@@ -86,7 +87,7 @@ newer build", and none of it can be answered without them.**
 | **Envoy AI Gateway** | **`dev`** — see below | image `docker.io/envoyproxy/ai-gateway-cli:latest`, built **2026-08-28**, digest `sha256:f5702fe9dc7ce75ba79cfc2de64d61943e0994d7d071e4e33ca00dff48952c86` |
 | Nearest aigw release | **v1.1.0**, 2026-08-21 | the last tagged release before that image was built |
 | `claude` CLI | whatever npm has | `npm install -g @anthropic-ai/claude-code` |
-| `openai-codex` | **0.147.0** | PyPI has only 5 releases; **no 0.116.x** — see §5.1 |
+| `openai-codex` | **0.155.1** | upgraded from 0.147.0 on 2026-09-21, with `mcp` 2.1.1 → 2.2.0; folder 6 is 4/4 on both gateways. PyPI has 7 releases and **no 0.116.x** — see §5.1 |
 
 > **`aigw version` PRINTS `dev`, NOT A SEMVER.** The `:latest` tag is built from `main`, so
 > the binary cannot tell you which release you have. **The image digest and build date above
@@ -184,33 +185,64 @@ in §10.
 | `OPENROUTER_API_KEY` | **works** — paid tier, **$2.337691** used at 2026-09-05 01:10, no limit |
 | Both keys' source | already exported into the shell by `~/Projects/.envrc`; nothing to decrypt |
 | `response_format: json_schema` on the OpenAI route | honoured by **both** gateways with `unsloth-4b`, 3/3 each |
-| Envoy `/v1/responses` | works with Codex 0.147 (folder 6 passes) |
-| `openrouter-26b` through Envoy + Codex | called an MCP tool correctly on the first try |
+| Envoy `/v1/responses` | works with Codex 0.147 and 0.155.1 (folder 6 passes, re-run 2026-09-21) |
+| `openrouter-26b` through Codex | called an MCP tool correctly on the first try — Envoy 2026-09-04; **both gateways 2026-09-23**, with the §6.11 key, asserted by `04_mcp.py` |
 | LiteLLM upgrade 1.95.0 → 1.99.1 | no pending migrations, no data loss, **did not fix §6.1 on its own** |
 
 ---
 
 ## 5. OPEN — bugs we are facing and have NOT fixed
 
-### 5.1 Codex cannot call MCP tools — BOTH UPSTREAM ISSUES STILL OPEN
+### 5.1 Codex cannot call MCP tools on a LOCAL engine — STILL OPEN, and the cause is now measured
 
-Re-checked with `gh` on 2026-09-05:
+**The approval half of this entry is fixed and moved to §6.11.** What is left is the shape
+Codex sends. Re-checked with `gh` on 2026-09-21, codex **0.155.1**:
 
 | Issue | State |
 |:--|:--|
 | [openai/codex#19871](https://github.com/openai/codex/issues/19871) — MCP invocation regressed for custom providers since 0.117.0 | **OPEN** |
-| [openai/codex#24135](https://github.com/openai/codex/issues/24135) — no way to approve MCP calls non-interactively | **OPEN** |
+| [openai/codex#26234](https://github.com/openai/codex/issues/26234) — flatten MCP namespace tools for custom providers. **The fix #19871 is waiting for**; both PRs, #28271 and #29602, were closed unmerged | **OPEN** |
 | [envoyproxy/ai-gateway#2586](https://github.com/envoyproxy/ai-gateway/issues/2586) — Envoy 400s Codex 0.116's payload | **CLOSED 2026-08-26** |
 
-**Proven here**: codex-cli 0.116.0 calls the tool; 0.147.0 does not. `04_mcp.py` therefore
-asserts the **wiring** — Codex spawns the server, handshakes, reads `tools/list` — and prints
-the bug link every run. When the two open issues close, turn it into an assertion.
+**Symptom.** `04_mcp.py` prints `tool really called: False` on every local alias. The model
+shells out, or reads the serial number out of `mcp_server.py`; `unsloth-4b` says *"I don't
+have a tool named `bench_serial` available."*
 
-**#2586 closing removes one blocker to pinning 0.116.0; the other still stands.** The aigw
-image in use already contains that fix, so Envoy would now accept the payload — but **PyPI
-has no 0.116.x**. `openai-codex` has five releases in total: `0.1.0b1`, `0.1.0b2`, `0.1.0b3`,
-`0.144.4`, `0.147.0`. The Python SDK cannot drive that runtime, so the pin is still not an
-option.
+**Cause, measured.** From 0.117.0 Codex sends a whole MCP server as ONE tool of type
+`namespace`. One `/v1/responses` call per shape, **no Codex in the path**, `unsloth-26b`, the
+same on 24000 and 26000:
+
+| The same tool, sent as | What came back |
+|:--|:--|
+| `{"type":"namespace","name":"mcp__hardware","tools":[…]}` — what Codex sends | a plain message, **no call** |
+| a flat `{"type":"function","name":"mcp__hardware__bench_serial",…}` | `function_call {"appliance":"atlas"}` |
+
+So neither gateway nor the engine is at fault. The OpenRouter route understands the shape —
+§6.11 — and no local engine does.
+
+**Tried on 2026-09-21, and none of it helps:**
+
+| Tried | Result |
+|:--|:--|
+| codex 0.155.1, the newest on PyPI, both gateways, `unsloth-4b` and `unsloth-26b` | tool never ran |
+| `model_providers.<id>` in the config schema of 0.155.1 and of 0.156.0-alpha.16 | no capability key for it |
+| `features.non_prefixed_mcp_tool_names = true` | renames the namespace to `hardware`; still a `namespace`, tool never ran |
+| an empty `CODEX_HOME` — 13 tools in the request instead of ~108 | tool never ran, so the crowd was never the cause |
+| codex-cli **0.116.0**, 2026-09-04 | **the tool ran** — it sent flat tools |
+
+**The fixes that "work" are proxies** — Swobu, `codex-ollama-proxy`, a gist on #26234, one
+hosted endpoint. Each flattens the tools on the way out and restores the names on the way
+back. That is a shim between Codex and the gateway, and this repo does not build one.
+
+**Pinning 0.116.0 is still not an option.** The aigw image already carries the #2586 fix, so
+Envoy would accept its payload — but **PyPI has no 0.116.x**. `openai-codex` has seven
+releases: `0.1.0b1`, `0.1.0b2`, `0.1.0b3`, `0.144.4`, `0.147.0`, `0.154.0`, `0.155.1`. The
+Python SDK cannot drive that runtime.
+
+**WHAT A FUTURE AGENT SHOULD DO.** Open #19871 and #26234. If either is closed, upgrade
+folder 6 and run `uv run 04_mcp.py` on a **local** alias. When it prints
+`tool really called: True` there, turn that line into an assertion, delete the note in
+`04_mcp.py` and in the folder README, and move this entry to §6.
 
 ### 5.2 Envoy sends Anthropic's `thinking` straight to OpenAI, which rejects it
 
@@ -641,6 +673,54 @@ keeps the file diffable against the five it came from.
 engine at 16 is not. `envoy/config/<engine>.yaml` has 5 rules at most today, so only `all.yaml`
 was ever near it.
 
+### 6.11 Codex rejected every MCP call in a headless run — one per-server key
+
+**Moved from §5.1 on 2026-09-21.** Upstream
+[openai/codex#24135](https://github.com/openai/codex/issues/24135) is **still OPEN** — it asks
+for a CLI flag — so this is a fix for us, not a fix upstream.
+
+**Symptom, 2026-09-04, codex 0.147.0.** A frontier model called the MCP tool correctly through
+the gateway and Codex answered *"This action was rejected due to unacceptable risk."* Nobody
+is there to approve a call in a headless run.
+
+**What did NOT work**, all silently ignored: `approval_policy="never"`,
+`tools_require_approval`, `trusted_mcp_servers`, a per-server `approval_policy`.
+
+**The fix** is a key on the MCP server itself, set by `04_mcp.py` in both projects:
+
+```toml
+[mcp_servers.hardware]
+default_tools_approval_mode = "approve"   # auto | prompt | writes | approve
+```
+
+A single tool can carry the same thing: `mcp_servers.<name>.tools.<tool>.approval_mode`.
+It covers that server's tools only; the sandbox and `deny_all` still hold for everything else.
+
+**Measured 2026-09-23 with `04_mcp.py` itself, on BOTH gateways** — codex **0.155.1**,
+`openrouter-26b`, approval policy `never` (the SDK's `deny_all`), read-only sandbox, an empty
+`CODEX_HOME`:
+
+```text
+items=userMessage,mcpToolCall,agentMessage   status=completed
+mcpToolCall: server=hardware tool=bench_serial arguments={"appliance":"atlas"} error=null
+tool really called: True        <- the SERVER's marker file, not the answer
+PASS  envoy       2.8s          PASS  litellm     2.4s
+```
+
+So LiteLLM passes Codex's `namespace` tools through `/v1/responses` to OpenRouter intact.
+
+**Guarded by** `04_mcp.py`, which now ASSERTS the call on `openrouter-26b` (`CALLS_THE_TOOL`).
+Delete the key and that run goes red — but it is a paid run, so `run_all.py` on a free alias
+does not prove the key is still there.
+
+**NOT measured, because it bills a real account:** the same run on 0.155.1 *without* the key,
+so the version and the key are not separated. Upstream
+[openai/codex#29857](https://github.com/openai/codex/issues/29857) reports that `codex exec`
+ignores this key — the SDK drives the app-server, not `codex exec`, and there it works.
+
+**It does not make a LOCAL alias call the tool.** That is §5.1, a different bug in the same
+scenario.
+
 ## 7. How config fixes are kept straight
 
 Added 2026-09-05, after a global flag was set for one client with no record of who it was
@@ -668,7 +748,8 @@ on whose bill" is one table.
 
 1. **`openai-embed` and the embedding routes** are untested everywhere. No folder covers
    embeddings.
-2. **Re-check the two Codex issues** whenever folder 6 comes up.
+2. **Re-check openai/codex#19871 and #26234** whenever folder 6 comes up — §5.1. The
+   approval bug, #24135, is worked around — §6.11.
 3. **Decide whether §5.2 and §5.3 matter to you.** Both are Envoy + hosted OpenAI, both are
    upstream, and both have a clear next action written into their entries. If Envoy plus a
    hosted OpenAI model is a real use case for you, §5.2 is worth filing upstream — it looks
@@ -717,9 +798,10 @@ AI_GATEWAY_TEST_MODEL=openai-mini uv run 01_simple_call.py   # ONE scenario, non
   command. The marker files caught it; an answer check would have passed.
 - **Do not add a SKIP for something flaky. Fix the flake** — §6.2 is the worked example.
 - **Assert on values, never on wording.** `Transcript.says()` strips commas and Markdown bold.
-- **Isolate from ambient config.** `setting_sources=[]` for the Claude SDK; `mcp_servers={}`
-  plus `plugins={}` for Codex — without the latter, `~/.codex/config.toml` handed the model
-  **~80 tools**.
+- **Isolate from ambient config.** `setting_sources=[]` for the Claude SDK; an EMPTY
+  `CODEX_HOME` for Codex, plus `features.plugins=false`. `mcp_servers={}` plus `plugins={}` was
+  the Codex guard until 2026-09-23 and had stopped working: `~/.codex/config.toml` handed the
+  model **~108 tools** and ran its hooks inside every test. The fresh home cuts it to **13**.
 - **Every dependency floor is the version that was proven**, not a historical minimum.
 - **`podman compose restart` does NOT clear a container's log.** Use `--since`.
 

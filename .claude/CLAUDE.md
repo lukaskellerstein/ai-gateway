@@ -196,9 +196,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   their own containers** — a gateway that looks "not running" is often running under the
   other one.
 - **EVERY TEST FOLDER IS ON THE NEWEST PUBLISHED RELEASE, AND SAYS SO IN ITS MANIFEST**
-  (checked against PyPI 2026-09-04): deepagents 0.7.13, langchain 1.4.0, langgraph 1.2.11,
-  openai 3.8.0, claude-agent-sdk 0.2.152, openai-codex 0.147.0, langchain-mcp-adapters
-  0.3.2, mcp 2.1.1 (1.29.1 in `4_deepagents` — see below). **The declared floor in each
+  (checked against PyPI 2026-09-04; folder 6 again on 2026-09-21): deepagents 0.7.13,
+  langchain 1.4.0, langgraph 1.2.11, openai 3.8.0, claude-agent-sdk 0.2.152, openai-codex
+  0.155.1, langchain-mcp-adapters 0.3.2, mcp 2.1.1 (2.2.0 in `6_codex_sdk`; 1.29.1 in
+  `4_deepagents` — see below). **The declared floor in each
   `pyproject.toml` IS the version that was proven**, not a historical minimum: `>=0.7.13`,
   never `>=0.6.12`. That is deliberate — a floor two years old says a test passed on
   something nobody has run. Upgrading is `uv lock --upgrade` in the folder, then raise the
@@ -215,17 +216,25 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   **The wire itself is version-agnostic**: an mcp 1.29.1 client discovered and called an mcp
   2.1.1 server across two venvs (measured 2026-09-04). `mcp_server.py` exists in two
   dialects only so each folder stays copyable on its own.
-- **CODEX CANNOT CALL MCP TOOLS ON EITHER GATEWAY, AND IT IS AN OPEN UPSTREAM BUG**
-  (measured 2026-09-04). openai/codex#19871 — MCP tool invocation regressed for custom
-  providers on the Responses API from 0.117.0; last good runtime 0.116.0. We PROVED both
-  sides with the same server, prompt and `unsloth-4b`: **0.116.0 calls the tool, 0.147.0
-  does not.** `tests/6_codex_sdk/04_mcp.py` therefore asserts the WIRING — Codex spawns the
-  server, handshakes and reads `tools/list` — and PRINTS the bug link every run. A second
-  open bug, openai/codex#24135, means MCP calls cannot be approved non-interactively at all;
-  a frontier model called the tool correctly and Codex answered "rejected due to unacceptable
-  risk". **Re-check both issues when folder 6 comes up.** Pinning 0.116.0 is not an option:
-  its app-server protocol predates the Python SDK and Envoy 400s its payload
-  (envoyproxy/ai-gateway#2586).
+- **CODEX CANNOT CALL MCP TOOLS ON A LOCAL ENGINE, ON EITHER GATEWAY, AND IT IS AN OPEN
+  UPSTREAM BUG** (re-measured 2026-09-21, codex 0.155.1). openai/codex#19871 — from 0.117.0
+  Codex sends a whole MCP server as ONE tool of type `namespace`, and no local engine
+  understands that shape. **THE CAUSE IS MEASURED, NOT INFERRED**: one `/v1/responses` call
+  per shape, no Codex in the path, `unsloth-26b`, the same on both ports — `namespace` gets a
+  plain message, the same tool as a flat `function` gets a `function_call`. So neither gateway
+  is at fault. Nothing in Codex turns the shape off (no provider capability in 0.155.1 or
+  0.156.0-alpha.16; `features.non_prefixed_mcp_tool_names` only renames it), and the real fix,
+  openai/codex#26234, has had both its PRs closed unmerged. **THE FIXES THAT "WORK" ARE
+  PROXIES THAT FLATTEN THE TOOLS — shims. Do not build one.** `tests/6_codex_sdk/04_mcp.py`
+  therefore asserts the WIRING and PRINTS `tool really called:` every run. **THE SECOND BUG,
+  openai/codex#24135, IS WORKED AROUND**: `default_tools_approval_mode = "approve"` on the MCP
+  server, set in `04_mcp.py`. With it `openrouter-26b` RAN the tool on BOTH gateways under
+  approval policy `never` and a read-only sandbox (2026-09-23) — the OpenRouter route
+  understands `namespace`, and `04_mcp.py` ASSERTS the call on that alias (`CALLS_THE_TOOL`).
+  That is a paid run, so a free `run_all.py` does not prove the key is still there.
+  **Re-check #19871 and #26234 when folder 6 comes up.** Pinning
+  0.116.0, the last runtime with flat tools, is not an option: PyPI has no `openai-codex`
+  0.116.x. Full record: `TESTING.md` §5.1 and §6.11.
 - **OPENCODE CAN DO WHAT CODEX CANNOT: `tools={"bash": false, …}` PER PROMPT.** Switching the
   built-in tools off for one prompt leaves an MCP tool as the only way to answer, and a 4B
   model then calls it every time (measured 2026-09-04, `tests/7_opencode_sdk/04_mcp.py`
@@ -233,10 +242,17 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   between the two folders' MCP scenarios. **OpenCode's structured output is in
   `info.structured`, NOT in the text parts** — reading the text and calling `json.loads`
   fails even when everything worked.
-- **`~/.codex/config.toml` LEAKS INTO EVERY CODEX RUN.** With this machine's plugins the
-  model was handed **~80 tools** — a full Playwright API and Codex Apps. `mcp_servers={}`
-  plus `plugins={}` in `config_overrides` cuts it to 17 and is the Codex equivalent of
-  `setting_sources=[]`. Without it a run depends on who is at the keyboard.
+- **`~/.codex/config.toml` LEAKS INTO EVERY CODEX RUN, AND AN EMPTY `CODEX_HOME` IS THE
+  GUARD** (since 2026-09-23). With this machine's plugins the model was handed **~108 tools**
+  — two plugin MCP servers, a Node REPL, seven Codex Apps namespaces — and the file's hooks
+  ran inside every test. `mcp_servers={}` plus `plugins={}` in `config_overrides` was the
+  guard until then and HAD STOPPED WORKING. `tests/6_codex_sdk/common.py` now hands the
+  runtime a fresh temporary directory through `CodexConfig(env=…)`, which cuts the request to
+  the **13** tools the harness needs, plus `features.plugins=false` because an empty home
+  otherwise clones the plugin marketplace in the background and that clone outlives the
+  runtime. It is the Codex equivalent of `setting_sources=[]`; without it a run depends on
+  who is at the keyboard. Codex must WRITE there, so these tests do not run inside a
+  read-only sandbox.
 - **BOTH GATEWAYS STREAM CORRECTLY** with the byte-identical `1_http_client` script.
   `main.py` still guards against an SSE frame carrying an `error` instead of a `delta` and
   reports SKIPPED — the deleted MLflow gateway failed exactly that way
