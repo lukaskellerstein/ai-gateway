@@ -13,7 +13,7 @@ written to your `~/.config/opencode` and a run cannot disturb your own setup.
 
 ```bash
 uv run run_all.py                     # all five
-uv run run_all.py --model unsloth-26b # the same five on another alias
+uv run run_all.py --model unsloth-gemma4-26b # the same five on another alias
 uv run 04_mcp.py                      # one scenario, directly
 ```
 

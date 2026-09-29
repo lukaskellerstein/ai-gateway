@@ -42,7 +42,7 @@ model_list:
   #
   # IT HAS NO VISION, so tests/03_multimodal.py cannot pass against it. That is why tests/
   # never picks an `openai-*` alias as its default — see tests/common.py.
-  - model_name: openai-mini
+  - model_name: openai-gpt54-mini
     litellm_params:
       model: openai/gpt-5.4-mini
       api_key: os.environ/OPENAI_API_KEY
@@ -50,15 +50,16 @@ model_list:
                                          # broken, not loading weights from disk
 
   # text-embedding-3-small at 1536 dimensions — NOT interchangeable with any local embedder
-  # here. `lms-embed`, `unsloth-embed` and `ollama-embed` are all nomic v1.5 at 768 dims; this
-  # is a different model at twice the width, so an index built with one and queried with the
-  # other does not merely degrade — the vector lengths do not match and it cannot be read.
+  # here. `lms-nomic-embed`, `unsloth-nomic-embed` and `ollama-nomic-embed` are all nomic v1.5
+  # at 768 dims; this is a different model at twice the width, so an index built with one and
+  # queried with the other does not merely degrade — the vector lengths do not match and it
+  # cannot be read.
   #
   # TWO THINGS TO WEIGH BEFORE USING IT FOR RETRIEVAL. Every document you embed LEAVES THIS
   # MACHINE, which the three local embedders never do. And an embedding workload is many
   # small calls, so this is the alias most able to run up a bill without any single call
   # looking expensive — put a ceiling on the key that holds it.
-  - model_name: openai-embed
+  - model_name: openai-embed3-small
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY

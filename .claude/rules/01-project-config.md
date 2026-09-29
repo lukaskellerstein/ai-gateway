@@ -80,7 +80,7 @@ reads its **own** `.env`:
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 **`all` IS THE DEFAULT AND IS A REAL FILE**, `config/all.yaml`, not a list you write. It
-serves every engine at once: 14 aliases on LiteLLM, 22 route rules on Envoy — the latter split
+serves every engine at once: 17 aliases on LiteLLM, 28 route rules on Envoy — the latter split
 across **six `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
 (`HTTPRoute.spec.rules` allows 16 and aigw uses one). The two files are
 built differently and the difference matters when you add an alias:
@@ -130,7 +130,7 @@ nested `include:` is merged as data and dropped.
 
 `config/all.yaml` lives with that rather than around it: it lists `settings.yaml` **directly
 and first**, then the six engine files, whose own `include: [settings.yaml]` is then dropped
-harmlessly. Verified 2026-09-28 — 14 aliases in `/v1/models`, prices and windows intact. The
+harmlessly. Verified 2026-09-29 — 17 aliases in `/v1/models`, prices and windows intact. The
 rule still bites anywhere else: include a file that carries an `include:` you were relying on,
 and the settings vanish silently and the proxy boots with no master key.
 
@@ -141,30 +141,34 @@ Callers name an **alias**, never a model — the model behind a name is expected
 
 |  | LMStudio :1234 | Unsloth :8888 | Ollama :11434 | OpenRouter | OpenAI | Cerebras |
 |:--|:--|:--|:--|:--|:--|:--|
-| chat, small | `lms-4b` | `unsloth-4b` | `ollama-4b` | — | `openai-mini` | — |
-| chat, large | `lms-26b` | `unsloth-26b` | `ollama-26b` | `openrouter-26b` | — | `cerebras-27b` |
-| embed | `lms-embed` | `unsloth-embed` | `ollama-embed` | — | `openai-embed` | — |
-| extra | — | — | — | `openrouter-free` | — | — |
+| Gemma 4 E4B | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — |
+| Gemma 4 26B | `lms-gemma4-26b` | `unsloth-gemma4-26b` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
+| Qwen 3.8 27B | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
+| other chat | — | — | — | — | `openai-gpt54-mini` | — |
+| embed | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
 | costs | free | free | free | **paid** | **paid** | **paid** |
+
+**Names are `<engine>-<model>-<size>` since 2026-09-29**, and the suffix is the same on every
+engine for the same model. The size-only names before it (`lms-26b`, `cerebras-27b`, …) were
+renamed with no fallback and now 404; root `README.md` § The aliases has the old → new table.
 
 `GATEWAY_ENGINE=all` — the default — serves **every column at once**. Naming one engine
 selects **one column**, and the rows are the point: the same weights sit across a row, so
 changing the word and re-running that project's `tests/` measures the engine and nothing else.
 A comparison run still wants one column, because `all` leaves the caller free to pick.
 
-**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — NINE OF THEM.** Two per local
-engine (`lms-4b-anthropic`, `lms-26b-anthropic`, and the same for `unsloth` and `ollama`), plus
-`openrouter-26b-anthropic`, `openai-mini-anthropic` and `cerebras-27b-anthropic`. They are the SAME model on the SAME
-engine. Seven of the nine reach an `Anthropic`-schema `AIServiceBackend`, so the body is NOT
-translated — the only way Claude Code can hold a conversation through Envoy.
-**`openai-mini-anthropic` and `cerebras-27b-anthropic` are the exceptions**: neither vendor
-serves `/v1/messages` (Cerebras answered 404, 2026-09-28), so those rules point at the plain
-`OpenAI`-schema backend and still translate. They are plumbing, not
-vocabulary: LiteLLM does not need them, and nothing but `envoy/tests/5_claude_agent_sdk` calls
-them. **13 model aliases + 9 `-anthropic` = the 22 rules in `envoy/config/all.yaml`.** Full
-note: `envoy/README.md`.
+**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — TWELVE OF THEM, ONE PER CHAT
+ALIAS** (`lms-gemma4-26b-anthropic`, `openrouter-qwen38-27b-anthropic`, …). They are the SAME
+model on the SAME engine. Ten of the twelve reach an `Anthropic`-schema `AIServiceBackend`, so
+the body is NOT translated — the only way Claude Code can hold a conversation through Envoy.
+**`openai-gpt54-mini-anthropic` and `cerebras-qwen38-27b-anthropic` are the exceptions**:
+neither vendor serves `/v1/messages` (Cerebras answered 404, 2026-09-28), so those rules point
+at the plain `OpenAI`-schema backend and still translate. They are plumbing, not vocabulary:
+LiteLLM does not need them, and nothing but `envoy/tests/5_claude_agent_sdk` calls them.
+**16 model aliases + 12 `-anthropic` = the 28 rules in `envoy/config/all.yaml`.** Full note:
+`envoy/README.md`.
 
-**`openrouter-free` is deliberately absent on 26000.** Envoy has no equivalent of
+**`openrouter-gemma4-26b-free` is deliberately absent on 26000.** Envoy has no equivalent of
 `extra_body`, so it cannot carry the provider pin, and an unpinned copy would carry exactly
 the raw-text tool-call failure the pin exists to stop. It is the one alias where "the config
 is incomplete" is the wrong diagnosis.
@@ -186,7 +190,7 @@ is incomplete" is the wrong diagnosis.
 - **Local routes are shadow-priced**: free to run, carrying a cloud twin's rate so a
   budget ceiling still trips. An unpriced route would log `$0` and make ceilings a no-op.
 - **Unsloth holds one model at a time**, and the limit spans chat and the embedder.
-  `unsloth-embed` evicts `unsloth-26b` and the next chat call swaps it back — 14 s cold,
+  `unsloth-nomic-embed` evicts `unsloth-gemma4-26b` and the next chat call swaps it back — 14 s cold,
   4.4 s warm. **More than one gateway on `unsloth` will thrash it.** LMStudio and Ollama
   do not.
 - **LMStudio JIT-loads at 8192 context with a 1 h TTL**, ignoring hand-load flags. A

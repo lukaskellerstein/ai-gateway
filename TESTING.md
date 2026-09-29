@@ -110,18 +110,18 @@ unchanged**.
 
 | Alias | Model | Provider prefix | Engine |
 |:--|:--|:--|:--|
-| `lms-4b` | `google/gemma-4-e4b` | `lm_studio/` | LM Studio, host :1234 |
-| `lms-26b` | `google/gemma-4-26b-a4b-qat` | `lm_studio/` | LM Studio |
-| `lms-embed` | `text-embedding-nomic-embed-text-v1.5` | `lm_studio/` | LM Studio |
-| `unsloth-4b` | `unsloth/gemma-4-E4B-it-qat-GGUF` | `openai/` | Unsloth Studio, host :8888 |
-| `unsloth-26b` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | Unsloth Studio |
-| `unsloth-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | `openai/` | Unsloth Studio |
-| `ollama-4b` | `gemma4:e4b` | `openai/` | Ollama, host :11434 |
-| `ollama-26b` | `gemma4:26b` | `openai/` | Ollama |
-| `ollama-embed` | `nomic-embed-text` | `openai/` | Ollama |
-| `openrouter-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | OpenRouter — **paid** |
-| `openai-mini` | `gpt-5.4-mini` | `openai/` | OpenAI — **paid**, **HAS VISION** |
-| `openai-embed` | `text-embedding-3-small` | `openai/` | OpenAI — **paid** |
+| `lms-gemma4-e4b` | `google/gemma-4-e4b` | `lm_studio/` | LM Studio, host :1234 |
+| `lms-gemma4-26b` | `google/gemma-4-26b-a4b-qat` | `lm_studio/` | LM Studio |
+| `lms-nomic-embed` | `text-embedding-nomic-embed-text-v1.5` | `lm_studio/` | LM Studio |
+| `unsloth-gemma4-e4b` | `unsloth/gemma-4-E4B-it-qat-GGUF` | `openai/` | Unsloth Studio, host :8888 |
+| `unsloth-gemma4-26b` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | Unsloth Studio |
+| `unsloth-nomic-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | `openai/` | Unsloth Studio |
+| `ollama-gemma4-e4b` | `gemma4:e4b` | `openai/` | Ollama, host :11434 |
+| `ollama-gemma4-26b` | `gemma4:26b` | `openai/` | Ollama |
+| `ollama-nomic-embed` | `nomic-embed-text` | `openai/` | Ollama |
+| `openrouter-gemma4-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | OpenRouter — **paid** |
+| `openai-gpt54-mini` | `gpt-5.4-mini` | `openai/` | OpenAI — **paid**, **HAS VISION** |
+| `openai-embed3-small` | `text-embedding-3-small` | `openai/` | OpenAI — **paid** |
 
 **THE PROVIDER PREFIX COLUMN IS NOT DECORATION.** LiteLLM routes on it, and `/v1/messages`
 behaves differently for `openai/` than for the others — §6.1.
@@ -137,11 +137,11 @@ behaves differently for `openai/` than for the others — §6.1.
 
 | Engine | LiteLLM 24000 | Envoy 26000 | Alias | Scope | Measured |
 |:--|:--|:--|:--|:--|:--|
-| **lms** | ✅ **7/7** | ✅ **7/7** | `lms-4b` | all seven folders | 2026-09-05 00:06 |
-| **ollama** | ✅ **7/7** | ✅ **7/7** | `ollama-4b` | all seven folders | 2026-09-05 00:11 |
-| **unsloth** | ✅ **7/7** | ✅ **7/7** | `unsloth-4b` | all seven folders | 2026-09-05 00:21 |
-| **openrouter** | ✅ **7/7** | ✅ **7/7** | `openrouter-26b` | all seven folders | 2026-09-05 02:05 |
-| **openai** | ✅ **7/7** | **5/7** — §5.2 and §5.3 | `openai-mini` | all seven folders | 2026-09-05 02:10 |
+| **lms** | ✅ **7/7** | ✅ **7/7** | `lms-gemma4-e4b` | all seven folders | 2026-09-05 00:06 |
+| **ollama** | ✅ **7/7** | ✅ **7/7** | `ollama-gemma4-e4b` | all seven folders | 2026-09-05 00:11 |
+| **unsloth** | ✅ **7/7** | ✅ **7/7** | `unsloth-gemma4-e4b` | all seven folders | 2026-09-05 00:21 |
+| **openrouter** | ✅ **7/7** | ✅ **7/7** | `openrouter-gemma4-26b` | all seven folders | 2026-09-05 02:05 |
+| **openai** | ✅ **7/7** | **5/7** — §5.2 and §5.3 | `openai-gpt54-mini` | all seven folders | 2026-09-05 02:10 |
 
 **THE LOCAL MATRIX IS COMPLETE AND GREEN — six cells, 7/7 each, 42 folder-runs**, in one
 uninterrupted pass on LiteLLM 1.99.1, 00:06 to 00:27, with nothing else touching the machine.
@@ -170,7 +170,7 @@ cents**, which is worth knowing before anyone avoids testing them again.
 
 A `matrix.sh` left running by the previous session kept `sed`-ing both `.env` files and
 restarting both gateways **mid-run**, so suites died with "gateway is not answering", and one
-folder called `lms-4b` against a gateway just switched to `ollama`. Its parent Claude session
+folder called `lms-gemma4-e4b` against a gateway just switched to `ollama`. Its parent Claude session
 was still alive and **relaunched the script twice after it was killed**. The whole session
 tree had to be killed before a trustworthy matrix was possible. See the first house rule
 in §10.
@@ -184,9 +184,9 @@ in §10.
 | `OPENAI_API_KEY` | **works** — `GET https://api.openai.com/v1/models` → 200, 170 models |
 | `OPENROUTER_API_KEY` | **works** — paid tier, **$2.337691** used at 2026-09-05 01:10, no limit |
 | Both keys' source | already exported into the shell by `~/Projects/.envrc`; nothing to decrypt |
-| `response_format: json_schema` on the OpenAI route | honoured by **both** gateways with `unsloth-4b`, 3/3 each |
+| `response_format: json_schema` on the OpenAI route | honoured by **both** gateways with `unsloth-gemma4-e4b`, 3/3 each |
 | Envoy `/v1/responses` | works with Codex 0.147 and 0.155.1 (folder 6 passes, re-run 2026-09-21) |
-| `openrouter-26b` through Codex | called an MCP tool correctly on the first try — Envoy 2026-09-04; **both gateways 2026-09-23**, with the §6.11 key, asserted by `04_mcp.py` |
+| `openrouter-gemma4-26b` through Codex | called an MCP tool correctly on the first try — Envoy 2026-09-04; **both gateways 2026-09-23**, with the §6.11 key, asserted by `04_mcp.py` |
 | LiteLLM upgrade 1.95.0 → 1.99.1 | no pending migrations, no data loss, **did not fix §6.1 on its own** |
 
 ---
@@ -205,11 +205,11 @@ Codex sends. Re-checked with `gh` on 2026-09-21, codex **0.155.1**:
 | [envoyproxy/ai-gateway#2586](https://github.com/envoyproxy/ai-gateway/issues/2586) — Envoy 400s Codex 0.116's payload | **CLOSED 2026-08-26** |
 
 **Symptom.** `04_mcp.py` prints `tool really called: False` on every local alias. The model
-shells out, or reads the serial number out of `mcp_server.py`; `unsloth-4b` says *"I don't
+shells out, or reads the serial number out of `mcp_server.py`; `unsloth-gemma4-e4b` says *"I don't
 have a tool named `bench_serial` available."*
 
 **Cause, measured.** From 0.117.0 Codex sends a whole MCP server as ONE tool of type
-`namespace`. One `/v1/responses` call per shape, **no Codex in the path**, `unsloth-26b`, the
+`namespace`. One `/v1/responses` call per shape, **no Codex in the path**, `unsloth-gemma4-26b`, the
 same on 24000 and 26000:
 
 | The same tool, sent as | What came back |
@@ -224,7 +224,7 @@ So neither gateway nor the engine is at fault. The OpenRouter route understands 
 
 | Tried | Result |
 |:--|:--|
-| codex 0.155.1, the newest on PyPI, both gateways, `unsloth-4b` and `unsloth-26b` | tool never ran |
+| codex 0.155.1, the newest on PyPI, both gateways, `unsloth-gemma4-e4b` and `unsloth-gemma4-26b` | tool never ran |
 | `model_providers.<id>` in the config schema of 0.155.1 and of 0.156.0-alpha.16 | no capability key for it |
 | `features.non_prefixed_mcp_tool_names = true` | renames the namespace to `hardware`; still a `namespace`, tool never ran |
 | an empty `CODEX_HOME` — 13 tools in the request instead of ~108 | tool never ran, so the crowd was never the cause |
@@ -263,7 +263,7 @@ API Error: 400 Unknown parameter: 'thinking'.
 ```bash
 curl -sX POST http://localhost:26000/anthropic/v1/messages \
   -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"openai-mini-anthropic","max_tokens":2048,
+  -d '{"model":"openai-gpt54-mini-anthropic","max_tokens":2048,
        "thinking":{"type":"disabled"},
        "messages":[{"role":"user","content":"What is 17*23?"}]}'
 ```
@@ -303,7 +303,7 @@ the repo already documents that variable for Claude Code in
 [`litellm/README.md`](litellm/README.md) § Use it from Claude Code:
 
 ```bash
-cd envoy/tests && MAX_THINKING_TOKENS=0 uv run run_all.py --only 5_claude_agent_sdk --model openai-mini
+cd envoy/tests && MAX_THINKING_TOKENS=0 uv run run_all.py --only 5_claude_agent_sdk --model openai-gpt54-mini
 ```
 
 **0/7 → 6/7.** The one that still fails is `05_subagent` — "the subagent ran but its answer
@@ -312,7 +312,7 @@ behaviour rather than a gateway fault and has **not** been investigated.
 `07_thinking` PASSES under the workaround, and honestly: it reports that the route produces
 no reasoning to carry (§6.8).
 
-**The workaround is NOT wired in.** Folder 5 is left failing on Envoy + `openai-mini` so the
+**The workaround is NOT wired in.** Folder 5 is left failing on Envoy + `openai-gpt54-mini` so the
 gap stays visible, per this repo's rule — *prove a gap, never shim it*. Wiring it in is a
 one-line change to `envoy/tests/5_claude_agent_sdk/common.py` if you decide the green row is
 worth more than the visible gap.
@@ -371,7 +371,7 @@ agent at Envoy with a hosted OpenAI model. *Prove a gap, never shim it.*
 **WHAT A FUTURE AGENT SHOULD DO:**
 
 1. **Re-check #40885.** If it closed, upgrade OpenCode and re-run
-   `cd envoy/tests && uv run run_all.py --only 7_opencode_sdk --model openai-mini`.
+   `cd envoy/tests && uv run run_all.py --only 7_opencode_sdk --model openai-gpt54-mini`.
 2. **Check whether OpenCode gained a per-provider parameter knob** — if it did, set it in
    `envoy/tests/7_opencode_sdk/common.py` § `config_for`, which is where the provider block
    is built.
@@ -413,7 +413,7 @@ carry `reasoning_content`. Our aliases split exactly on that line — `lms-*` is
 and was never affected; `ollama-*`, `unsloth-*` and `openai-*` are `openai/` and were. That
 is why it looked engine-specific for a month.
 
-**Measurements**, LiteLLM 1.99.1, `unsloth-4b`:
+**Measurements**, LiteLLM 1.99.1, `unsloth-gemma4-e4b`:
 
 | Path | Before | After |
 |:--|:--|:--|
@@ -458,12 +458,12 @@ to prove.
 sends a real base64 PNG of a red circle and requires both `"red"` and a round-shape word
 back, so a model ignoring the image cannot pass it.
 
-**Fix.** `"openai": "openai-mini"` in both `gateway.py` files, and the now-dead `is None`
+**Fix.** `"openai": "openai-gpt54-mini"` in both `gateway.py` files, and the now-dead `is None`
 branch deleted.
 
 ### 6.4 `--model` was ignored on any engine whose default alias was `None`
 
-The error message told you to "pass `--model openai-mini` explicitly" — but `gateway.py`
+The error message told you to "pass `--model openai-gpt54-mini` explicitly" — but `gateway.py`
 resolves the alias at **import** time, before any scenario's argparse runs, so the `--model`
 it recommended had already been ignored. The message contradicted itself.
 
@@ -472,7 +472,7 @@ environment whenever `--model` is given — that is the one hook `gateway.py` re
 `--model` now works exactly as documented. And the error message names both forms honestly,
 including the env var needed when running a single scenario directly.
 
-### 6.5 Envoy + `openai-mini` returned 400 on every call — parameter naming
+### 6.5 Envoy + `openai-gpt54-mini` returned 400 on every call — parameter naming
 
 ```
 400 Unsupported parameter: 'max_tokens' is not supported with this model.
@@ -489,7 +489,7 @@ gateway.
 `04_gateway_contract.py` gains a `ceiling()` helper that reads the key out of
 `gateway.body_extras` rather than hardcoding a name. **No scenario branches on the gateway's
 name**; the difference stays in the declared contract, as the repo's rules require.
-Regression-checked on `unsloth-4b`: 4/4 on both gateways afterwards.
+Regression-checked on `unsloth-gemma4-e4b`: 4/4 on both gateways afterwards.
 
 ### 6.6 `GATEWAY_DISCOVERY` set + a PAID engine crash-looped LiteLLM
 
@@ -527,17 +527,17 @@ WHAT is served, never WHETHER the gateway runs.
 | Check | Result |
 |:--|:--|
 | `openrouter` — `discover` exit code | **0** (was 2) |
-| `openrouter` — aliases served | `openrouter-26b`, `openrouter-free` |
+| `openrouter` — aliases served | `openrouter-gemma4-26b`, `openrouter-gemma4-26b-free` |
 | `openrouter` — real call, `1_http_client` | **PASS** |
 | `openai` — `discover` exit code | **0** |
-| `openai` — aliases served | `openai-mini`, `openai-embed` |
+| `openai` — aliases served | `openai-gpt54-mini`, `openai-embed3-small` |
 | `openai` — real call, `1_http_client` | **PASS** |
 | `unsloth` — regression, discovery still ADDS | 24 discovered aliases, all 3 hand-written kept |
 
 The master key still resolves on the pass-through, which proves `settings.yaml` is loaded —
 the failure mode the repo warns about when an included file carries its own `include:`.
 
-### 6.7 Codex could not use `openrouter-26b` on LiteLLM — our own pin, not OpenRouter
+### 6.7 Codex could not use `openrouter-gemma4-26b` on LiteLLM — our own pin, not OpenRouter
 
 **Symptom.** All four `6_codex_sdk` scenarios failed in about a second with
 `429 Too Many Requests`, on LiteLLM only. Envoy was green with the same alias.
@@ -571,7 +571,7 @@ supports it; and **our own** `require_parameters: true` turns "cannot honour it"
 refusal instead of dropping it. Envoy was unaffected because it has no `extra_body`, so it
 never sends the pin — the one time that documented gap helped.
 
-**Fix.** `additional_drop_params: ["parallel_tool_calls"]` on the `openrouter-26b` deployment
+**Fix.** `additional_drop_params: ["parallel_tool_calls"]` on the `openrouter-gemma4-26b` deployment
 in `config/openrouter.yaml`, carrying the four-field header. It is **per-alias, not global**,
 and it **keeps the pin** — the pin is what stops a provider returning tool calls as raw text,
 and dropping one unsupported parameter is much the smaller price. `6_codex_sdk` went 0/4 → 4/4.
@@ -579,7 +579,7 @@ and dropping one unsupported parameter is much the smaller price. `6_codex_sdk` 
 ### 6.8 `07_thinking` called "the model does not reason" a gateway bug
 
 `THINKING_REACHES_CLIENT` was a flat declaration, so the scenario could not tell a gateway
-that **lost** the reasoning from a model that **never produced any**. `openrouter-26b` is the
+that **lost** the reasoning from a model that **never produced any**. `openrouter-gemma4-26b` is the
 second — 0 characters of `reasoning_content` on `/v1/chat/completions` too — and the row went
 red as though the gateway had dropped something.
 
@@ -589,13 +589,13 @@ and nothing to assert; if it is non-zero, the assertion runs and its failure mes
 the config flag from §6.1. **No table, no per-engine list** — the test calibrates itself, so
 a new alias needs no declaration. The file stays byte-identical across both projects.
 
-Verified 2026-09-05: `openrouter-26b` PASS with "this route produces no reasoning at all",
-`unsloth-4b` still PASS with the assertion live, folder 5 green on both.
+Verified 2026-09-05: `openrouter-gemma4-26b` PASS with "this route produces no reasoning at all",
+`unsloth-gemma4-e4b` still PASS with the assertion live, folder 5 green on both.
 
 ### 6.9 Envoy served no `-anthropic` alias for either paid engine
 
 **Symptom.** `tests/5_claude_agent_sdk` exited immediately on Envoy for both paid engines:
-`'openrouter-26b-anthropic' is not among the aliases this gateway serves.` The folder
+`'openrouter-gemma4-26b-anthropic' is not among the aliases this gateway serves.` The folder
 resolves `<alias>-anthropic` at runtime and refuses to run without one — by design, because
 on the three local engines a missing route means an unfinished config file.
 
@@ -606,8 +606,8 @@ LOCAL engines. Nobody had checked whether the paid ones could have them.
 
 | Alias | Backend schema | Why |
 |:--|:--|:--|
-| `openrouter-26b-anthropic` | **`Anthropic`** — a second `AIServiceBackend`, `prefix: /api/v1` | **OpenRouter serves the Anthropic Messages API natively** at `POST /api/v1/messages`, which it calls the "Anthropic skin". Nothing is translated, exactly like the local engines |
-| `openai-mini-anthropic` | **`OpenAI`** — the existing backend, no new one | **api.openai.com serves no Anthropic route at all**, so translation is the only option. The route takes Anthropic in (the input schema comes from the PATH) and Envoy translates onto the OpenAI schema |
+| `openrouter-gemma4-26b-anthropic` | **`Anthropic`** — a second `AIServiceBackend`, `prefix: /api/v1` | **OpenRouter serves the Anthropic Messages API natively** at `POST /api/v1/messages`, which it calls the "Anthropic skin". Nothing is translated, exactly like the local engines |
+| `openai-gpt54-mini-anthropic` | **`OpenAI`** — the existing backend, no new one | **api.openai.com serves no Anthropic route at all**, so translation is the only option. The route takes Anthropic in (the input schema comes from the PATH) and Envoy translates onto the OpenAI schema |
 
 **Proof the OpenRouter one really is a pass-through**: the reply carries OpenRouter's own
 Anthropic response shape, which Envoy could not have assembled —
@@ -662,12 +662,12 @@ keeps the file diffable against the five it came from.
 | Check | Result |
 |:--|:--|
 | `26000/v1/models` on `all.yaml` | **20 aliases**, all five engines |
-| `lms-4b` completion on 26000 | **PASS** — `OK26000`, `finish_reason: stop` |
-| `ollama-4b` on the SAME gateway | **HTTP 200** — a second engine through one config |
+| `lms-gemma4-e4b` completion on 26000 | **PASS** — `OK26000`, `finish_reason: stop` |
+| `ollama-gemma4-e4b` on the SAME gateway | **HTTP 200** — a second engine through one config |
 | `24000/v1/models` on LiteLLM's `all.yaml` | **13 aliases**, all five engines |
-| `lms-4b` then `ollama-4b` on 24000 | **PASS** both |
+| `lms-gemma4-e4b` then `ollama-gemma4-e4b` on 24000 | **PASS** both |
 | isolation: `GATEWAY_ENGINE=unsloth` | 5 aliases on 26000, 3 on 24000 |
-| isolation: `lms-4b` under `unsloth` | **404** on 26000, **400** on 24000 |
+| isolation: `lms-gemma4-e4b` under `unsloth` | **404** on 26000, **400** on 24000 |
 
 **Watch the ceiling per route, not per file.** Five engines at 15 aliases each is fine; one
 engine at 16 is not. `envoy/config/<engine>.yaml` has 5 rules at most today, so only `all.yaml`
@@ -697,7 +697,7 @@ A single tool can carry the same thing: `mcp_servers.<name>.tools.<tool>.approva
 It covers that server's tools only; the sandbox and `deny_all` still hold for everything else.
 
 **Measured 2026-09-23 with `04_mcp.py` itself, on BOTH gateways** — codex **0.155.1**,
-`openrouter-26b`, approval policy `never` (the SDK's `deny_all`), read-only sandbox, an empty
+`openrouter-gemma4-26b`, approval policy `never` (the SDK's `deny_all`), read-only sandbox, an empty
 `CODEX_HOME`:
 
 ```text
@@ -709,7 +709,7 @@ PASS  envoy       2.8s          PASS  litellm     2.4s
 
 So LiteLLM passes Codex's `namespace` tools through `/v1/responses` to OpenRouter intact.
 
-**Guarded by** `04_mcp.py`, which now ASSERTS the call on `openrouter-26b` (`CALLS_THE_TOOL`).
+**Guarded by** `04_mcp.py`, which now ASSERTS the call on `openrouter-gemma4-26b` (`CALLS_THE_TOOL`).
 Delete the key and that run goes red — but it is a paid run, so `run_all.py` on a free alias
 does not prove the key is still there.
 
@@ -746,7 +746,7 @@ on whose bill" is one table.
 
 ## 8. What is left to do
 
-1. **`openai-embed` and the embedding routes** are untested everywhere. No folder covers
+1. **`openai-embed3-small` and the embedding routes** are untested everywhere. No folder covers
    embeddings.
 2. **Re-check openai/codex#19871 and #26234** whenever folder 6 comes up — §5.1. The
    approval bug, #24135, is worked around — §6.11.
@@ -764,9 +764,9 @@ on whose bill" is one table.
 ```bash
 cd <gateway>/tests && uv run run_all.py          # all seven folders
 uv run run_all.py --only 5_claude_agent_sdk      # one folder
-uv run run_all.py --model openai-mini            # every folder, one alias — now works
+uv run run_all.py --model openai-gpt54-mini            # every folder, one alias — now works
 cd <gateway>/tests/<folder> && uv run run_all.py # the folder's own scenarios
-AI_GATEWAY_TEST_MODEL=openai-mini uv run 01_simple_call.py   # ONE scenario, non-default alias
+AI_GATEWAY_TEST_MODEL=openai-gpt54-mini uv run 01_simple_call.py   # ONE scenario, non-default alias
 ```
 
 - **Podman, not Docker.** Each runtime keeps its own volumes and containers. Docker's daemon
@@ -782,8 +782,8 @@ AI_GATEWAY_TEST_MODEL=openai-mini uv run 01_simple_call.py   # ONE scenario, non
 - **NEVER RUN TWO ENGINE-SWITCHING JOBS AT ONCE, and check for leftovers before starting
   one.** Both projects share one pair of `.env` files and one pair of containers. Two matrix
   runs overlapping produced a page of convincing nonsense — `Invalid model name passed in
-  model=lms-4b` while the gateway was on ollama, `No matching route found`,
-  `ollama-4b-anthropic may not exist`. **None of it was real.** Run
+  model=lms-gemma4-e4b` while the gateway was on ollama, `No matching route found`,
+  `ollama-gemma4-e4b-anthropic may not exist`. **None of it was real.** Run
   `pgrep -fl 'matrix|run_all'` first. A background job survives the session that started it,
   and a still-live session will relaunch it.
 - **`podman compose up -d` does NOT reload `config/settings.yaml`.** It is a bind mount, so

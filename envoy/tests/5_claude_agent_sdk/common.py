@@ -182,7 +182,7 @@ def reasoning_baseline(model: str) -> int:
 
     THE ANTHROPIC ASSERTION NEEDS A BASELINE, or it cannot tell two very different
     things apart: a gateway that LOSES the reasoning, and a model that never
-    produced any. `openrouter-26b` is the second — 0 characters on
+    produced any. `openrouter-gemma4-26b` is the second — 0 characters on
     `/v1/chat/completions` as well, measured 2026-09-05, 2 runs out of 2 — and a
     flat declaration reported that as a gateway bug.
 

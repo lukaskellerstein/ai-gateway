@@ -8,7 +8,7 @@ ChatOpenAI(model=ALIAS, base_url="http://localhost:26000/v1", api_key=API_KEY)
 
 ```bash
 uv run main.py
-uv run main.py --model lms-26b
+uv run main.py --model lms-gemma4-26b
 uv run main.py --only langgraph
 ```
 
@@ -67,5 +67,5 @@ tell "the gateway is broken" from "the market is closed".
 
 ## Verified
 
-2026-09-04, `unsloth-4b`: both demos returned `$512.34` through a structured
+2026-09-04, `unsloth-gemma4-e4b`: both demos returned `$512.34` through a structured
 `tool_calls` reply. 1.5 s warm for the pair.

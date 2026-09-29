@@ -5,7 +5,7 @@ The gateway with **no client library at all**: `urllib` from the standard librar
 
 ```bash
 uv run main.py
-uv run main.py --model lms-26b
+uv run main.py --model lms-gemma4-26b
 ```
 
 | What it does | Why it is here |
@@ -29,7 +29,7 @@ in `compose logs` to explain it, because `AIGW_DEBUG` is `false` by default.
 POST http://localhost:26000/v1/chat/completions
 Content-Type: application/json
 
-{"model": "unsloth-4b", "messages": [...], "max_tokens": 2048}
+{"model": "unsloth-gemma4-e4b", "messages": [...], "max_tokens": 2048}
 ```
 
 **No `Authorization` header is needed, and one would not be checked.** A bogus
@@ -79,5 +79,5 @@ gateway; everything specific comes from `../gateway.py`.
 
 ## Verified
 
-2026-09-04, `unsloth-4b`: the plain call returned Paris and the stream counted to
+2026-09-04, `unsloth-gemma4-e4b`: the plain call returned Paris and the stream counted to
 five, past the empty last frame. 0.2 s warm.

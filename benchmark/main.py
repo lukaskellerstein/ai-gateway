@@ -31,7 +31,7 @@ can be read as "the engine, plus this much".
 
     uv run main.py
     uv run main.py --rounds 10
-    uv run main.py --model unsloth-26b
+    uv run main.py --model unsloth-gemma4-26b
     uv run main.py --json results.json
 
 THIS SCRIPT IS THE ONE THING IN THE REPO THAT TOUCHES BOTH PORTS. It reads no file
@@ -295,7 +295,7 @@ def check_same_engine(alias: str, rows: list[tuple[str, str, str, str]]) -> dict
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="unsloth-4b", help="the alias to call on every gateway")
+    parser.add_argument("--model", default="unsloth-gemma4-e4b", help="the alias to call on every gateway")
     parser.add_argument("--rounds", type=int, default=5, help="measured rounds per scenario (default: 5)")
     parser.add_argument("--no-direct", action="store_true", help="skip the no-gateway baseline row")
     parser.add_argument("--json", metavar="PATH", help="also write the raw per-call timings here")

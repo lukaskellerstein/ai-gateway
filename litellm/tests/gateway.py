@@ -101,7 +101,7 @@ API_KEY = (
 
 # THE DEFAULT ALIAS FOLLOWS THE ENGINE THIS PROJECT IS SERVING. `GATEWAY_ENGINE` in
 # ../.env names ONE engine, and the aliases of every other engine are not in the
-# running config at all — so a fixed `lms-4b` default would fail with "model not
+# running config at all — so a fixed `lms-gemma4-e4b` default would fail with "model not
 # found" on a perfectly healthy gateway.
 #
 # The chosen names are the small chat route on each engine: the one alias per engine
@@ -117,12 +117,12 @@ API_KEY = (
 # at IMPORT time for this engine, so EVERY folder died in 0.0 s and the openai
 # engine could not be tested at all.
 DEFAULT_MODEL_BY_ENGINE = {
-    "lms": "lms-4b",
-    "unsloth": "unsloth-4b",
-    "ollama": "ollama-4b",
-    "openrouter": "openrouter-26b",
-    "openai": "openai-mini",
-    "cerebras": "cerebras-27b",
+    "lms": "lms-gemma4-e4b",
+    "unsloth": "unsloth-gemma4-e4b",
+    "ollama": "ollama-gemma4-e4b",
+    "openrouter": "openrouter-gemma4-26b",
+    "openai": "openai-gpt54-mini",
+    "cerebras": "cerebras-qwen38-27b",
 }
 
 ENGINE = _dotenv_value("GATEWAY_ENGINE", "lms").strip()
@@ -132,8 +132,8 @@ def _default_alias() -> str:
     """The alias for whichever engine this project's `.env` names.
 
     AN UNRECOGNISED ENGINE IS AN ERROR, NOT A FALLBACK. Quietly defaulting to
-    `lms-4b` was worse than failing: it produced "Invalid model name passed in
-    model=lms-4b" from a perfectly healthy gateway serving a different engine,
+    `lms-gemma4-e4b` was worse than failing: it produced "Invalid model name passed in
+    model=lms-gemma4-e4b" from a perfectly healthy gateway serving a different engine,
     which reads as a broken gateway rather than a stale `.env`.
     """
     if ENGINE not in DEFAULT_MODEL_BY_ENGINE:
@@ -159,18 +159,18 @@ ALIAS = os.environ.get("AI_GATEWAY_TEST_MODEL") or _default_alias()
 REQUEST_TIMEOUT_SECONDS = 3600.0
 
 # The allowance a caller sends when it sends one. It has to clear a REASONING block:
-# both `unsloth-*` chat routes, both `ollama-*` ones and `lms-4b` spend this budget
+# both `unsloth-*` chat routes, both `ollama-*` ones and `lms-gemma4-e4b` spend this budget
 # on thinking before they write a word. A model that runs out mid-thought returns
 # EMPTY content with `finish_reason: "length"` and raises nothing, which reads as a
 # broken alias. 150 was not enough for a one-sentence answer about an image
-# (verified 2026-08-27 on `unsloth-26b`).
+# (verified 2026-08-27 on `unsloth-gemma4-26b`).
 MAX_TOKENS = 2048
 
 # WHAT A CALLER MUST ADD TO EVERY REQUEST, and it is EMPTY on this gateway.
 #
 # LiteLLM stores a `max_tokens` on the route and every local route in ../config/
 # carries one, so a caller who sends none still gets a bounded reply. Measured
-# 2026-09-03, `lms-4b`, one "count from 1 to 3000" prompt with NO `max_tokens`:
+# 2026-09-03, `lms-gemma4-e4b`, one "count from 1 to 3000" prompt with NO `max_tokens`:
 # finish_reason "length" at 4095 completion tokens — the route's stored 4096.
 #
 # The two sibling gateways store nothing and their copies of this file carry

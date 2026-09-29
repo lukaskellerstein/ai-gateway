@@ -22,7 +22,7 @@ The gateway must be up first — `podman compose up -d` in the parent directory.
 cd tests
 uv run run_all.py                      # all seven, one row each
 uv run run_all.py --only 6_codex_sdk   # one folder
-uv run run_all.py --model lms-26b      # a different alias everywhere
+uv run run_all.py --model lms-gemma4-26b      # a different alias everywhere
 uv run run_all.py --verbose            # stream each folder instead of capturing it
 ```
 
@@ -82,12 +82,12 @@ The last row is why `BODY_EXTRAS` in `gateway.py` is **empty** here and carries
 ## Which alias gets called
 
 `gateway.py` reads `GATEWAY_ENGINE` from `../.env` — this project's own, not a
-repo-root one — and picks that engine's small chat route: `lms-4b`, `unsloth-4b`,
-`ollama-4b` or `openrouter-26b`. Each is the one alias on its engine that is both
+repo-root one — and picks that engine's small chat route: `lms-gemma4-e4b`, `unsloth-gemma4-e4b`,
+`ollama-gemma4-e4b` or `openrouter-gemma4-26b`. Each is the one alias on its engine that is both
 vision- and tool-capable, which is what every folder here needs from a single
 loaded model.
 
-**One engine runs at a time**, so a fixed `lms-4b` default would fail with "model
+**One engine runs at a time**, so a fixed `lms-gemma4-e4b` default would fail with "model
 not found" on a perfectly healthy gateway serving Ollama. An unrecognised engine is
 an **error, not a fallback** — defaulting quietly reads as a broken gateway rather
 than a stale `.env`.
@@ -121,7 +121,7 @@ runtime.
 
 ## Verified
 
-2026-09-04, `unsloth-4b`, all seven folders passing. Timings on this machine:
+2026-09-04, `unsloth-gemma4-e4b`, all seven folders passing. Timings on this machine:
 
 | Folder | Seconds, warm |
 |:--|--:|

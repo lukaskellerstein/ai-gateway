@@ -7,7 +7,7 @@ One question: both gateways serve the same alias from the same engine, so
 cd benchmark
 uv run main.py                       # 5 rounds per scenario
 uv run main.py --rounds 10           # the published numbers
-uv run main.py --model unsloth-26b   # a different alias
+uv run main.py --model unsloth-gemma4-26b   # a different alias
 uv run main.py --json results.json   # raw per-call timings as well
 ```
 

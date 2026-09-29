@@ -49,7 +49,7 @@ Any OpenAI-compatible client works. Point `base_url` at `http://localhost:26000/
 ```bash
 curl -sX POST http://localhost:26000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"lms-4b","messages":[{"role":"user","content":"hi"}],"max_tokens":2048}'
+  -d '{"model":"lms-gemma4-e4b","messages":[{"role":"user","content":"hi"}],"max_tokens":2048}'
 ```
 
 The OpenAI client needs *some* `api_key` string, and this gateway never reads it.
@@ -74,7 +74,7 @@ The OpenAI client needs *some* `api_key` string, and this gateway never reads it
 ### Always send `max_tokens`
 
 An `AIGatewayRoute` rule carries a request **timeout** but no token ceiling, so a request that
-sends none is unbounded. Measured 2026-09-04 with `lms-4b` and one "count to 3000" prompt
+sends none is unbounded. Measured 2026-09-04 with `lms-gemma4-e4b` and one "count to 3000" prompt
 carrying no `max_tokens`:
 
 | Gateway | finish_reason | completion tokens |
@@ -112,7 +112,7 @@ and rewrites it on the way out:
     - headers:
         - type: Exact
           name: x-ai-eg-model
-          value: lms-4b
+          value: lms-gemma4-e4b
   backendRefs:
     - name: lms
       modelNameOverride: google/gemma-4-e4b
@@ -139,7 +139,7 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 22 route rules
+GATEWAY_ENGINE=all        # the default: every engine at once, 28 route rules
 ```
 
 | Variable | Default | Used by |
@@ -168,7 +168,7 @@ lines, however much traffic you send. Verified 2026-09-04, both ways round.
 Set it to `true` and you get one JSON line per request:
 
 ```json
-{"gen_ai.request.model":"ollama-4b","gen_ai.response.model":"gemma4:e4b",
+{"gen_ai.request.model":"ollama-gemma4-e4b","gen_ai.response.model":"gemma4:e4b",
  "gen_ai.usage.input_tokens":17,"gen_ai.usage.output_tokens":64,
  "response_code":200,"duration":708,"upstream_host":"192.168.127.254:11434"}
 ```
@@ -184,9 +184,10 @@ every one of them.
 
 | `GATEWAY_ENGINE` | Reads | Serves |
 |:--|:--|:--|
-| `all` *(default)* | `config/all.yaml` | **22 route rules** — 13 model aliases and 9 `-anthropic` aliases |
-| `lms` `unsloth` `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
-| `openrouter` `openai` `cerebras` | that engine's file | 1–2 aliases plus one `-anthropic`, **paid** |
+| `all` *(default)* | `config/all.yaml` | **28 route rules** — 16 model aliases and 12 `-anthropic` aliases |
+| `lms` `unsloth` | that engine's file | 4 aliases plus its 3 `-anthropic` ones |
+| `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
+| `openrouter` `openai` `cerebras` | that engine's file | 1–2 aliases plus an `-anthropic` for each chat one, **paid** |
 
 **`all.yaml` copies the other six, and that is the price of this gateway.** `aigw run` takes
 **one file path** — not a directory, not a repeated flag; checked against `aigw run --help` on
@@ -232,12 +233,12 @@ machine without committing it:
 GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 ```
 
-`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **44 route
-rules** over every model downloaded in LMStudio and Unsloth Studio, plus the six short names
-and the four `-anthropic` aliases. It has no hosted backend at all, so **it cannot spend
+`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **50 route
+rules** over every model downloaded in LMStudio and Unsloth Studio, plus the eight short names
+and their six `-anthropic` twins. It has no hosted backend at all, so **it cannot spend
 money**.
 
-**It needs four `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 44 rules
+**It needs four `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 50 rules
 means four. When you add a model, add it to a route that has room — the ceiling is per route,
 not per file, and going over crash-loops aigw before it serves anything.
 
@@ -263,7 +264,7 @@ in the repo. Every alias in both gateways is now hand-written. See
 cd tests
 uv run run_all.py                       # 7 rows against 26000
 uv run run_all.py --only 6_codex_sdk    # one folder
-uv run run_all.py --model lms-26b       # any alias, everywhere
+uv run run_all.py --model lms-gemma4-26b       # any alias, everywhere
 ```
 
 `tests/` is **seven folders, one per way of calling this gateway**, ordered by distance from
@@ -319,7 +320,7 @@ What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 | `Connection reset by peer` right after `up -d` | the data plane needs a few seconds after the admin port answers | probe `26000/v1/models`, not `26064/health` |
 | The container restarts in a loop, log names a config file | `GATEWAY_ENGINE` is misspelled | `podman compose logs envoy` names the file it could not open |
 | An alias 404s | no `AIGatewayRoute` rule matches it — you are calling another engine's name, or it is not in this engine's config | `curl localhost:26000/v1/models` for the names this engine serves |
-| `openrouter-free` 404s | **by design** — this gateway has no `extra_body`, so it cannot carry the provider pin | use it on 24000 |
+| `openrouter-gemma4-26b-free` 404s | **by design** — this gateway has no `extra_body`, so it cannot carry the provider pin | use it on 24000 |
 | Nothing in `podman compose logs envoy` after a request | `AIGW_DEBUG` is `false` | set it to `true` and repeat the request |
 | Every call 401s on `unsloth-*` | `UNSLOTH_API_KEY` was blank when `up -d` ran, so `${UNSLOTH_API_KEY}` substituted empty | export it, run `up -d` again |
 | A large prompt or a base64 image fails before reaching the model | the `ClientTrafficPolicy` buffer limit was removed or lowered | it must stay at `50Mi`; Envoy's default 32 KiB is too small |

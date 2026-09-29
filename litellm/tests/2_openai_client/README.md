@@ -35,7 +35,7 @@ doubles as a sample to copy from.
 |:--|:--|
 | `checks_api_key` | **True** — a bogus Bearer token gets 401, so the master key is enforced |
 | `lists_models` | **True** — `GET /models` returns the alias list |
-| `echoes_alias` | **True** — `response.model` is `lms-4b`, the alias that was sent |
+| `echoes_alias` | **True** — `response.model` is `lms-gemma4-e4b`, the alias that was sent |
 | `exposes_route_limits` | **True** — `/model/info` reports each route's stored `max_tokens` |
 
 The failure message is always "the table says X and the gateway did Y", which is
@@ -74,8 +74,8 @@ One at a time:
 
 ```bash
 uv run 01_simple_call.py
-uv run 02_tools_call.py --model lms-26b
-uv run 03_multimodal.py --model ollama-4b
+uv run 02_tools_call.py --model lms-gemma4-26b
+uv run 03_multimodal.py --model ollama-gemma4-e4b
 ```
 
 Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
@@ -94,10 +94,10 @@ There is no `--gateway` flag any more. The folder you are in is the gateway.
 ## Reasoning aliases and the stored ceiling
 
 **The scripts send no `max_tokens` at all** and get the route's stored value — 4096
-on `lms-*`, 8192 on `ollama-*` and `unsloth-*`. `openai-mini` is the one route
+on `lms-*`, 8192 on `ollama-*` and `unsloth-*`. `openai-gpt54-mini` is the one route
 storing none; OpenAI's own default applies there.
 
-That matters because every `unsloth-*` and `ollama-*` route, and `lms-4b` too,
+That matters because every `unsloth-*` and `ollama-*` route, and `lms-gemma4-e4b` too,
 spends the same allowance on a reasoning block before writing a word. Run out
 mid-thought and the reply is **empty**, with `finish_reason: "length"` and no error
 at all.
@@ -116,16 +116,16 @@ at `stop`, not at the ceiling.
 ## Why the default alias follows `GATEWAY_ENGINE`
 
 **One engine runs at a time**, so the aliases of every other engine are not in the
-config at all. A fixed `lms-4b` default would therefore fail with "model not found"
+config at all. A fixed `lms-gemma4-e4b` default would therefore fail with "model not found"
 on a perfectly healthy gateway serving Ollama.
 
 `common.py` reads `GATEWAY_ENGINE` from `../../.env` — this project's own, not a
-repo-root one — and picks that engine's small chat route: `lms-4b`, `unsloth-4b`,
-`ollama-4b` or `openrouter-26b`. Each is the one alias on its engine that is both
+repo-root one — and picks that engine's small chat route: `lms-gemma4-e4b`, `unsloth-gemma4-e4b`,
+`ollama-gemma4-e4b` or `openrouter-gemma4-26b`. Each is the one alias on its engine that is both
 vision- and tool-capable, which all three scripts need from a single loaded model.
 
 **An unrecognised engine is an error, not a fallback.** Defaulting quietly produced
-"Invalid model name passed in model=lms-4b" from a healthy gateway, which reads as
+"Invalid model name passed in model=lms-gemma4-e4b" from a healthy gateway, which reads as
 a broken gateway rather than a stale `.env`. `openai` maps to nothing on purpose —
 `gpt-5.4-mini` has no vision, so `03_multimodal.py` cannot pass against it.
 
@@ -151,7 +151,7 @@ uv run run_all.py
 uv run run_all.py
 ```
 
-Verified 2026-09-03: **4/4 on `unsloth-4b`**, with a second gateway also running.
+Verified 2026-09-03: **4/4 on `unsloth-gemma4-e4b`**, with a second gateway also running.
 Verified 2026-08-27 on the pre-split suite: 6/6 on each of `lms`, `ollama` and
 `unsloth`, across both gateways.
 
@@ -162,7 +162,7 @@ Two extra requirements for the Unsloth one, and both fail quietly:
 2. **`Settings → API → Model auto-switch` must be on**, or the first call returns
    `400 No model loaded`. With it on, the first call unloads whatever was there and
    reads the new weights from disk, which shows up as one slow row and then nothing.
-   Note that this covers the embedder too: `unsloth-embed` and `unsloth-4b` evict
+   Note that this covers the embedder too: `unsloth-nomic-embed` and `unsloth-gemma4-e4b` evict
    each other — and so does the Envoy project, if it is up on the same engine.
 
 ## `test_image.png`

@@ -23,14 +23,14 @@
 #   complains while the gateway boots.
 #
 #   IT SERVES ONE MODEL AT A TIME, and that limit SPANS chat and the embedder: calling
-#   `unsloth-embed` unloads `unsloth-26b`, and the next chat call swaps it back. So a
+#   `unsloth-nomic-embed` unloads `unsloth-gemma4-26b`, and the next chat call swaps it back. So a
 #   retrieval loop that alternates embed and chat pays a model swap on every call — measured
 #   at 14 s cold and 4.4 s warm. `Settings > API > Model auto-switch` must be ON or the
 #   second alias you call returns 400 "No model loaded". Leave `auto_download_model` OFF, or
 #   an unknown model id becomes a multi-gigabyte download rather than an error.
 #
-#   IT TURNS REASONING ON where LMStudio does not. Verified 2026-08-27: `unsloth-26b`
-#   returns a reasoning block that `lms-26b` — the identical gemma-4-26b-a4b-qat — does not.
+#   IT TURNS REASONING ON where LMStudio does not. Verified 2026-08-27: `unsloth-gemma4-26b`
+#   returns a reasoning block that `lms-gemma4-26b` — the identical gemma-4-26b-a4b-qat — does not.
 #   At max_tokens 60 the reply came back EMPTY with finish_reason `length`, the whole budget
 #   spent thinking. Hence the larger max_tokens below.
 #
@@ -40,8 +40,8 @@ include:
   - settings.yaml
 
 model_list:
-  # `lms-4b`'s twin: Gemma 4 E4B, the small chat route, tools and vision both working.
-  - model_name: unsloth-4b
+  # `lms-gemma4-e4b`'s twin: Gemma 4 E4B, the small chat route, tools and vision both working.
+  - model_name: unsloth-gemma4-e4b
     litellm_params:
       model: openai/unsloth/gemma-4-E4B-it-qat-GGUF
       api_base: os.environ/UNSLOTH_API_BASE
@@ -54,9 +54,9 @@ model_list:
       max_input_tokens: 122880            # 131072 − the 8192 output reserve
       max_output_tokens: 8192
 
-  # `lms-26b`'s twin: the same gemma-4-26b-a4b-qat weights on a different engine. This pair
-  # is the cleanest engine comparison in the repo — identical build, identical model.
-  - model_name: unsloth-26b
+  # `lms-gemma4-26b`'s twin: the same gemma-4-26b-a4b-qat weights on a different engine. This
+  # pair is the cleanest engine comparison in the repo — identical build, identical model.
+  - model_name: unsloth-gemma4-26b
     litellm_params:
       model: openai/unsloth/gemma-4-26B-A4B-it-qat-GGUF
       api_base: os.environ/UNSLOTH_API_BASE
@@ -71,13 +71,40 @@ model_list:
       max_input_tokens: 253952
       max_output_tokens: 8192
 
+  # Qwen 3.8 27B, the SAME MODEL as `lms-qwen38-27b` but NOT THE SAME BUILD: this is Unsloth's
+  # UD-Q8_K_XL GGUF, 32 GB, where LMStudio runs the 16 GB MLX 4-bit. A dense 27B that thinks
+  # before it answers — see lms.yaml for the measurement behind max_tokens and the price.
+  #
+  # WHY NOT THE MLX BUILD LMSTUDIO USES: Unsloth serves its Anthropic route, POST /v1/messages,
+  # for GGUF models ONLY. With the MLX build loaded it answered 503 "No GGUF model loaded. Load
+  # a GGUF model first." — on 8888 directly, no gateway in the path — and Envoy's
+  # `unsloth-qwen38-27b-anthropic` needs that route. The GGUF answered it with a thinking block
+  # (both 2026-09-29). This file is not what needs the route, but one alias, one build: the
+  # two gateways must mean the same weights by this name.
+  #
+  # The same file on disk as LMStudio's `qwen3.8-27b`, hard-linked from the HuggingFace cache.
+  # Window 262144, read from GET /v1/status with this model loaded.
+  - model_name: unsloth-qwen38-27b
+    litellm_params:
+      model: openai/unsloth/Qwen3.8-27B-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.000001875
+      max_tokens: 8192
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952            # 262144 − the 8192 output reserve
+      max_output_tokens: 8192
+
   # The Q8_0 build of the same nomic v1.5 the other engines serve — more fidelity per vector,
-  # and NOT interchangeable with theirs. `lms-embed` is Q4_K_M, `ollama-embed` is F16, and
-  # `openai-embed` is a different model at 1536 dims. An index built with one alias and
-  # queried with another returns quietly worse neighbours and never errors. See lms.yaml.
+  # and NOT interchangeable with theirs. `lms-nomic-embed` is Q4_K_M, `ollama-nomic-embed` is
+  # F16, and `openai-embed3-small` is a different model at 1536 dims. An index built with one
+  # alias and queried with another returns quietly worse neighbours and never errors. See
+  # lms.yaml.
   #
   # REMEMBER THE ONE-MODEL LIMIT: calling this evicts whichever chat model is loaded.
-  - model_name: unsloth-embed
+  - model_name: unsloth-nomic-embed
     litellm_params:
       model: openai/second-state/Nomic-embed-text-v1.5-Embedding-GGUF
       api_base: os.environ/UNSLOTH_API_BASE

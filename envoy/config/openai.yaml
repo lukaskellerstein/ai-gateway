@@ -1,7 +1,7 @@
 # OpenAI — 2 aliases. PAID: EVERY CALL BILLS A REAL ACCOUNT.
 #
-#   openai-mini    gpt-5.4-mini              chat. NO VISION
-#   openai-embed   text-embedding-3-small    embeddings, 1536 dims
+#   openai-gpt54-mini    gpt-5.4-mini              chat. NO VISION
+#   openai-embed3-small   text-embedding-3-small    embeddings, 1536 dims
 #
 # Selecting this engine is the only way this gateway can spend money, and there
 # is no fallback anywhere here.
@@ -10,7 +10,7 @@
 # `max_tokens` outright. ../../litellm translates one to the other; this gateway
 # forwards the parameter as sent, so the same body that works on 24000 400s here.
 #
-# `openai-mini` HAS NO VISION, so it is not a drop-in for the local chat aliases:
+# `openai-gpt54-mini` HAS NO VISION, so it is not a drop-in for the local chat aliases:
 # ../tests/03_multimodal.py cannot pass against it, and `common.py` maps this
 # engine to no default alias for that reason.
 #
@@ -69,7 +69,7 @@ spec:
         # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
         # can reach — the image is distroless. Verified 2026-09-04: a call with
         # AIGW_DEBUG unset logged nothing; the same call with it true logged
-        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        # `{"gen_ai.request.model":"ollama-gemma4-e4b", ... "response_code":200}`.
         #
         # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
         # and replies included, with only the Authorization header redacted. That
@@ -120,7 +120,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-mini
+              value: openai-gpt54-mini
       backendRefs:
         - name: openai
           modelNameOverride: gpt-5.4-mini
@@ -130,7 +130,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-embed
+              value: openai-embed3-small
       backendRefs:
         - name: openai
           modelNameOverride: text-embedding-3-small
@@ -150,7 +150,7 @@ spec:
     # body, where a `content` part may only be `text` or `image_url`, and the ENGINE
     # answers `400 messages.N.content.str`. OpenAI's own API accepts what Envoy
     # produces. Verified 2026-09-05, before this rule existed: a one-shot call to
-    # /anthropic/v1/messages on the PLAIN `openai-mini` returned a normal Anthropic
+    # /anthropic/v1/messages on the PLAIN `openai-gpt54-mini` returned a normal Anthropic
     # message, and `max_tokens` was translated correctly on the way through.
     #
     # SO WHY A SECOND NAME AT ALL? Because `tests/5_claude_agent_sdk` resolves
@@ -161,7 +161,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-mini-anthropic
+              value: openai-gpt54-mini-anthropic
       backendRefs:
         - name: openai
           modelNameOverride: gpt-5.4-mini

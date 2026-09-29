@@ -5,7 +5,7 @@ registered, the route reaches whichever engine is selected, and a multi-turn
 conversation survives the trip.
 
     uv run 01_simple_call.py
-    uv run 01_simple_call.py --model lms-26b
+    uv run 01_simple_call.py --model lms-gemma4-26b
 """
 
 import sys

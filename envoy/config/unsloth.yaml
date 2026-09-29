@@ -1,8 +1,9 @@
-# Unsloth Studio, on this machine — 3 aliases, free.
+# Unsloth Studio, on this machine — 4 aliases, free.
 #
-#   unsloth-4b      unsloth/gemma-4-E4B-it-qat-GGUF                     chat
-#   unsloth-26b     unsloth/gemma-4-26B-A4B-it-qat-GGUF                 chat, 26B MoE
-#   unsloth-embed   second-state/Nomic-embed-text-v1.5-Embedding-GGUF   embeddings
+#   unsloth-gemma4-e4b    unsloth/gemma-4-E4B-it-qat-GGUF                     chat
+#   unsloth-gemma4-26b    unsloth/gemma-4-26B-A4B-it-qat-GGUF                 chat, 26B MoE
+#   unsloth-qwen38-27b    unsloth/Qwen3.8-27B-GGUF                            chat, 27B dense, Q8
+#   unsloth-nomic-embed   second-state/Nomic-embed-text-v1.5-Embedding-GGUF   embeddings
 #
 # The same weights as the `lms-*` routes, on a different engine — that is the
 # point of the naming, and the reason ../tests can measure one against the other.
@@ -13,8 +14,8 @@
 # which aigw substitutes before parsing this file. A BLANK VALUE SUBSTITUTES
 # EMPTY and every call here 401s at request time.
 #
-# IT HOLDS ONE MODEL AT A TIME, chat and embedder alike. `unsloth-embed` evicts
-# `unsloth-26b` and the next chat call swaps it back — 14 s cold, 4.4 s warm. Two
+# IT HOLDS ONE MODEL AT A TIME, chat and embedder alike. `unsloth-nomic-embed` evicts
+# `unsloth-gemma4-26b` and the next chat call swaps it back — 14 s cold, 4.4 s warm. Two
 # gateways pointed at Unsloth at once will thrash it.
 #
 # `Settings -> API -> Model auto-switch` MUST BE ON, or the first call to a model
@@ -72,7 +73,7 @@ spec:
         # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
         # can reach — the image is distroless. Verified 2026-09-04: a call with
         # AIGW_DEBUG unset logged nothing; the same call with it true logged
-        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        # `{"gen_ai.request.model":"ollama-gemma4-e4b", ... "response_code":200}`.
         #
         # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
         # and replies included, with only the Authorization header redacted. That
@@ -123,7 +124,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: unsloth-4b
+              value: unsloth-gemma4-e4b
       backendRefs:
         - name: unsloth
           modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
@@ -133,17 +134,32 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: unsloth-26b
+              value: unsloth-gemma4-26b
       backendRefs:
         - name: unsloth
           modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    # THE Q8 GGUF, NOT THE MLX BUILD `lms-qwen38-27b` RUNS, and this file is the reason.
+    # Unsloth serves POST /v1/messages for GGUF models only: with the MLX build loaded, the
+    # `-anthropic` twin below answered 503 "No GGUF model loaded. Load a GGUF model first.",
+    # and so did 8888 with no gateway in the path. The GGUF answers it with a thinking block
+    # (both 2026-09-29). ../../litellm/config/unsloth.yaml carries the same build.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-qwen38-27b
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: unsloth/Qwen3.8-27B-GGUF
       timeouts:
         request: 60m
     - matches:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: unsloth-embed
+              value: unsloth-nomic-embed
       backendRefs:
         - name: unsloth
           modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
@@ -186,7 +202,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: unsloth-26b-anthropic
+              value: unsloth-gemma4-26b-anthropic
       backendRefs:
         - name: unsloth-anthropic
           modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
@@ -196,7 +212,17 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: unsloth-4b-anthropic
+              value: unsloth-qwen38-27b-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: unsloth/Qwen3.8-27B-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-gemma4-e4b-anthropic
       backendRefs:
         - name: unsloth-anthropic
           modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF

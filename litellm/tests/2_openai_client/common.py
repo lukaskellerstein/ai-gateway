@@ -10,7 +10,7 @@ THIS SUITE DRIVES ONE GATEWAY, AND THAT IS NEW. Before the split there was one
 two gateways shared a vocabulary: same alias, same messages, two base URLs. Each
 gateway is a standalone compose project now, with its own `.env` and its own
 engine word, so that comparison has no single owner and is no longer made. Nothing
-here — and nothing anywhere in the repo — checks that `lms-4b` also answers on
+here — and nothing anywhere in the repo — checks that `lms-gemma4-e4b` also answers on
 26000. If you want that, call both ports by hand.
 
 WHAT IS STILL WORTH DECLARING IS THIS GATEWAY'S OWN CALLING CONTRACT, and it is on
@@ -58,7 +58,7 @@ class Gateway:
     A scenario spreads `**gateway.body_extras` into its request and reads nothing
     else, so it cannot grow gateway-specific behaviour by accident.
 
-    Fields, and the measurement behind each (all verified 2026-09-03, `lms-4b`):
+    Fields, and the measurement behind each (all verified 2026-09-03, `lms-gemma4-e4b`):
 
     body_extras
         What a caller MUST add. EMPTY here: LiteLLM stores a `max_tokens` on the
@@ -70,7 +70,7 @@ class Gateway:
     lists_models
         `GET {base_url}/models` returns the alias list.
     echoes_alias
-        `response.model` is the ALIAS the caller sent (`lms-4b`), not the engine's
+        `response.model` is the ALIAS the caller sent (`lms-gemma4-e4b`), not the engine's
         own id. Anything keying metrics or logs off `response.model` gets the name
         it asked for.
     exposes_route_limits
@@ -91,7 +91,7 @@ class Gateway:
 # WHO OWNS `max_tokens` — the one difference a caller feels most, and the reason
 # `BODY_EXTRAS` in ../gateway.py is EMPTY here rather than a copy of MAX_TOKENS.
 #
-# Measured 2026-09-03, `lms-4b`, one prompt ("count from 1 to 3000") sent with NO
+# Measured 2026-09-03, `lms-gemma4-e4b`, one prompt ("count from 1 to 3000") sent with NO
 # `max_tokens` in the body:
 #
 #   LiteLLM 24000   finish_reason "length" at  4095 completion tokens — the
@@ -99,7 +99,7 @@ class Gateway:
 #
 # Scripts 01-03 therefore run against the STORED ROUTE DEFAULT, which is worth
 # testing: it is what every caller who forgets `max_tokens` actually gets.
-# `openai-mini` is the one route here that stores none — OpenAI's own default
+# `openai-gpt54-mini` is the one route here that stores none — OpenAI's own default
 # applies there, which is generous.
 #
 # THE FOUR BOOLEANS ARE THIS FOLDER'S ALONE. They are the calling contract

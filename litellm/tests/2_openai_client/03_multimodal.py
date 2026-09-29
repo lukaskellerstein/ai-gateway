@@ -10,7 +10,7 @@ the image part and answer from the text alone, which is why the check asks for
 both the colour and the shape.
 
     uv run 03_multimodal.py
-    uv run 03_multimodal.py --model lms-26b
+    uv run 03_multimodal.py --model lms-gemma4-26b
 """
 
 import sys

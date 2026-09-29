@@ -116,7 +116,7 @@ following the OpenTelemetry GenAI semantic conventions. Before any traffic it se
 |:--|:--|:--|
 | An alias costs | one `model_list` entry, plus a price and a context window | one `AIGatewayRoute` rule |
 | One config file that serves every engine | **yes** — `all.yaml` is six `include:` lines and copies nothing | **yes** — `all.yaml`, but it **copies** the five engine files, because `aigw run` takes one path and has no `include:` |
-| Vendor-specific body fields (`extra_body`) | **yes** — this is what carries the OpenRouter provider pin | **no**, which is why `openrouter-free` cannot exist on 26000 |
+| Vendor-specific body fields (`extra_body`) | **yes** — this is what carries the OpenRouter provider pin | **no**, which is why `openrouter-gemma4-26b-free` cannot exist on 26000 |
 | Rewrites a parameter the upstream renamed | **yes** — `max_tokens` → `max_completion_tokens` for GPT-5 | **no**, it is a pass-through |
 | Reload after a config edit | `restart` the service | `restart` the service |
 
@@ -217,7 +217,7 @@ Run it yourself — [`benchmark/`](benchmark/README.md), no dependencies:
 cd benchmark && uv run main.py --rounds 10
 ```
 
-Measured **2026-09-04**, alias `unsloth-4b` → `unsloth/gemma-4-E4B-it-qat-GGUF` on Unsloth
+Measured **2026-09-04**, alias `unsloth-gemma4-e4b` → `unsloth/gemma-4-E4B-it-qat-GGUF` on Unsloth
 Studio, MacBook with 128 GB. 10 rounds per scenario, round-robin, one warm-up round discarded,
 `max_tokens: 512`, `temperature: 0`. **Medians.**
 

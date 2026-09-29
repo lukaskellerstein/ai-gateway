@@ -1,13 +1,16 @@
-# OpenRouter — 1 alias. PAID: EVERY CALL BILLS A REAL ACCOUNT.
+# OpenRouter — 2 aliases. PAID: EVERY CALL BILLS A REAL ACCOUNT.
 #
-#   openrouter-26b   google/gemma-4-26b-a4b-it   $0.07 in / $0.34 out per 1M
+#   openrouter-gemma4-26b   google/gemma-4-26b-a4b-it   $0.07 in / $0.34 out per 1M
+#   openrouter-qwen38-27b   qwen/qwen3.8-27b            $0.025-$0.45 in / $1.875-$4.40 out
 #
-# The same weights as `lms-26b` and `unsloth-26b`, on hardware you do not own.
+# The same weights as the `lms-*` and `unsloth-*` routes of the same name, on
+# hardware you do not own. OpenRouter picks the upstream provider per call, which
+# is why the Qwen price is a range; ../../litellm/config/openrouter.yaml has it.
 # Selecting this engine is the only way this gateway can spend money, and there
 # is no fallback anywhere here — a request costs money only when a caller names
 # a route that costs money.
 #
-# `openrouter-free` IS DELIBERATELY ABSENT, and it is the one alias this gateway
+# `openrouter-gemma4-26b-free` IS DELIBERATELY ABSENT, and it is the one alias this gateway
 # does not carry. That route needs a PROVIDER PIN
 # (`order: ["google-ai-studio"]`, `allow_fallbacks: false`) because OpenRouter
 # load-balances its free tier and one provider returns tool calls as RAW TEXT
@@ -71,7 +74,7 @@ spec:
         # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
         # can reach — the image is distroless. Verified 2026-09-04: a call with
         # AIGW_DEBUG unset logged nothing; the same call with it true logged
-        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        # `{"gen_ai.request.model":"ollama-gemma4-e4b", ... "response_code":200}`.
         #
         # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
         # and replies included, with only the Authorization header redacted. That
@@ -122,10 +125,20 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openrouter-26b
+              value: openrouter-gemma4-26b
       backendRefs:
         - name: openrouter
           modelNameOverride: google/gemma-4-26b-a4b-it
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openrouter-qwen38-27b
+      backendRefs:
+        - name: openrouter
+          modelNameOverride: qwen/qwen3.8-27b
       timeouts:
         request: 10m
     # ── The `-anthropic` alias: PASS-THROUGH, because OpenRouter serves it ────
@@ -138,17 +151,27 @@ spec:
     # same `Backend`, with the body going upstream UNTRANSLATED.
     #
     # It is the better of the two shapes and it is not always available — the
-    # `openai-mini-anthropic` rule in openai.yaml has to translate instead, because
+    # `openai-gpt54-mini-anthropic` rule in openai.yaml has to translate instead, because
     # api.openai.com serves no Anthropic route at all. Both satisfy
     # `tests/5_claude_agent_sdk`, which resolves `<alias>-anthropic` at runtime.
     - matches:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openrouter-26b-anthropic
+              value: openrouter-gemma4-26b-anthropic
       backendRefs:
         - name: openrouter-anthropic
           modelNameOverride: google/gemma-4-26b-a4b-it
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openrouter-qwen38-27b-anthropic
+      backendRefs:
+        - name: openrouter-anthropic
+          modelNameOverride: qwen/qwen3.8-27b
       timeouts:
         request: 10m
   # What lands in the access log above. Without these the token fields are empty.

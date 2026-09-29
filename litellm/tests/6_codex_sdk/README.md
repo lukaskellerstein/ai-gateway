@@ -8,7 +8,7 @@ Codex at all, however well it serves chat completions. This one serves it at
 
 ```bash
 uv run run_all.py                     # all four
-uv run run_all.py --model unsloth-26b # the same four on another alias
+uv run run_all.py --model unsloth-gemma4-26b # the same four on another alias
 uv run 04_mcp.py                      # one scenario, directly
 ```
 
@@ -19,13 +19,13 @@ uv run 04_mcp.py                      # one scenario, directly
 | `01_query.py` | one shot | `/v1/responses` is not answering |
 | `02_session.py` | a `Thread` that remembers | the conversation does not survive the round trip |
 | `03_structured.py` | `output_schema` | the gateway drops structured output — the reply is prose, not JSON |
-| `04_mcp.py` | an MCP server over stdio | Codex could not start the server or read its config — or, on `openrouter-26b` only, the model did not call the tool |
+| `04_mcp.py` | an MCP server over stdio | Codex could not start the server or read its config — or, on `openrouter-gemma4-26b` only, the model did not call the tool |
 
 ## ⚠ The MCP scenario asserts the tool call on ONE alias, and the wiring on the rest
 
 `04_mcp.py` proves Codex spawns the server, completes the handshake and asks
 for its tools — on every alias. It asserts that the model **called** the tool
-on `openrouter-26b` only. Two things stood between the model and the tool:
+on `openrouter-gemma4-26b` only. Two things stood between the model and the tool:
 **one is fixed here, one is not.**
 
 ```text
@@ -51,7 +51,7 @@ it:
 default_tools_approval_mode = "approve"   # auto | prompt | writes | approve
 ```
 
-Measured 2026-09-23 — codex 0.155.1, `openrouter-26b`, approval policy `never`,
+Measured 2026-09-23 — codex 0.155.1, `openrouter-gemma4-26b`, approval policy `never`,
 read-only sandbox, an empty `CODEX_HOME`, **the same on both gateways**:
 
 ```text
@@ -62,7 +62,7 @@ tool really called: True        <- the SERVER's marker, not the answer
 The issue is still open upstream, because it asks for a CLI flag. **Not
 measured**: the same run on 0.155.1 *without* the key — it bills a real account,
 and the 2026-09-04 refusal is the "before". **Guarded by** `04_mcp.py` on
-`openrouter-26b`: delete the key and that run goes red. It is a paid run, so
+`openrouter-gemma4-26b`: delete the key and that run goes red. It is a paid run, so
 `run_all.py` on a free alias does not prove the key is still there.
 
 ### Not fixed — the shape Codex sends
@@ -79,12 +79,12 @@ From 0.117.0 Codex sends a whole MCP server as **one tool of type `namespace`**:
 ```
 
 The OpenRouter route understands that shape. **No local engine does**, so the
-model never sees `bench_serial` as something it can call — `unsloth-4b` says so
+model never sees `bench_serial` as something it can call — `unsloth-gemma4-e4b` says so
 in as many words: *"I don't have a tool named `bench_serial` available."* It
 shells out, or reads the serial number out of `mcp_server.py`.
 
 **The cause is measured, not inferred.** One `/v1/responses` call per shape, no
-Codex in the path, `unsloth-26b`, 2026-09-21, the same on 24000 and 26000:
+Codex in the path, `unsloth-gemma4-26b`, 2026-09-21, the same on 24000 and 26000:
 
 | The same tool, sent as | What came back |
 |:--|:--|
@@ -96,7 +96,7 @@ off**:
 
 | Tried | Result |
 |:--|:--|
-| codex 0.155.1, the newest on PyPI, both gateways, `unsloth-4b` and `unsloth-26b` | tool never ran |
+| codex 0.155.1, the newest on PyPI, both gateways, `unsloth-gemma4-e4b` and `unsloth-gemma4-26b` | tool never ran |
 | `model_providers.<id>` in 0.155.1 and in 0.156.0-alpha.16 | no capability key for it |
 | `features.non_prefixed_mcp_tool_names = true` | renames the namespace to `hardware`; still a `namespace`, tool never ran |
 | an empty `CODEX_HOME`, which cuts the request to 13 tools | tool never ran |

@@ -12,7 +12,7 @@ what the model happened to say.
 
 ```bash
 uv run run_all.py                     # all six
-uv run run_all.py --model unsloth-26b # the same six on another alias
+uv run run_all.py --model unsloth-gemma4-26b # the same six on another alias
 uv run 03_sdk_mcp.py                  # one scenario, directly
 uv run run_all.py --verbose           # stream each scenario instead of capturing it
 ```

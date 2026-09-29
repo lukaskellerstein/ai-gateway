@@ -17,7 +17,7 @@ conversation: it passes the reply's `thinking` blocks straight into the OpenAI
 body, where a `content` part may only be `text` or `image_url`, and the engine
 answers `400 messages.N.content.str`. Envoy needs a second, `Anthropic`-schema
 alias to get round it. LiteLLM needs none — verified 2026-09-04, a multi-turn
-request carrying a `thinking` block returned 200 on the plain `unsloth-4b`.
+request carrying a `thinking` block returned 200 on the plain `unsloth-gemma4-e4b`.
 
 That is a real difference between the two gateways and it belongs here, in the
 one file per project that is allowed to know which gateway it is talking to.
@@ -97,7 +97,7 @@ START_HINT = "cd ../.. && podman compose up -d"
 # `lm_studio/` and never went through the bridge, `ollama-*` and `unsloth-*` are
 # `openai/` and did. `use_chat_completions_url_for_anthropic_messages: true`
 # forces the chat-completions path, where the adapter already falls back to
-# `reasoning_content`. Measured on 1.99.1, unsloth-4b, after the flag:
+# `reasoning_content`. Measured on 1.99.1, unsloth-gemma4-e4b, after the flag:
 # 6 streaming runs out of 6 carried thinking, against 0 out of 5 before.
 #
 # IT WAS NOT THE TWO ISSUES THAT WERE CLOSED. BerriAI/litellm#29518 and #27946
@@ -147,7 +147,7 @@ def reasoning_baseline(model: str) -> int:
 
     THE ANTHROPIC ASSERTION NEEDS A BASELINE, or it cannot tell two very different
     things apart: a gateway that LOSES the reasoning, and a model that never
-    produced any. `openrouter-26b` is the second — 0 characters on
+    produced any. `openrouter-gemma4-26b` is the second — 0 characters on
     `/v1/chat/completions` as well, measured 2026-09-05, 2 runs out of 2 — and a
     flat declaration reported that as a gateway bug.
 

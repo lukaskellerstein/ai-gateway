@@ -81,12 +81,13 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   names ONE FILE — `<project>/config/<word>.yaml` — and `all.yaml` is a real file, not a list
   you write. LiteLLM's is **seven `include:` lines that copy nothing**; Envoy's **COPIES the six
   engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
-  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 14 aliases on `all`, Envoy 22
-  route rules (Cerebras added 2026-09-28).
+  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 17 aliases on `all`, Envoy 28
+  route rules (Cerebras added 2026-09-28, Qwen 3.8 on three more engines 2026-09-29).
 - **`GATEWAY_ENGINE` NAMES ANY FILE IN `config/`, AND TWO OF THEM ARE GITIGNORED.**
   `<project>/config/lukas.yaml` is the user's PERSONAL config — every chat and embedding model
-  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **40 aliases on
-  LiteLLM, 44 route rules on Envoy** (four `AIGatewayRoute`s, 15-alias cap). No Ollama, no
+  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **44 aliases on
+  LiteLLM, 50 route rules on Envoy** (four `AIGatewayRoute`s, 15-alias cap; both `-1` routes
+  are full). No Ollama, no
   hosted engine, and none of Unsloth's four image models — so **it cannot spend money**, and a
   chat route that could not work was never written. **YOU WILL BE ASKED TO ADD MODELS TO IT**
   ("I downloaded a new model in unsloth"): that is TWO edits, `litellm/config/lukas.yaml` and
@@ -127,10 +128,15 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   when `.env` names its engine and 404s on the default config, with nothing in any log to say
   why. The shared test suite that used to catch cross-gateway drift went with the split. Do not
   "fix" this by making one project read another's files, or by generating one of them.
-- **Every alias names its engine** — `lms-*`, `unsloth-*`, `ollama-*`, `openrouter-*`,
-  `openai-*`, `cerebras-*`. There is no engine-neutral name (`local` was removed) and no capability name
-  (`cheap`, `standard`, `frontier` were removed): the first hid which engine answered, the
-  second hid who was billed. **The prefix is the money warning** — the three local engines
+- **Every alias names its engine AND its model** — `<engine>-<model>-<size>`:
+  `lms-gemma4-26b`, `unsloth-qwen38-27b`, `openai-gpt54-mini`, `ollama-nomic-embed`. The
+  engine is one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. There is no
+  engine-neutral name (`local` was removed), no capability name (`cheap`, `standard`,
+  `frontier` were removed) and, **since 2026-09-29, no size-only name** (`lms-26b` and the
+  rest, renamed with NO fallback — old names 404): the first hid which engine answered, the
+  second who was billed, the third which model family. The suffix is the SAME across engines
+  for the same model, so a switch of engine is a change of prefix. The old → new table is in
+  root `README.md` § The aliases. **The prefix is the money warning** — the three local engines
   are free; `openrouter`, `openai` and `cerebras` bill a real account. **No alias falls back to
   another**, so a request costs money only when a caller names a route that costs money.
 - **Local routes are shadow-priced** — free, but carrying a cloud twin's rate so budget
@@ -163,10 +169,11 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   `reasoning_content` on some replies and not others. **The cure is `<alias>-anthropic` on an
   `Anthropic`-schema `AIServiceBackend`**, present for all three local engines AND for
   `openrouter`: every one serves `POST /v1/messages` natively, so nothing is translated and
-  nothing is mangled. `openai-mini-anthropic` and `cerebras-27b-anthropic` EXIST BUT ARE NOT THIS —
-  neither vendor serves `/v1/messages`, so those rules point at the plain `OpenAI`-schema
-  backend and still translate. **Nine `-anthropic` rules in all**, which is why
-  `envoy/config/all.yaml` has 22 and not 13. `tests/5_claude_agent_sdk` RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
+  nothing is mangled. `openai-gpt54-mini-anthropic` and `cerebras-qwen38-27b-anthropic` EXIST
+  BUT ARE NOT THIS — neither vendor serves `/v1/messages`, so those rules point at the plain
+  `OpenAI`-schema backend and still translate. **Twelve `-anthropic` rules in all, one per chat
+  alias**, which is why `envoy/config/all.yaml` has 28 and not 16. `tests/5_claude_agent_sdk`
+  RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
   **`MAX_THINKING_TOKENS=0` IS NO LONGER NEEDED** — it existed for `400 thinking.type` from
   the same translator, and the pass-through path accepts the field as sent.
 - **LITELLM CARRIES REASONING ON ITS OPENAI ROUTES AND DROPS IT ON `/v1/messages`; ENVOY
@@ -220,7 +227,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   UPSTREAM BUG** (re-measured 2026-09-21, codex 0.155.1). openai/codex#19871 — from 0.117.0
   Codex sends a whole MCP server as ONE tool of type `namespace`, and no local engine
   understands that shape. **THE CAUSE IS MEASURED, NOT INFERRED**: one `/v1/responses` call
-  per shape, no Codex in the path, `unsloth-26b`, the same on both ports — `namespace` gets a
+  per shape, no Codex in the path, `unsloth-gemma4-26b`, the same on both ports — `namespace` gets a
   plain message, the same tool as a flat `function` gets a `function_call`. So neither gateway
   is at fault. Nothing in Codex turns the shape off (no provider capability in 0.155.1 or
   0.156.0-alpha.16; `features.non_prefixed_mcp_tool_names` only renames it), and the real fix,
@@ -228,7 +235,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   PROXIES THAT FLATTEN THE TOOLS — shims. Do not build one.** `tests/6_codex_sdk/04_mcp.py`
   therefore asserts the WIRING and PRINTS `tool really called:` every run. **THE SECOND BUG,
   openai/codex#24135, IS WORKED AROUND**: `default_tools_approval_mode = "approve"` on the MCP
-  server, set in `04_mcp.py`. With it `openrouter-26b` RAN the tool on BOTH gateways under
+  server, set in `04_mcp.py`. With it `openrouter-gemma4-26b` RAN the tool on BOTH gateways under
   approval policy `never` and a read-only sandbox (2026-09-23) — the OpenRouter route
   understands `namespace`, and `04_mcp.py` ASSERTS the call on that alias (`CALLS_THE_TOOL`).
   That is a paid run, so a free `run_all.py` does not prove the key is still there.
@@ -328,7 +335,7 @@ and `duration` ≤ `7d`.
   volumes.** The `mlflow/` folder went on 2026-09-04 and these two outlived it, holding that
   gateway's endpoints and traces. Nothing reads them, and nothing will — but deleting a volume
   is unrecoverable, so ask.
-- Setting `lms-26b`'s `*_cost_per_token` to `0`. It silently disables every budget ceiling
+- Setting `lms-gemma4-26b`'s `*_cost_per_token` to `0`. It silently disables every budget ceiling
   for local traffic.
 - **Re-coupling the projects** — a shared module, a shared `.env`, a root `compose.yml`, or
   anything in one folder that reads a file in another. The separation was asked for

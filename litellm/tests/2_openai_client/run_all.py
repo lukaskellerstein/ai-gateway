@@ -4,7 +4,7 @@ Each script is a separate child process and a separate row, so one failure names
 itself instead of hiding inside a combined result.
 
     uv run run_all.py
-    uv run run_all.py --model lms-26b
+    uv run run_all.py --model lms-gemma4-26b
     uv run run_all.py --verbose
 
 IT DRIVES 24000 AND NOTHING ELSE. Before the split this looped over both gateways

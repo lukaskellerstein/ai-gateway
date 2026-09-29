@@ -10,7 +10,7 @@ THIS SUITE DRIVES ONE GATEWAY, AND THAT IS NEW. Before the split there was one
 two gateways shared a vocabulary: same alias, same messages, two base URLs. Each
 gateway is a standalone compose project now, with its own `.env` and its own
 engine word, so that comparison has no single owner and is no longer made. Nothing
-here — and nothing anywhere in the repo — checks that `lms-4b` also answers on
+here — and nothing anywhere in the repo — checks that `lms-gemma4-e4b` also answers on
 24000. If you want that, call the other port by hand.
 
 WHAT IS STILL WORTH DECLARING IS THIS GATEWAY'S OWN CALLING CONTRACT, and it is on
@@ -63,7 +63,7 @@ class Gateway:
     A scenario spreads `**gateway.body_extras` into its request and reads nothing
     else, so it cannot grow gateway-specific behaviour by accident.
 
-    Fields, and the measurement behind each (all verified 2026-09-03, `lms-4b`):
+    Fields, and the measurement behind each (all verified 2026-09-03, `lms-gemma4-e4b`):
 
     body_extras
         What a caller MUST add. `max_tokens` here, and it is not optional — see
@@ -103,7 +103,7 @@ class Gateway:
 # WHO OWNS `max_tokens` — the one difference a caller feels most, and the reason
 # `body_extras` carries one here.
 #
-# Measured 2026-09-03, `lms-4b`, one prompt ("count from 1 to 3000") sent with NO
+# Measured 2026-09-03, `lms-gemma4-e4b`, one prompt ("count from 1 to 3000") sent with NO
 # `max_tokens` in the body:
 #
 #   Envoy   26000   finish_reason "stop"   at 13946 completion tokens — nothing

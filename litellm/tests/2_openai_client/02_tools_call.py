@@ -11,7 +11,7 @@ result depends on the internet cannot tell "the gateway is broken" from "the
 market is closed".
 
     uv run 02_tools_call.py
-    uv run 02_tools_call.py --model lms-26b
+    uv run 02_tools_call.py --model lms-gemma4-26b
 """
 
 import json

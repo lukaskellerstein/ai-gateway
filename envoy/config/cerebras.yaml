@@ -1,6 +1,6 @@
 # Cerebras — 1 alias. PAID: EVERY CALL BILLS A REAL ACCOUNT.
 #
-#   cerebras-27b   qwen-3.8-27b   chat, vision, tools   $0.99 in / $1.49 out per 1M
+#   cerebras-qwen38-27b   qwen-3.8-27b   chat, vision, tools   $0.99 in / $1.49 out per 1M
 #
 # The reason to pick it is SPEED: 925-999 tok/s by the server's own `time_info`
 # (measured 2026-09-28). ../../litellm/config/cerebras.yaml carries the full
@@ -66,7 +66,7 @@ spec:
         # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
         # can reach — the image is distroless. Verified 2026-09-04: a call with
         # AIGW_DEBUG unset logged nothing; the same call with it true logged
-        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        # `{"gen_ai.request.model":"ollama-gemma4-e4b", ... "response_code":200}`.
         #
         # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
         # and replies included, with only the Authorization header redacted. That
@@ -117,7 +117,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: cerebras-27b
+              value: cerebras-qwen38-27b
       backendRefs:
         - name: cerebras
           modelNameOverride: qwen-3.8-27b
@@ -125,7 +125,7 @@ spec:
         request: 10m
     # ── The `-anthropic` alias: TRANSLATED, because Cerebras has no Anthropic API ──
     #
-    # SAME SHAPE AS `openai-mini-anthropic`, NOT AS THE LOCAL ENGINES. It points at
+    # SAME SHAPE AS `openai-gpt54-mini-anthropic`, NOT AS THE LOCAL ENGINES. It points at
     # the plain `cerebras` backend, and Envoy translates Anthropic in to OpenAI out.
     # There is nothing to pass through TO: `POST https://api.cerebras.ai/v1/messages`
     # answered 404 on 2026-09-28.
@@ -136,7 +136,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: cerebras-27b-anthropic
+              value: cerebras-qwen38-27b-anthropic
       backendRefs:
         - name: cerebras
           modelNameOverride: qwen-3.8-27b

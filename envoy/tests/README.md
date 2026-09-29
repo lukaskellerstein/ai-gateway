@@ -24,7 +24,7 @@ The gateway must be up first — `podman compose up -d` in the parent directory.
 cd tests
 uv run run_all.py                      # all seven, one row each
 uv run run_all.py --only 6_codex_sdk   # one folder
-uv run run_all.py --model lms-26b      # a different alias everywhere
+uv run run_all.py --model lms-gemma4-26b      # a different alias everywhere
 uv run run_all.py --verbose            # stream each folder instead of capturing it
 ```
 
@@ -115,7 +115,7 @@ from the request body's `model` field either way.
 ## Which alias gets called — and the one thing to check first
 
 `gateway.py` reads `GATEWAY_ENGINE` from `../.env` and picks that engine's small
-chat route: `lms-4b`, `unsloth-4b`, `ollama-4b` or `openrouter-26b`.
+chat route: `lms-gemma4-e4b`, `unsloth-gemma4-e4b`, `ollama-gemma4-e4b` or `openrouter-gemma4-26b`.
 
 > **Check `../.env` matches the running container.** Compose reads the **shell**
 > before the file, so a gateway started from a shell carrying `GATEWAY_ENGINE`
@@ -127,7 +127,7 @@ chat route: `lms-4b`, `unsloth-4b`, `ollama-4b` or `openrouter-26b`.
 > Override without editing anything:
 >
 > ```bash
-> AI_GATEWAY_TEST_MODEL=unsloth-4b uv run run_all.py
+> AI_GATEWAY_TEST_MODEL=unsloth-gemma4-e4b uv run run_all.py
 > ```
 
 **One engine runs at a time**, so a fixed default would 404 on a healthy gateway
@@ -171,12 +171,12 @@ runtime.
 - **The two PAID engines.** `config/openrouter.yaml` and `config/openai.yaml` parse
   and register their aliases, but no call has been made through either — that would
   bill a real account.
-- **`openrouter-free`.** Absent here by design: no `extra_body`, so no provider pin.
+- **`openrouter-gemma4-26b-free`.** Absent here by design: no `extra_body`, so no provider pin.
 - **That the same alias answers on 24000.** See the note above.
 
 ## Verified
 
-2026-09-04, `unsloth-4b`, all seven folders passing. Timings on this machine:
+2026-09-04, `unsloth-gemma4-e4b`, all seven folders passing. Timings on this machine:
 
 | Folder | Seconds, warm |
 |:--|--:|
@@ -201,7 +201,7 @@ runtime.
 > after the engine loads a model pays for the load. Both add tens of seconds and
 > neither repeats. Compare a folder against itself, warm — not against a sibling.
 
-Run with `AI_GATEWAY_TEST_MODEL=unsloth-4b`, because this project carries no `.env`
+Run with `AI_GATEWAY_TEST_MODEL=unsloth-gemma4-e4b`, because this project carries no `.env`
 — see the call-out above.
 
 Two extra requirements when the engine is `unsloth`, and both fail quietly:

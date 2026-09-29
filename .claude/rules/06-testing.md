@@ -68,7 +68,7 @@ curl -sX POST http://localhost:26000/v1/chat/completions \
 
 No key on Envoy, and **always send `max_tokens`** — it stores no route default. An alias that
 answers on 24000 and 404s on 26000 means the edit was not made on that side, or the `.env`
-files name different engines — **except `openrouter-free`, which is absent on 26000 by
+files name different engines — **except `openrouter-gemma4-26b-free`, which is absent on 26000 by
 design.**
 
 ## The suites
@@ -115,7 +115,7 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   check that stopping one leaves the other serving. **Then put them both back the way you found
   them**, including each project's `GATEWAY_ENGINE`.
 - **You touched either `config/all.yaml`** — prove BOTH modes on that gateway. Bring it up on
-  `all` and confirm the full alias list on `/v1/models` (**14** on 24000, **22** on 26000),
+  `all` and confirm the full alias list on `/v1/models` (**17** on 24000, **28** on 26000),
   then bring it up on ONE engine and confirm the short list. A default config that serves
   everything hides a broken per-engine file, and the other way round.
 - **You added an alias to `envoy/config/<engine>.yaml`** — confirm it answers under BOTH

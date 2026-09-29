@@ -12,7 +12,7 @@ here — and when it does, that is a fact about the model, not the gateway.
 
 ```bash
 uv run run_all.py                     # all seven
-uv run run_all.py --model unsloth-26b # the same seven on another alias
+uv run run_all.py --model unsloth-gemma4-26b # the same seven on another alias
 uv run 05_mcp.py                      # one scenario, directly
 uv run run_all.py --verbose           # stream each scenario instead of capturing it
 ```
