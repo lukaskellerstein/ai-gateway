@@ -15,9 +15,10 @@
 #
 # ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
 #
-#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai   default all
+#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai | cerebras
+#                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 20 route rules, one
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 22 route rules, one
 # gateway. Name a single engine instead and only that engine's rules exist, which
 # is how you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -64,16 +65,17 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one self-contained file per engine:
     #
-    #   config/all.yaml         20 rules: everything below       THE DEFAULT
+    #   config/all.yaml         22 rules: everything below       THE DEFAULT
     #   config/lms.yaml         3 aliases: 2 chat, 1 embedder      free
     #   config/unsloth.yaml     3 aliases: 2 chat, 1 embedder      free
     #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
     #   config/openrouter.yaml  1 alias:  1 chat                   PAID
     #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
+    #   config/cerebras.yaml    1 alias:  1 chat                   PAID
     #
     # `aigw run` TAKES ONE FILE PATH — not a directory, not a repeated flag
     # (checked against `aigw run --help`, 2026-09-06) — and Envoy's config has no
-    # `include:` mechanism. So config/all.yaml COPIES the five files rather than
+    # `include:` mechanism. So config/all.yaml COPIES the six files rather than
     # referencing them, and AN ALIAS IS THREE EDITS: the other gateway's list,
     # this engine's file, and all.yaml. Nothing checks that you did all three.
     #
@@ -105,6 +107,7 @@ services:
       UNSLOTH_API_KEY: ${UNSLOTH_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       # THIS IS THE ONLY WAY TO SEE ANYTHING PER-REQUEST. Envoy runs as a child
       # of aigw, and with this off its stdout — which is where the JSON access
       # log goes — lands in a file inside the container that no shell can read,

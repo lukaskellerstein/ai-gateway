@@ -46,7 +46,7 @@ with the split. Call it on **both** ports afterwards — [`06-testing.md`](06-te
 6. the alias table in `README.md` — a route nobody documents is a route nobody calls
 
 **The alias name must carry its engine.** `lms-*`, `unsloth-*`, `ollama-*`,
-`openrouter-*`, `openai-*`. No engine-neutral name, no capability name.
+`openrouter-*`, `openai-*`, `cerebras-*`. No engine-neutral name, no capability name.
 
 ## The two projects must stay independent
 
@@ -59,7 +59,7 @@ The costs are known and written down; they are not a defect to fix.
 Duplication between the folders is the price of that, and it is the right price. When
 `mlflow/` existed, `discover/gateway_discovery.py` sat in two copies for exactly this reason —
 and when the folder went, its copy went with it and nothing had to be untangled. The same logic
-now applies to `envoy/config/all.yaml`: it duplicates the five engine files, and that
+now applies to `envoy/config/all.yaml`: it duplicates the six engine files, and that
 duplication is the price of `aigw run` taking one path. **Do not "fix" it with a generator** —
 that was considered on 2026-09-06 and rejected, because it needs a second image in a project
 whose whole point is one stock service.
@@ -171,11 +171,11 @@ what is proven here is what would ship. Six files: one per engine, each self-con
   image); `logging.level: error` (at `debug` Envoy dumps request headers).
 - **It has no database, and no project here generates config.** Envoy never could — another
   renderer, and the aigw image is distroless — and `litellm/` stopped on 2026-09-06.
-- **`config/all.yaml` is the default and is a MERGE of the other five.** Four resources are
+- **`config/all.yaml` is the default and is a MERGE of the other six.** Four resources are
   identical everywhere (`GatewayClass`, `Gateway`, `EnvoyProxy`, `ClientTrafficPolicy`) and
   appear once, taken from `lms.yaml` because it has the fullest comments; every other resource
   is already named per engine. Keep the per-engine grouping when you edit it — it is what makes
-  the file diffable against the five it came from.
+  the file diffable against the six it came from.
 - **EACH ENGINE KEEPS ITS OWN `AIGatewayRoute` IN `all.yaml`, AND THAT IS FORCED.**
   `aigw-run-lms`, `aigw-run-unsloth` and so on, all attached to the same `Gateway`. An
   `AIGatewayRoute` becomes a Gateway API `HTTPRoute`, whose `spec.rules` the CRD caps at **16

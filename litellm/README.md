@@ -139,7 +139,7 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 13 aliases
+GATEWAY_ENGINE=all        # the default: every engine at once, 14 aliases
 ```
 
 **There is no `COMPOSE_PROFILES` line.** It went with the split: the directory you stand in is
@@ -148,19 +148,19 @@ now the choice of gateway, and `up -d` here starts this one whether or not `.env
 **Which engine.** One word names one file, `config/<engine>.yaml`. A typo is a clean crash:
 the file does not exist and `litellm` exits saying so.
 
-**`all` is the default and serves every engine at once** — 13 aliases from one gateway.
-`config/all.yaml` is six `include:` lines and copies nothing, so the per-engine files stay the
-one place an alias is written. **The five engine words are for isolation**: name one and every
+**`all` is the default and serves every engine at once** — 14 aliases from one gateway.
+`config/all.yaml` is seven `include:` lines and copies nothing, so the per-engine files stay the
+one place an alias is written. **The six engine words are for isolation**: name one and every
 other alias is absent from the running config, not disabled, and a 404 on it is correct.
 `GATEWAY_ENGINE=lms` is how you get a gateway that cannot reach a paid provider at all.
 
 There is no separate switch for the cloud — a hosted provider is an engine like any other, and
-the alias prefix already says which is which. With `all`, the two paid engines are
+the alias prefix already says which is which. With `all`, the three paid engines are
 **registered**, which costs nothing: only a completion bills, and nothing falls back.
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../envoy` has its own, and nothing checks that they agree |
+| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../envoy` has its own, and nothing checks that they agree |
 | `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential. **Change it for anything but a laptop** |
 | `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every `lms-*` alias |
 | `UNSLOTH_API_BASE` | `http://host.containers.internal:8888/v1` | every `unsloth-*` alias |
@@ -168,6 +168,7 @@ the alias prefix already says which is which. With `all`, the two paid engines a
 | `OLLAMA_API_BASE` | `http://host.containers.internal:11434/v1` | every `ollama-*` alias. **There is no `OLLAMA_API_KEY`**: Ollama ignores the header. The config still sets a literal `sk-ollama`, because LiteLLM's `openai/` provider needs some key string |
 | `OPENROUTER_API_KEY` | *(blank)* | every `openrouter-*` alias. **Real spend.** Without it the alias stays and 401s at call time |
 | `OPENAI_API_KEY` | *(blank)* | every `openai-*` alias. **Real spend**, same failure |
+| `CEREBRAS_API_KEY` | *(blank)* | every `cerebras-*` alias. **Real spend**, same failure |
 | `DATABASE_URL` | set in `compose.yml` | **required** — without it `/key/generate` fails with `{"error":"No connected db."}` while completions keep working |
 | `MAX_STRING_LENGTH_PROMPT_IN_DB` | `100000` | LiteLLM's own default of 2048 clips agent transcripts mid-run |
 
@@ -224,17 +225,17 @@ for one client.
 | File | Holds |
 |:--|:--|
 | `settings.yaml` | the three settings blocks, and the facts true of every alias. **No alias lives here** |
-| `lms.yaml` `unsloth.yaml` `ollama.yaml` `openrouter.yaml` `openai.yaml` | one engine each: `include: [settings.yaml]` and then its own `model_list` |
-| `all.yaml` | six `include:` lines and nothing else. **It copies no aliases** |
+| `lms.yaml` `unsloth.yaml` `ollama.yaml` `openrouter.yaml` `openai.yaml` `cerebras.yaml` | one engine each: `include: [settings.yaml]` and then its own `model_list` |
+| `all.yaml` | seven `include:` lines and nothing else. **It copies no aliases** |
 
 `all.yaml` works because LiteLLM merges an included file key by key and **extends a list**, so
-the five `model_list`s join into one while the settings arrive from `settings.yaml`. Add an
+the six `model_list`s join into one while the settings arrive from `settings.yaml`. Add an
 alias to `config/lms.yaml` and it appears in `all` on the next `up -d` with no second edit.
-Verified 2026-09-06 against `ghcr.io/berriai/litellm:main-stable` — 13 aliases in `/v1/models`,
-prices and context windows intact.
+Verified 2026-09-28 against `ghcr.io/berriai/litellm:main-stable` — 14 aliases in `/v1/models`,
+and a `cerebras-27b` call logged at its configured price.
 
 `settings.yaml` is listed **first** on purpose. LiteLLM *replaces* a non-list key, so the last
-file to set one wins; the five engine files set none today, but one added below them that did
+file to set one wins; the six engine files set none today, but one added below them that did
 would silently win.
 
 **Nothing included may itself carry an `include:` that matters.** LiteLLM does not recurse: the

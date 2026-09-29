@@ -76,18 +76,18 @@ reads its **own** `.env`:
 
 | Variable | Values | Default | Picks | In |
 |:--|:--|:--|:--|:--|
-| `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | **`all`** | which engines | both |
+| `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras` | **`all`** | which engines | both |
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 **`all` IS THE DEFAULT AND IS A REAL FILE**, `config/all.yaml`, not a list you write. It
-serves every engine at once: 13 aliases on LiteLLM, 20 route rules on Envoy — the latter split
-across **five `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
+serves every engine at once: 14 aliases on LiteLLM, 22 route rules on Envoy — the latter split
+across **six `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
 (`HTTPRoute.spec.rules` allows 16 and aigw uses one). The two files are
 built differently and the difference matters when you add an alias:
 
 | | `litellm/config/all.yaml` | `envoy/config/all.yaml` |
 |:--|:--|:--|
-| shape | six `include:` lines | the five engine files MERGED |
+| shape | seven `include:` lines | the six engine files MERGED |
 | copies aliases | **no** | **yes** |
 | adding an alias needs it edited | no | **yes** |
 
@@ -112,7 +112,7 @@ file on one side and an environment variable on the other, so they could not div
 |:--|:--|:--|
 | reads | `litellm/.env` | `envoy/.env` |
 | compose selects | `litellm/config/<word>.yaml` | `envoy/config/<word>.yaml` |
-| the aliases are in | that file, or the five it includes | that file |
+| the aliases are in | that file, or the six it includes | that file |
 
 Check both `.env` files before treating a difference between the ports as a bug.
 
@@ -129,8 +129,8 @@ Each `litellm/config/<engine>.yaml` carries `include: [settings.yaml]` and then 
 nested `include:` is merged as data and dropped.
 
 `config/all.yaml` lives with that rather than around it: it lists `settings.yaml` **directly
-and first**, then the five engine files, whose own `include: [settings.yaml]` is then dropped
-harmlessly. Verified 2026-09-06 — 13 aliases in `/v1/models`, prices and windows intact. The
+and first**, then the six engine files, whose own `include: [settings.yaml]` is then dropped
+harmlessly. Verified 2026-09-28 — 14 aliases in `/v1/models`, prices and windows intact. The
 rule still bites anywhere else: include a file that carries an `include:` you were relying on,
 and the settings vanish silently and the proxy boots with no master key.
 
@@ -139,28 +139,29 @@ and the settings vanish silently and the proxy boots with no master key.
 Callers name an **alias**, never a model — the model behind a name is expected to change.
 `README.md` carries the full table with models and prices.
 
-|  | LMStudio :1234 | Unsloth :8888 | Ollama :11434 | OpenRouter | OpenAI |
-|:--|:--|:--|:--|:--|:--|
-| chat, small | `lms-4b` | `unsloth-4b` | `ollama-4b` | — | `openai-mini` |
-| chat, large | `lms-26b` | `unsloth-26b` | `ollama-26b` | `openrouter-26b` | — |
-| embed | `lms-embed` | `unsloth-embed` | `ollama-embed` | — | `openai-embed` |
-| extra | — | — | — | `openrouter-free` | — |
-| costs | free | free | free | **paid** | **paid** |
+|  | LMStudio :1234 | Unsloth :8888 | Ollama :11434 | OpenRouter | OpenAI | Cerebras |
+|:--|:--|:--|:--|:--|:--|:--|
+| chat, small | `lms-4b` | `unsloth-4b` | `ollama-4b` | — | `openai-mini` | — |
+| chat, large | `lms-26b` | `unsloth-26b` | `ollama-26b` | `openrouter-26b` | — | `cerebras-27b` |
+| embed | `lms-embed` | `unsloth-embed` | `ollama-embed` | — | `openai-embed` | — |
+| extra | — | — | — | `openrouter-free` | — | — |
+| costs | free | free | free | **paid** | **paid** | **paid** |
 
 `GATEWAY_ENGINE=all` — the default — serves **every column at once**. Naming one engine
 selects **one column**, and the rows are the point: the same weights sit across a row, so
 changing the word and re-running that project's `tests/` measures the engine and nothing else.
 A comparison run still wants one column, because `all` leaves the caller free to pick.
 
-**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — EIGHT OF THEM.** Two per local
+**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — NINE OF THEM.** Two per local
 engine (`lms-4b-anthropic`, `lms-26b-anthropic`, and the same for `unsloth` and `ollama`), plus
-`openrouter-26b-anthropic` and `openai-mini-anthropic`. They are the SAME model on the SAME
-engine. Seven of the eight reach an `Anthropic`-schema `AIServiceBackend`, so the body is NOT
+`openrouter-26b-anthropic`, `openai-mini-anthropic` and `cerebras-27b-anthropic`. They are the SAME model on the SAME
+engine. Seven of the nine reach an `Anthropic`-schema `AIServiceBackend`, so the body is NOT
 translated — the only way Claude Code can hold a conversation through Envoy.
-**`openai-mini-anthropic` is the exception**: OpenAI serves no `/v1/messages`, so that rule
-points at the plain `OpenAI`-schema backend and still translates. They are plumbing, not
+**`openai-mini-anthropic` and `cerebras-27b-anthropic` are the exceptions**: neither vendor
+serves `/v1/messages` (Cerebras answered 404, 2026-09-28), so those rules point at the plain
+`OpenAI`-schema backend and still translate. They are plumbing, not
 vocabulary: LiteLLM does not need them, and nothing but `envoy/tests/5_claude_agent_sdk` calls
-them. **12 model aliases + 8 `-anthropic` = the 20 rules in `envoy/config/all.yaml`.** Full
+them. **13 model aliases + 9 `-anthropic` = the 22 rules in `envoy/config/all.yaml`.** Full
 note: `envoy/README.md`.
 
 **`openrouter-free` is deliberately absent on 26000.** Envoy has no equivalent of
@@ -201,6 +202,7 @@ is incomplete" is the wrong diagnosis.
 | Ollama | host :11434, same. Ignores the Authorization header | `ollama-*` |
 | OpenRouter | `OPENROUTER_API_KEY` | `openrouter-*` — **real spend** |
 | OpenAI | `OPENAI_API_KEY` | `openai-*` — **real spend** |
+| Cerebras | `CEREBRAS_API_KEY` | `cerebras-*` — **real spend**. `qwen-3.8-27b`, which reasons: send `reasoning_effort` on long-output prompts |
 
 The three local engines run **natively on the host**, not in containers — they need the
 Apple-Silicon GPU. All three bind 127.0.0.1 only, and the containers still reach them

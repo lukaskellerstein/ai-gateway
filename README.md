@@ -20,8 +20,8 @@ curl http://localhost:24000/v1/chat/completions \
   -d '{"model":"lms-4b","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-It supports five engines: **LMStudio, Unsloth Studio and Ollama** on your own machine, and
-**OpenRouter and OpenAI** in the cloud. An engine is an engine — the alias prefix says which
+It supports six engines: **LMStudio, Unsloth Studio and Ollama** on your own machine, and
+**OpenRouter, OpenAI and Cerebras** in the cloud. An engine is an engine — the alias prefix says which
 is which, and `openrouter-26b` is the same weights as `lms-26b` on hardware you do not own.
 
 **One engine runs at a time**, and one word in a `.env` picks it. That engine serves two or
@@ -37,11 +37,11 @@ the word and `up -d` again: the names differ only in the prefix.
 - **Every calling style is a worked example** — 29 test scenarios per gateway, from raw
   `urllib` to the Claude Agent SDK, Codex, OpenCode, LangGraph and DeepAgents.
 - **Every engine at once, or exactly one** — the default config on both gateways serves all
-  five engines. Name a single engine instead and every other alias is absent, which is how you
+  six engines. Name a single engine instead and every other alias is absent, which is how you
   get a gateway that cannot reach a paid provider.
 - **A measured overhead of 10–20 ms**, flat, on both gateways —
   [`benchmark/`](benchmark/README.md) is the proof.
-- **No build step and almost no code** — stock images, two `compose.yml`, eleven config files.
+- **No build step and almost no code** — stock images, two `compose.yml`, fifteen config files.
   There is no Dockerfile in this repo.
 
 ## One repo, separate projects
@@ -100,18 +100,19 @@ flowchart LR
     oll["<b>Ollama</b> · :11434<br/>ollama-4b · ollama-26b · ollama-embed"]
     orr["<b>OpenRouter</b> · cloud<br/>openrouter-26b · openrouter-free"]
     oai["<b>OpenAI</b> · cloud<br/>openai-mini · openai-embed"]
+    cer["<b>Cerebras</b> · cloud<br/>cerebras-27b"]
 
     callers -->|"/v1/chat/completions<br/>/v1/messages"| litellm
     callers -.->|"/v1/chat/completions<br/>/anthropic/v1/messages · /mcp"| env
     litellm --> engine
     env --> engine
     engine -.-> lms & uns & oll
-    engine -.-> orr & oai
+    engine -.-> orr & oai & cer
 
     classDef onhost stroke-width:3px
     classDef paid stroke-width:3px,stroke-dasharray: 5 3
     class lms,uns,oll onhost
-    class orr,oai paid
+    class orr,oai,cer paid
 ```
 
 **Exactly one engine is live per project** — the dashed edges are the ones that are not. Solid
@@ -147,7 +148,7 @@ curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db
 ```
 
 Then get the models for **whichever engines you actually run** — three each. The default config
-registers all five engines, and an alias whose engine is not running simply fails when called;
+registers all six engines, and an alias whose engine is not running simply fails when called;
 nothing else breaks. To serve one engine only, set `GATEWAY_ENGINE` to its name.
 The commands are in that engine's config file, which also carries every trap it has:
 [`litellm/config/lms.yaml`](litellm/config/lms.yaml),
@@ -248,18 +249,18 @@ Call these names, never a model name. **Both gateways use the same names**, whic
 whole reason more than one of them exists.
 
 **Every alias names its engine** — `lms-*` is LMStudio, `unsloth-*` is Unsloth, `ollama-*` is
-Ollama, `openrouter-*` is OpenRouter, `openai-*` is OpenAI. There is deliberately no
+Ollama, `openrouter-*` is OpenRouter, `openai-*` is OpenAI, `cerebras-*` is Cerebras. There is deliberately no
 engine-neutral name and no capability name, so a caller always knows which engine answered
 and, just as importantly, **who is being billed**. The first three are this machine and free;
-the last two are the cloud and cost money.
+the last three are the cloud and cost money.
 
-|  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) | OpenRouter | OpenAI |
-|:--|:--|:--|:--|:--|:--|
-| **Chat, small** | `lms-4b` | `unsloth-4b` | `ollama-4b` | — | `openai-mini` |
-| **Chat, large** | `lms-26b` | `unsloth-26b` | `ollama-26b` | `openrouter-26b` | — |
-| **Embed** | `lms-embed` | `unsloth-embed` | `ollama-embed` | — | `openai-embed` |
-| **Extra** | — | — | — | `openrouter-free` | — |
-| **Costs** | free | free | free | **paid** | **paid** |
+|  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) | OpenRouter | OpenAI | Cerebras |
+|:--|:--|:--|:--|:--|:--|:--|
+| **Chat, small** | `lms-4b` | `unsloth-4b` | `ollama-4b` | — | `openai-mini` | — |
+| **Chat, large** | `lms-26b` | `unsloth-26b` | `ollama-26b` | `openrouter-26b` | — | `cerebras-27b` |
+| **Embed** | `lms-embed` | `unsloth-embed` | `ollama-embed` | — | `openai-embed` | — |
+| **Extra** | — | — | — | `openrouter-free` | — | — |
+| **Costs** | free | free | free | **paid** | **paid** | **paid** |
 
 That is every alias this repo defines **by hand**. `GATEWAY_ENGINE` selects **one column**, so
 a gateway serves two or three names at a time — never the whole table. The rows are the point:
@@ -287,7 +288,8 @@ differently on `/v1/messages`. `litellm/README.md` § Provider × route has the 
 | `openrouter-free` | `google/gemma-4-26b-a4b-it:free` | `openrouter/` | **24000 only** | 229376 | not stated | free, rate-limited — see below |
 | `openai-mini` | `gpt-5.4-mini` | `openai/` | both | — | — | **paid**; **it does have vision** — 4/4 on the multimodal scenario, 2026-09-05 |
 | `openai-embed` | `text-embedding-3-small` | `openai/` | both | 8191 | — | **paid**, 1536 dims |
-| `<alias>-anthropic` | the same model as `<alias>` | — | **26000 only** | — | — | the Anthropic route for the Claude Agent SDK. Chat aliases only. **Pass-through** for `lms-*`, `unsloth-*`, `ollama-*` and `openrouter-26b`, whose backends speak Anthropic natively; **translated** for `openai-mini`, because api.openai.com does not — and that route then hits an upstream `thinking` bug, see `TESTING.md` §5.2 |
+| `cerebras-27b` | `qwen-3.8-27b` | `cerebras/` | both | 49152 | FP16/FP8 | **$0.99 · $1.49** per 1M in·out; ~1000 tok/s; vision (base64 only), tools; **it reasons** — send `reasoning_effort` on long-output prompts or the thinking can eat all of `max_tokens` |
+| `<alias>-anthropic` | the same model as `<alias>` | — | **26000 only** | — | — | the Anthropic route for the Claude Agent SDK. Chat aliases only. **Pass-through** for `lms-*`, `unsloth-*`, `ollama-*` and `openrouter-26b`, whose backends speak Anthropic natively; **translated** for `openai-mini` and `cerebras-27b`, because api.openai.com and api.cerebras.ai do not — and the `openai-mini` route then hits an upstream `thinking` bug, see `TESTING.md` §5.2 |
 
 Builds measured 2026-08-31 with `lms ls --json` and `ollama show`; the Unsloth figure is the
 one its model card states.
