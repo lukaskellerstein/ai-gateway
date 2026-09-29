@@ -1,0 +1,245 @@
+# Cerebras — 1 alias. PAID: EVERY CALL BILLS A REAL ACCOUNT.
+#
+#   cerebras-27b   qwen-3.8-27b   chat, vision, tools   $0.99 in / $1.49 out per 1M
+#
+# The reason to pick it is SPEED: 925-999 tok/s by the server's own `time_info`
+# (measured 2026-09-28). ../../litellm/config/cerebras.yaml carries the full
+# note on the model.
+#
+# IT REASONS, AND THE THINKING COMES OUT OF `max_tokens`. With no
+# `reasoning_effort` a long-output prompt can think until the budget is gone and
+# return EMPTY content with `finish_reason: "length"`. This gateway stores no
+# token ceiling and no effort default, so the caller sends both.
+#
+# REQUIRES CEREBRAS_API_KEY in the shell. A blank value substitutes empty and
+# every call 401s.
+#
+# THE SHAPE OF THIS FILE IS KUBERNETES CUSTOM RESOURCES, even though there is no
+# Kubernetes anywhere. `aigw run` reads the same API the Envoy AI Gateway
+# controller reads in a cluster, translates it in-process, and starts a real
+# Envoy with it. config/lms.yaml carries the full note on the seven resources.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      # 1975 INSIDE the container; compose publishes it on 26000.
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      # Raise to `debug` and Envoy dumps request headers, INCLUDING the
+      # Authorization header the extproc injects with the backend key.
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        # One JSON line per LLM request, carrying TOKEN COUNTS AND TIMINGS ONLY —
+        # never the prompt or the response.
+        #
+        # IT ONLY REACHES `compose logs` WHEN AIGW_DEBUG=true. Envoy runs as a
+        # child of aigw, and with debug off its stdout goes to a file inside the
+        # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
+        # can reach — the image is distroless. Verified 2026-09-04: a call with
+        # AIGW_DEBUG unset logged nothing; the same call with it true logged
+        # `{"gen_ai.request.model":"ollama-4b", ... "response_code":200}`.
+        #
+        # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
+        # and replies included, with only the Authorization header redacted. That
+        # is the closest thing here to LiteLLM's Logs tab, and the reason not to
+        # leave it on.
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              request.path: "%REQ(:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: cerebras-27b
+      backendRefs:
+        - name: cerebras
+          modelNameOverride: qwen-3.8-27b
+      timeouts:
+        request: 10m
+    # ── The `-anthropic` alias: TRANSLATED, because Cerebras has no Anthropic API ──
+    #
+    # SAME SHAPE AS `openai-mini-anthropic`, NOT AS THE LOCAL ENGINES. It points at
+    # the plain `cerebras` backend, and Envoy translates Anthropic in to OpenAI out.
+    # There is nothing to pass through TO: `POST https://api.cerebras.ai/v1/messages`
+    # answered 404 on 2026-09-28.
+    #
+    # It exists because `tests/5_claude_agent_sdk` resolves `<alias>-anthropic` at
+    # runtime and refuses to run without it.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: cerebras-27b-anthropic
+      backendRefs:
+        - name: cerebras
+          modelNameOverride: qwen-3.8-27b
+      timeouts:
+        request: 10m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: cerebras
+  namespace: default
+spec:
+  endpoints:
+    # Cerebras, over the public internet. TLS, so a BackendTLSPolicy below.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: api.cerebras.ai
+        port: 443
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: cerebras
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 10m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1, which is
+    # where Cerebras serves it.
+    name: OpenAI
+  backendRef:
+    name: cerebras
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    # ENVOY'S DEFAULT IS 32 KiB AND THAT IS TOO SMALL FOR AI TRAFFIC. A base64
+    # image or a long agent transcript exceeds it and the request fails before
+    # it reaches the model.
+    bufferLimit: 50Mi
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: cerebras-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: cerebras
+  validation:
+    # WITHOUT THIS the connection is plain HTTP to port 443 and every call fails
+    # with an upstream connect error. The three local engines need no such policy.
+    wellKnownCACertificates: "System"
+    hostname: api.cerebras.ai
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cerebras-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. REAL SPEND.
+  apiKey: ${CEREBRAS_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: cerebras-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: cerebras
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: cerebras-apikey

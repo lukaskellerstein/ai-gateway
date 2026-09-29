@@ -61,7 +61,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
 
   | Variable | Values | Default | Picks | In |
   |:--|:--|:--|:--|:--|
-  | `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai` | **`all`** | which engines | both |
+  | `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras` | **`all`** | which engines | both |
   | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 - **THE TWO PROJECTS CAN SERVE DIFFERENT ENGINES, and nothing notices.** Each has its own
@@ -79,10 +79,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   another renderer and the aigw image is distroless with no Python to run one in.
 - **`all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE** (since 2026-09-06). `GATEWAY_ENGINE`
   names ONE FILE — `<project>/config/<word>.yaml` — and `all.yaml` is a real file, not a list
-  you write. LiteLLM's is **six `include:` lines that copy nothing**; Envoy's **COPIES the five
+  you write. LiteLLM's is **seven `include:` lines that copy nothing**; Envoy's **COPIES the six
   engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
-  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 13 aliases on `all`, Envoy 20
-  route rules.
+  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 14 aliases on `all`, Envoy 22
+  route rules (Cerebras added 2026-09-28).
 - **`GATEWAY_ENGINE` NAMES ANY FILE IN `config/`, AND TWO OF THEM ARE GITIGNORED.**
   `<project>/config/lukas.yaml` is the user's PERSONAL config — every chat and embedding model
   downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **40 aliases on
@@ -106,7 +106,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
 - **ENVOY'S OWN TRAPS, all measured 2026-09-04 unless dated otherwise:**
   - **AN `AIGatewayRoute` HOLDS AT MOST 15 ALIASES** (measured 2026-09-06). It becomes a Gateway
     API `HTTPRoute`, whose `spec.rules` the CRD caps at **16 items**, and aigw adds one of its
-    own. `envoy/config/all.yaml` therefore carries FIVE routes — `aigw-run-<engine>` — all
+    own. `envoy/config/all.yaml` therefore carries SIX routes — `aigw-run-<engine>` — all
     attached to the same `Gateway`, not one merged route. A single route with all 20 rules
     crash-looped aigw before it served anything: `HTTPRoute "aigw-run" is invalid: spec.rules:
     Too many: 21: must have at most 16 items`. **The ceiling is per route, not per file.**
@@ -128,16 +128,16 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   why. The shared test suite that used to catch cross-gateway drift went with the split. Do not
   "fix" this by making one project read another's files, or by generating one of them.
 - **Every alias names its engine** — `lms-*`, `unsloth-*`, `ollama-*`, `openrouter-*`,
-  `openai-*`. There is no engine-neutral name (`local` was removed) and no capability name
+  `openai-*`, `cerebras-*`. There is no engine-neutral name (`local` was removed) and no capability name
   (`cheap`, `standard`, `frontier` were removed): the first hid which engine answered, the
   second hid who was billed. **The prefix is the money warning** — the three local engines
-  are free; `openrouter` and `openai` bill a real account. **No alias falls back to
+  are free; `openrouter`, `openai` and `cerebras` bill a real account. **No alias falls back to
   another**, so a request costs money only when a caller names a route that costs money.
 - **Local routes are shadow-priced** — free, but carrying a cloud twin's rate so budget
   ceilings still trip. Anything summing `/spend/logs` must say whether it reports money
   billed or the cost of the same workload in the cloud.
 - **NO CODE AT ALL OUTSIDE `tests/` AND `benchmark/`, since 2026-09-06.** Two `compose.yml`,
-  seven YAML in `litellm/config/`, six YAML in `envoy/config/`, four `README.md`. Every image is
+  eight YAML in `litellm/config/`, seven YAML in `envoy/config/`, four `README.md`. Every image is
   stock and there is no build step. Deleting `mlflow/` removed about 1200 lines of Python on
   2026-09-04 and removing `discover/` took the last 561 on 2026-09-06.
 - **EACH `tests/` IS SEVEN FOLDERS, ONE PER WAY OF CALLING THE GATEWAY** (added 2026-09-04):
@@ -163,10 +163,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   `reasoning_content` on some replies and not others. **The cure is `<alias>-anthropic` on an
   `Anthropic`-schema `AIServiceBackend`**, present for all three local engines AND for
   `openrouter`: every one serves `POST /v1/messages` natively, so nothing is translated and
-  nothing is mangled. `openai-mini-anthropic` EXISTS BUT IS NOT THIS — OpenAI serves no
-  `/v1/messages`, so that rule points at the plain `OpenAI`-schema backend and still
-  translates. **Eight `-anthropic` rules in all**, which is why `envoy/config/all.yaml` has 20
-  and not 12. `tests/5_claude_agent_sdk` RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
+  nothing is mangled. `openai-mini-anthropic` and `cerebras-27b-anthropic` EXIST BUT ARE NOT THIS —
+  neither vendor serves `/v1/messages`, so those rules point at the plain `OpenAI`-schema
+  backend and still translate. **Nine `-anthropic` rules in all**, which is why
+  `envoy/config/all.yaml` has 22 and not 13. `tests/5_claude_agent_sdk` RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
   **`MAX_THINKING_TOKENS=0` IS NO LONGER NEEDED** — it existed for `400 thinking.type` from
   the same translator, and the pass-through path accepts the field as sent.
 - **LITELLM CARRIES REASONING ON ITS OPENAI ROUTES AND DROPS IT ON `/v1/messages`; ENVOY

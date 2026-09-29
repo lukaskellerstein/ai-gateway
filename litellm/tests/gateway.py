@@ -122,6 +122,7 @@ DEFAULT_MODEL_BY_ENGINE = {
     "ollama": "ollama-4b",
     "openrouter": "openrouter-26b",
     "openai": "openai-mini",
+    "cerebras": "cerebras-27b",
 }
 
 ENGINE = _dotenv_value("GATEWAY_ENGINE", "lms").strip()

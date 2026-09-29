@@ -1,13 +1,14 @@
 # EVERY ENGINE AT ONCE — the default config, and what this gateway serves unless
 # .env names a single engine instead.
 #
-# 20 ROUTE RULES: 12 model aliases and 8 `-anthropic` pass-through aliases.
+# 22 ROUTE RULES: 13 model aliases and 9 `-anthropic` aliases.
 #
 #   lms-4b        lms-26b        lms-embed          LMStudio        free
 #   unsloth-4b    unsloth-26b    unsloth-embed      Unsloth Studio  free
 #   ollama-4b     ollama-26b     ollama-embed       Ollama          free
 #   openrouter-26b                                  OpenRouter      PAID
 #   openai-mini   openai-embed                      OpenAI          PAID
+#   cerebras-27b                                    Cerebras        PAID
 #
 # `openrouter-free` IS DELIBERATELY ABSENT, here as in openrouter.yaml. That route
 # needs a provider pin sent as a vendor-specific object in the request body, and
@@ -17,7 +18,7 @@
 # diagnosis.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# FIVE AIGatewayRoutes, NOT ONE, AND THAT IS A HARD UPSTREAM LIMIT.
+# SIX AIGatewayRoutes, NOT ONE, AND THAT IS A HARD UPSTREAM LIMIT.
 #
 # An AIGatewayRoute becomes a Gateway API `HTTPRoute`, and `HTTPRoute.spec.rules`
 # is capped at **16 items** by the Gateway API CRD itself. aigw adds one rule of
@@ -29,19 +30,19 @@
 #   most 16 items
 #
 # Measured 2026-09-06. So each engine keeps its OWN route — `aigw-run-<engine>` —
-# and all five attach to the same Gateway through `parentRefs`. Several HTTPRoutes
+# and all six attach to the same Gateway through `parentRefs`. Several HTTPRoutes
 # on one Gateway is ordinary Gateway API, every match here is an exact header
-# value, and all 20 values are distinct, so nothing is ambiguous.
+# value, and all 22 values are distinct, so nothing is ambiguous.
 #
-# IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Five engines at
+# IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Six engines at
 # 15 aliases each is fine; one engine at 16 is not.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# THIS FILE IS A COPY OF THE OTHER FIVE, AND THAT IS THE PRICE OF ENVOY.
+# THIS FILE IS A COPY OF THE OTHER SIX, AND THAT IS THE PRICE OF ENVOY.
 #
 # `aigw run` takes ONE file path. Not a directory, not a repeated flag — checked
 # against `aigw run --help`, 2026-09-06 — and Envoy's config has no `include:`
-# mechanism the way LiteLLM's does. So where ../../litellm/config/all.yaml is six
+# mechanism the way LiteLLM's does. So where ../../litellm/config/all.yaml is seven
 # include lines that copy nothing, this file has to carry the rules and backends
 # themselves.
 #
@@ -53,11 +54,11 @@
 #
 # NOTHING CHECKS THAT YOU DID ALL THREE. Miss step 3 and the alias answers when
 # .env names its engine and 404s on the default config, with nothing in any log to
-# say why. The five per-engine files stay the place the comments and the reasoning
+# say why. The six per-engine files stay the place the comments and the reasoning
 # live; this file is where they are assembled, so copy a rule across rather than
 # writing a new one here.
 #
-# WHAT WAS MERGED, AND HOW. Four resources are identical in all five engine files
+# WHAT WAS MERGED, AND HOW. Four resources are identical in all six engine files
 # — GatewayClass, Gateway, EnvoyProxy and ClientTrafficPolicy — so they appear once
 # below, taken from lms.yaml because it carries the fullest comments. Each engine's
 # AIGatewayRoute is carried over whole with only its `metadata.name` changed.
@@ -634,6 +635,68 @@ spec:
     - metadataKey: llm_reasoning_token
       type: ReasoningToken
 ---
+# ═══════════════════════════════════════════════════════════════════════════
+# CEREBRAS — PAID — a completion here bills a real account.
+# Copied from config/cerebras.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-cerebras
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  #
+  # AN UNKNOWN ALIAS MATCHES NO RULE AND GETS 404 (verified 2026-09-04), which is
+  # what every other engine's names do here — correctly, one engine at a time.
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: cerebras-27b
+      backendRefs:
+        - name: cerebras
+          modelNameOverride: qwen-3.8-27b
+      timeouts:
+        request: 10m
+    # ── The `-anthropic` alias: TRANSLATED, because Cerebras has no Anthropic API ──
+    #
+    # SAME SHAPE AS `openai-mini-anthropic`, NOT AS THE LOCAL ENGINES. It points at
+    # the plain `cerebras` backend, and Envoy translates Anthropic in to OpenAI out.
+    # There is nothing to pass through TO: `POST https://api.cerebras.ai/v1/messages`
+    # answered 404 on 2026-09-28.
+    #
+    # It exists because `tests/5_claude_agent_sdk` resolves `<alias>-anthropic` at
+    # runtime and refuses to run without it.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: cerebras-27b-anthropic
+      backendRefs:
+        - name: cerebras
+          modelNameOverride: qwen-3.8-27b
+      timeouts:
+        request: 10m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: ClientTrafficPolicy
 metadata:
@@ -1125,3 +1188,80 @@ spec:
     secretRef:
       name: openai-apikey
 
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: cerebras
+  namespace: default
+spec:
+  endpoints:
+    # Cerebras, over the public internet. TLS, so a BackendTLSPolicy below.
+    #
+    # HOSTNAME AND PORT ARE SEPARATE FIELDS HERE, which is why this project has
+    # no equivalent of ../../litellm's *_API_BASE: there is no URL to put in one
+    # variable. Change the port here.
+    - fqdn:
+        hostname: api.cerebras.ai
+        port: 443
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: cerebras
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have
+    # to be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 10m
+  schema:
+    # `OpenAI` is a PROTOCOL, not a company. `prefix` defaults to /v1, which is
+    # where Cerebras serves it.
+    name: OpenAI
+  backendRef:
+    name: cerebras
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: cerebras-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: cerebras
+  validation:
+    # WITHOUT THIS the connection is plain HTTP to port 443 and every call fails
+    # with an upstream connect error. The three local engines need no such policy.
+    wellKnownCACertificates: "System"
+    hostname: api.cerebras.ai
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cerebras-apikey
+  namespace: default
+type: Opaque
+stringData:
+  # From the shell. REAL SPEND.
+  apiKey: ${CEREBRAS_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: cerebras-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: cerebras
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: cerebras-apikey

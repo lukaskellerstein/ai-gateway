@@ -10,9 +10,10 @@
 #
 # ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
 #
-#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai   default all
+#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai | cerebras
+#                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 13 aliases, one gateway.
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 14 aliases, one gateway.
 # Name a single engine instead and only that engine's aliases exist, which is how
 # you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -94,18 +95,20 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one file per engine, plus one that joins them:
     #
-    #   config/all.yaml         13 aliases: everything below         THE DEFAULT
+    #   config/all.yaml         14 aliases: everything below         THE DEFAULT
     #   config/lms.yaml          3 aliases: 2 chat, 1 embedder      free
     #   config/unsloth.yaml      3 aliases: 2 chat, 1 embedder      free
     #   config/ollama.yaml       3 aliases: 2 chat, 1 embedder      free
     #   config/openrouter.yaml   2 aliases: 2 chat                  PAID
     #   config/openai.yaml       2 aliases: 1 chat, 1 embedder      PAID
+    #   config/cerebras.yaml     1 alias:  1 chat                   PAID
     #
     # Each engine file includes config/settings.yaml for the three settings blocks
     # and then declares its own model_list. all.yaml includes settings.yaml AND all
-    # five engine files and COPIES NOTHING: LiteLLM extends a list across included
-    # files, so the five model_lists join into one. Verified 2026-09-06 against
-    # ghcr.io/berriai/litellm:main-stable — 13 aliases in /v1/models.
+    # six engine files and COPIES NOTHING: LiteLLM extends a list across included
+    # files, so the six model_lists join into one. Verified 2026-09-06 against
+    # ghcr.io/berriai/litellm:main-stable — 13 aliases in /v1/models; 14 with
+    # cerebras.yaml, 2026-09-28.
     #
     # A TYPO IS A CLEAN CRASH: the file does not exist and litellm exits saying so.
     # (It was NOT clean before 2026-08-31, when this mounted a single file: compose
@@ -158,7 +161,7 @@ services:
       # the Authorization header at all. The literal `sk-ollama` in the config is
       # there only because LiteLLM's `openai/` provider needs some key string.
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.containers.internal:11434/v1}
-      # The two PAID engines. With GATEWAY_ENGINE=all — the default — both ARE in
+      # The three PAID engines. With GATEWAY_ENGINE=all — the default — all ARE in
       # the running config, and that costs nothing: registering an alias is free
       # and only a completion bills. Name a single free engine and the hosted
       # routes are absent entirely, not merely disabled.
@@ -168,6 +171,7 @@ services:
       # exists to go stale after a rotation.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
     healthcheck:
       # /health/liveliness is unauthenticated — it answers without the master key,
       # which /health does not. urllib rather than curl: the base image ships

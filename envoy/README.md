@@ -139,16 +139,17 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 20 route rules
+GATEWAY_ENGINE=all        # the default: every engine at once, 22 route rules
 ```
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../litellm` has its own, and nothing checks that they agree |
+| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../litellm` has its own, and nothing checks that they agree |
 | `AIGW_DEBUG` | `false` | per-request logging. **Never leave it empty** — aigw parses it as a bool and crash-loops on `""` before reading any config. See below |
 | `UNSLOTH_API_KEY` | *(blank)* | **required** by every `unsloth-*` alias. Blank substitutes empty and every call 401s at request time |
 | `OPENROUTER_API_KEY` | *(blank)* | every `openrouter-*` alias. **Real spend** |
 | `OPENAI_API_KEY` | *(blank)* | every `openai-*` alias. **Real spend** |
+| `CEREBRAS_API_KEY` | *(blank)* | every `cerebras-*` alias. **Real spend** |
 
 **There is no `*_API_BASE` variable here**, unlike the other two projects. A `Backend` takes a
 hostname and a port as separate fields — there is no URL to put in one variable. Change the
@@ -178,16 +179,16 @@ is also the reason not to leave it on.
 
 ## One file per engine, and one that holds them all
 
-`config/` carries six files. Five are one engine each; `all.yaml` is the default and holds
+`config/` carries seven files. Six are one engine each; `all.yaml` is the default and holds
 every one of them.
 
 | `GATEWAY_ENGINE` | Reads | Serves |
 |:--|:--|:--|
-| `all` *(default)* | `config/all.yaml` | **20 route rules** — 12 model aliases and 8 `-anthropic` pass-through aliases |
+| `all` *(default)* | `config/all.yaml` | **22 route rules** — 13 model aliases and 9 `-anthropic` aliases |
 | `lms` `unsloth` `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
-| `openrouter` `openai` | that engine's file | 1–2 aliases, **paid** |
+| `openrouter` `openai` `cerebras` | that engine's file | 1–2 aliases plus one `-anthropic`, **paid** |
 
-**`all.yaml` copies the other five, and that is the price of this gateway.** `aigw run` takes
+**`all.yaml` copies the other six, and that is the price of this gateway.** `aigw run` takes
 **one file path** — not a directory, not a repeated flag; checked against `aigw run --help` on
 2026-09-06 — and Envoy's config has no `include:` mechanism the way LiteLLM's does. So where
 `../litellm/config/all.yaml` is six include lines that copy nothing, this one carries the rules
@@ -200,14 +201,14 @@ and the backends themselves.
 3. `config/all.yaml` — this gateway, the default
 
 **Nothing checks that you did all three.** Miss step 3 and the alias answers when `.env` names
-its engine and 404s on the default config, with nothing in any log to say why. The five
+its engine and 404s on the default config, with nothing in any log to say why. The six
 per-engine files stay the place the comments and the reasoning live; `all.yaml` is where they
 are assembled, so copy a rule across rather than writing a new one there.
 
-What the merge did, for anyone diffing it: four resources are identical in all five engine
+What the merge did, for anyone diffing it: four resources are identical in all six engine
 files — `GatewayClass`, `Gateway`, `EnvoyProxy` and `ClientTrafficPolicy` — so they appear once,
 taken from `lms.yaml` because it carries the fullest comments. Each engine keeps its **own**
-`AIGatewayRoute`, renamed `aigw-run-<engine>`, all five attached to the same `Gateway`.
+`AIGatewayRoute`, renamed `aigw-run-<engine>`, all six attached to the same `Gateway`.
 Everything else is already named per engine and needed no change.
 
 > **An `AIGatewayRoute` holds at most 15 aliases, and this is a hard upstream limit.** It
@@ -219,7 +220,7 @@ Everything else is already named per engine and needed no change.
 > HTTPRoute "aigw-run" is invalid: spec.rules: Too many: 21: must have at most 16 items
 > ```
 >
-> Hence five routes. **Watch that ceiling per route, not in total** — five engines at 15 aliases
+> Hence one route per engine. **Watch that ceiling per route, not in total** — six engines at 15 aliases
 > each is fine; one engine at 16 is not.
 
 ### A personal config that is not committed

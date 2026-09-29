@@ -1,0 +1,52 @@
+# Cerebras — the whole config for this engine. IT SPENDS REAL MONEY.
+#
+# ONE ENGINE RUNS AT A TIME. `GATEWAY_ENGINE=cerebras` in .env points compose at THIS file,
+# and the alias below is then the entire vocabulary the gateway serves. `all` includes it too.
+#
+# THIS FILE IS SELF-CONTAINED: it includes settings.yaml for the three settings blocks and
+# declares its own aliases.
+#
+# WHY THIS ENGINE EXISTS: SPEED. Cerebras runs open weights on its own wafer-scale chips and
+# answers at hundreds of tokens per second where a GPU cloud gives tens — 925-999 tok/s by the
+# server's own `time_info`, 480-770 on the caller's clock (measured 2026-09-28, ~760 output
+# tokens, see ~/Projects/Github/lukaskellerstein/ai-agents-course/Version_3/01_llm_api/13_cerebras).
+#
+# IT NEEDS A KEY, from the shell, and the .env line stays blank. Without one LiteLLM keeps the
+# alias and 401s at call time — the same failure shape as the Envoy gateway on 26000.
+#
+# `cerebras/` IS LITELLM'S OWN PROVIDER, not `openai/` with an api_base. It knows this model:
+# its cost-map entry carries the same price and context window as Cerebras's live catalogue
+# (checked 2026-09-28), and its supported-parameter list includes `reasoning_effort`, which
+# `drop_params: true` would otherwise be free to throw away.
+
+include:
+  - settings.yaml
+
+model_list:
+  # Qwen 3.8 27B — chat, vision, tools and structured output in one model, and it REASONS.
+  #
+  # $0.99 in / $1.49 out per 1M tokens, read from GET https://api.cerebras.ai/public/v1/models
+  # on 2026-09-28. REAL prices, not shadow prices. LiteLLM's cost map agrees today; they are
+  # written here anyway so a budget ceiling does not depend on the image staying current.
+  #
+  # THE THINKING CAN EAT THE WHOLE BUDGET, and it depends on the PROMPT. Thinking tokens come
+  # out of `max_tokens`, and with no `reasoning_effort` a "write a 300-word story" prompt
+  # thought for all 16000 of 16000 tokens and returned EMPTY content, `finish_reason:
+  # "length"`, no error (measured 2026-09-28). `reasoning_effort: none` or `low` fixed it.
+  # The gateway sets no default effort: that is a per-prompt decision for the caller.
+  #
+  # IMAGES MUST BE base64 data URIs. Cerebras rejects an https:// image URL and `detail`.
+  #
+  # `gpt-oss-120b` IS ALSO ON THIS KEY and is not here: it has no vision, so it cannot stand in
+  # for the other chat aliases, and one alias per engine keeps the money surface small.
+  - model_name: cerebras-27b
+    litellm_params:
+      model: cerebras/qwen-3.8-27b
+      api_key: os.environ/CEREBRAS_API_KEY
+      input_cost_per_token: 0.00000099   # $0.99 / 1M, live figure 2026-09-28
+      output_cost_per_token: 0.00000149  # $1.49 / 1M
+      max_tokens: 16384                  # it reasons; 4000 came back empty on the story prompt
+      timeout: 600                       # a hosted provider silent for 10 minutes is broken
+    model_info:
+      max_input_tokens: 49152            # 65536 − a 16384 output reserve
+      max_output_tokens: 16384
