@@ -24,7 +24,7 @@ gateway; everything specific comes from ../gateway.py. Keep it that way — a de
 that reads `NAME` to decide what to do has stopped being portable.
 
     uv run main.py
-    uv run main.py --model lms-26b
+    uv run main.py --model lms-gemma4-26b
     uv run main.py --only langgraph
 """
 

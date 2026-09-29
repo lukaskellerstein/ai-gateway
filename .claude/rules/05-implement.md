@@ -45,8 +45,10 @@ with the split. Call it on **both** ports afterwards — [`06-testing.md`](06-te
    needs NO edit — it includes the engine files rather than copying them
 6. the alias table in `README.md` — a route nobody documents is a route nobody calls
 
-**The alias name must carry its engine.** `lms-*`, `unsloth-*`, `ollama-*`,
-`openrouter-*`, `openai-*`, `cerebras-*`. No engine-neutral name, no capability name.
+**The alias name must carry its engine and its model** — `<engine>-<model>-<size>`, such as
+`lms-qwen38-27b`. Engines: `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. No
+engine-neutral name, no capability name, no size-only name. Reuse the suffix the same model
+already has on another engine, so the row stays one suffix.
 
 ## The two projects must stay independent
 
@@ -98,7 +100,7 @@ whose whole point is one stock service.
 else. **Envoy has no place for prices, `max_tokens` or context windows, so those live here
 and only here.**
 
-- **Do not remove the provider pin** on `openrouter-free`. `order: ["google-ai-studio"]`
+- **Do not remove the provider pin** on `openrouter-gemma4-26b-free`. `order: ["google-ai-studio"]`
   plus `allow_fallbacks: false` exists because OpenRouter load-balances its free tier and
   one provider returns tool calls as raw text with `tool_calls` absent. Nothing errors: the
   agent sees a message with no tool calls, executes nothing, and stops.

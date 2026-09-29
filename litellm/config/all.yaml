@@ -7,20 +7,23 @@
 # an alias to config/lms.yaml and it appears here on the next `up -d` with no edit
 # to this file.
 #
-# 14 ALIASES, three of the engines free and three of them PAID:
+# 17 ALIASES, three of the engines free and three of them PAID:
 #
-#   lms-4b        lms-26b        lms-embed          LMStudio        free
-#   unsloth-4b    unsloth-26b    unsloth-embed      Unsloth Studio  free
-#   ollama-4b     ollama-26b     ollama-embed       Ollama          free
-#   openrouter-26b               openrouter-free    OpenRouter      PAID
-#   openai-mini                  openai-embed       OpenAI          PAID
-#   cerebras-27b                                    Cerebras        PAID
+#   LMStudio        free   lms-gemma4-e4b         lms-gemma4-26b         lms-qwen38-27b
+#                          lms-nomic-embed
+#   Unsloth Studio  free   unsloth-gemma4-e4b     unsloth-gemma4-26b     unsloth-qwen38-27b
+#                          unsloth-nomic-embed
+#   Ollama          free   ollama-gemma4-e4b      ollama-gemma4-26b      ollama-nomic-embed
+#   OpenRouter      PAID   openrouter-gemma4-26b  openrouter-qwen38-27b
+#                          openrouter-gemma4-26b-free
+#   OpenAI          PAID   openai-gpt54-mini      openai-embed3-small
+#   Cerebras        PAID   cerebras-qwen38-27b
 #
 # SERVING A PAID ROUTE COSTS NOTHING. Registering an alias is free; only a
 # completion through one bills a real account. Nothing here falls back to anything
 # else, so a request costs money only when a caller names a paid alias by hand. If
 # you want a gateway that CANNOT spend, put a single free engine in .env:
-# `GATEWAY_ENGINE=lms` serves three aliases and has no hosted route at all.
+# `GATEWAY_ENGINE=lms` serves four aliases and has no hosted route at all.
 #
 # THE ORDER MATTERS ONLY FOR settings.yaml, and it is first for a reason: LiteLLM
 # REPLACES a non-list key, so the last file to set one wins. The six engine files
@@ -30,8 +33,8 @@
 # NOTHING INCLUDED MAY ITSELF CARRY AN `include:` THAT MATTERS. LiteLLM does not
 # recurse: the `include: [settings.yaml]` inside each engine file is merged as data
 # and dropped. That is harmless HERE only because settings.yaml is listed directly
-# above them. Verified 2026-09-28 against ghcr.io/berriai/litellm:main-stable — all
-# 14 aliases in /v1/models, prices and context windows intact.
+# above them. Verified 2026-09-29 against ghcr.io/berriai/litellm:main-stable — all
+# 17 aliases in /v1/models, and the local Qwen calls logged at exactly their prices.
 #
 # ../envoy HAS ITS OWN all.yaml AND IT IS NOT THIS SHAPE. Envoy's config is
 # Kubernetes custom resources and `aigw run` takes one file with no include

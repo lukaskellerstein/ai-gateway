@@ -5,7 +5,7 @@ itself instead of hiding inside a combined result. `uv run --directory` builds
 whichever venv is missing, so a fresh clone needs no `uv sync` first.
 
     uv run run_all.py
-    uv run run_all.py --model lms-26b
+    uv run run_all.py --model lms-gemma4-26b
     uv run run_all.py --only 6_codex_sdk
     uv run run_all.py --verbose
 

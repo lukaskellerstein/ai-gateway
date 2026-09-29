@@ -33,7 +33,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:24000/v1", api_key="sk-litellm-master")
 
 r = client.chat.completions.create(
-    model="lms-4b",                                    # an alias, not a model id
+    model="lms-gemma4-e4b",                                    # an alias, not a model id
     messages=[{"role": "user", "content": "hi"}],
 )
 print(r.choices[0].message.content)
@@ -63,7 +63,7 @@ project should hold. Issue a capped, expiring key instead, and check it with
 curl -X POST http://localhost:24000/key/generate \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"models":["lms-4b","lms-embed"],"max_budget":0.50,"duration":"24h"}'
+  -d '{"models":["lms-gemma4-e4b","lms-nomic-embed"],"max_budget":0.50,"duration":"24h"}'
 ```
 
 Local routes are **shadow-priced**: free on your machine, but carrying a cloud twin's rate so
@@ -100,9 +100,9 @@ two paths** — `../envoy` serves `/anthropic/v1/messages`, but only on a separa
 ANTHROPIC_BASE_URL="http://localhost:24000" \
 ANTHROPIC_API_KEY="$AI_GATEWAY_KEY" \
 ANTHROPIC_AUTH_TOKEN="$AI_GATEWAY_KEY" \
-ANTHROPIC_DEFAULT_SONNET_MODEL="lms-4b" \
-ANTHROPIC_DEFAULT_OPUS_MODEL="lms-4b" \
-ANTHROPIC_DEFAULT_HAIKU_MODEL="lms-4b" \
+ANTHROPIC_DEFAULT_SONNET_MODEL="lms-gemma4-e4b" \
+ANTHROPIC_DEFAULT_OPUS_MODEL="lms-gemma4-e4b" \
+ANTHROPIC_DEFAULT_HAIKU_MODEL="lms-gemma4-e4b" \
 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
 API_TIMEOUT_MS=3600000 \
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=122880 \
@@ -127,9 +127,9 @@ Three traps, in the order people hit them:
 3. **Never pick the `[1m]` variant in `/model`.** It forces a 1.0M window unconditionally and
    ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so auto-compact never fires in time.
 
-**Tool calling works on all three default aliases.** `lms-4b`, `unsloth-4b` and `ollama-4b`
+**Tool calling works on all three default aliases.** `lms-gemma4-e4b`, `unsloth-gemma4-e4b` and `ollama-gemma4-e4b`
 each returned a structured `tool_calls` reply — verified 2026-08-27, and re-verified on
-`ollama-4b` 2026-08-31 — not the raw-text tool syntax that makes most local models useless
+`ollama-gemma4-e4b` 2026-08-31 — not the raw-text tool syntax that makes most local models useless
 from an agent. Those runs go through the OpenAI route; `tests/` cannot drive `/v1/messages`,
 so check a real Claude Code turn yourself before trusting an alias with agent work.
 
@@ -139,7 +139,7 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 14 aliases
+GATEWAY_ENGINE=all        # the default: every engine at once, 17 aliases
 ```
 
 **There is no `COMPOSE_PROFILES` line.** It went with the split: the directory you stand in is
@@ -148,7 +148,7 @@ now the choice of gateway, and `up -d` here starts this one whether or not `.env
 **Which engine.** One word names one file, `config/<engine>.yaml`. A typo is a clean crash:
 the file does not exist and `litellm` exits saying so.
 
-**`all` is the default and serves every engine at once** — 14 aliases from one gateway.
+**`all` is the default and serves every engine at once** — 17 aliases from one gateway.
 `config/all.yaml` is seven `include:` lines and copies nothing, so the per-engine files stay the
 one place an alias is written. **The six engine words are for isolation**: name one and every
 other alias is absent from the running config, not disabled, and a 404 on it is correct.
@@ -201,8 +201,8 @@ bridged through the Responses API, and that bridge drops `reasoning_content` —
 Agent SDK got no thinking blocks at all from `unsloth-*`, `ollama-*` or `openai-*`, while
 `lms-*` was fine because it is `lm_studio/`. The flag in
 [`config/settings.yaml`](config/settings.yaml) forces the chat-completions path and carries
-the full four-field header. Measured 2026-09-05 on 1.99.1, `unsloth-4b`: **6/6 streaming runs
-carried thinking, against 0/5 before.**
+the full four-field header. Measured 2026-09-05 on 1.99.1, `unsloth-gemma4-e4b`: **6/6
+streaming runs carried thinking, against 0/5 before.**
 
 **Tried and rejected, so nobody re-tries them:**
 
@@ -231,8 +231,19 @@ for one client.
 `all.yaml` works because LiteLLM merges an included file key by key and **extends a list**, so
 the six `model_list`s join into one while the settings arrive from `settings.yaml`. Add an
 alias to `config/lms.yaml` and it appears in `all` on the next `up -d` with no second edit.
-Verified 2026-09-28 against `ghcr.io/berriai/litellm:main-stable` — 14 aliases in `/v1/models`,
-and a `cerebras-27b` call logged at its configured price.
+Verified 2026-09-29 against `ghcr.io/berriai/litellm:main-stable` — 17 aliases in `/v1/models`,
+and `lms-qwen38-27b` calls logged at exactly their configured price (a `cerebras-qwen38-27b`
+call did the same on 2026-09-28).
+
+**An OpenRouter call is the exception: it logs OpenRouter's own bill.** OpenRouter puts
+`usage.cost` in its reply and LiteLLM records that figure rather than the configured price —
+an `openrouter-qwen38-27b` call logged $0.0002397423, OpenRouter's `cost` to the digit
+(2026-09-29). The configured price is then only the fallback for a reply without one.
+
+**A cached prompt token logs at the cache-read price, and no local route sets one.** So a
+local call whose prompt the engine already holds logs almost nothing: an `unsloth-qwen38-27b`
+tool call with 315 of 316 prompt tokens cached logged $0.00011640, against $0.00016365 at the
+configured rates (2026-09-29). Budget ceilings on local traffic under-count warm agent loops.
 
 `settings.yaml` is listed **first** on purpose. LiteLLM *replaces* a non-list key, so the last
 file to set one wins; the six engine files set none today, but one added below them that did
@@ -253,8 +264,9 @@ GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 
 `config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it. It includes
 `settings.yaml`, `lms.yaml` and `unsloth.yaml` and then declares every other model downloaded
-in those two engines — **40 aliases**, with the short names (`lms-4b`, `unsloth-26b`, …) still
-answering because it *includes* those files rather than replacing them. It has no hosted
+in those two engines — **44 aliases**, with the short names (`lms-gemma4-e4b`,
+`unsloth-qwen38-27b`, …) still answering because it *includes* those files rather than
+replacing them. It has no hosted
 route at all, so **it cannot spend money**.
 
 It is not tracked because it describes one disk. On another machine it would be wrong, and a
@@ -295,7 +307,7 @@ so a fresh clone needs no `uv sync`.
 cd tests
 uv run run_all.py                       # 7 rows against 24000
 uv run run_all.py --only 6_codex_sdk    # one folder
-uv run run_all.py --model ollama-4b     # any alias, everywhere
+uv run run_all.py --model ollama-gemma4-e4b     # any alias, everywhere
 ```
 
 | Folder | Reaches this gateway through |
@@ -338,7 +350,7 @@ response included. **Look there before changing configuration.**
 | `unsloth-*` 401s | `UNSLOTH_API_KEY` was blank when `up -d` ran | export it, run `up -d` again |
 | An `ollama-*` call that was fast a few minutes ago is slow again | Ollama evicted the idle model | expected — `ollama ps`, or raise `OLLAMA_KEEP_ALIVE` |
 | `ollama-*` says `model not found` | the tag is not pulled | `ollama pull <tag>` — the ids are in [`config/ollama.yaml`](config/ollama.yaml) |
-| An alias answers here and 404s on 26000 | `openrouter-free` does this **by design**. Otherwise you added it to `config/` only | add the `AIGatewayRoute` rule to `../envoy/config/<engine>.yaml` and `up -d` there |
+| An alias answers here and 404s on 26000 | `openrouter-gemma4-26b-free` does this **by design**. Otherwise you added it to `config/` only | add the `AIGatewayRoute` rule to `../envoy/config/<engine>.yaml` and `up -d` there |
 | An alias 404s after you changed `GATEWAY_ENGINE` | you named one engine, so every other engine's aliases are absent | `curl /model/info` for the names this config serves, or set `GATEWAY_ENGINE=all` |
 | `litellm` restarts in a loop | `GATEWAY_ENGINE` is misspelled | `podman compose logs litellm` — it names the config file it could not open |
 | A stale `GATEWAY_DISCOVERY` line in your `.env` | auto-discovery went on 2026-09-06; compose no longer reads it | inert, but delete the line |

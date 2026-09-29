@@ -31,7 +31,7 @@ THIS FILE IS BYTE-IDENTICAL IN BOTH PROJECTS. It names no port and no gateway;
 everything specific comes from ../gateway.py.
 
     uv run main.py
-    uv run main.py --model lms-26b
+    uv run main.py --model lms-gemma4-26b
 """
 
 from __future__ import annotations

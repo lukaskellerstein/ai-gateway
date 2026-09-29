@@ -75,7 +75,7 @@ async def scenario(model: str) -> str:
 
     # WHAT THE ROUTE PRODUCES BEFORE ANY TRANSLATION. Without it this scenario
     # cannot tell a gateway that LOST the reasoning from a model that never made
-    # any, and it reported the second as the first on `openrouter-26b`.
+    # any, and it reported the second as the first on `openrouter-gemma4-26b`.
     baseline = reasoning_baseline(model)
     reached = first.thinking_chars > 0
     print(f"  {'baseline':12s} {baseline} chars of reasoning_content on /v1/chat/completions")

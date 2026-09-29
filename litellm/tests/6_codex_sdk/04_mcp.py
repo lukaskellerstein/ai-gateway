@@ -13,7 +13,7 @@ assertion.
     │ <-- tools: [bench_serial …]   with a full inputSchema                 │
     └───────────────────────────────────────────────────────────────────────┘
 
-WHAT IT ASSERTS ON `openrouter-26b` ONLY is the CALL: the server's second
+WHAT IT ASSERTS ON `openrouter-gemma4-26b` ONLY is the CALL: the server's second
 marker, written when the tool really runs. Two things stood between the model
 and that marker. One is fixed here, one is not.
 
@@ -27,7 +27,7 @@ and that marker. One is fixed here, one is not.
 
         default_tools_approval_mode = "approve"
 
-    Measured 2026-09-23 — codex 0.155.1, `openrouter-26b`, approval policy
+    Measured 2026-09-23 — codex 0.155.1, `openrouter-gemma4-26b`, approval policy
     `never`, read-only sandbox, an empty CODEX_HOME, THE SAME ON BOTH GATEWAYS:
 
         items=userMessage,mcpToolCall,agentMessage   status=completed
@@ -36,7 +36,7 @@ and that marker. One is fixed here, one is not.
     The issue is still open upstream, because it asks for a CLI flag. NOT
     MEASURED: the same run WITHOUT the key on 0.155.1 — it costs money, and the
     2026-09-04 refusal is the "before". GUARDED BY: this file on
-    `openrouter-26b`. Delete the key and that run goes red — it is a paid run,
+    `openrouter-gemma4-26b`. Delete the key and that run goes red — it is a paid run,
     so nothing free proves the key is still there.
 
 2. NOT FIXED — THE SHAPE CODEX SENDS.  https://github.com/openai/codex/issues/19871
@@ -50,7 +50,7 @@ and that marker. One is fixed here, one is not.
     DOES, so the model never sees `bench_serial` as something it can call. It
     shells out, or reads the serial number out of `mcp_server.py`. MEASURED
     2026-09-21 with ONE `/v1/responses` call per shape, no Codex in the path,
-    `unsloth-26b`, the same on both gateways:
+    `unsloth-gemma4-26b`, the same on both gateways:
 
         "type": "namespace"     a plain message, no call
         a flat "function"       function_call {"appliance": "atlas"}
@@ -73,7 +73,7 @@ and that marker. One is fixed here, one is not.
 
 SO THE RESULT DEPENDS ON THE ALIAS, and this file prints it on every run:
 
-    openrouter-26b      tool really called: True      and ASSERTED
+    openrouter-gemma4-26b      tool really called: True      and ASSERTED
     any local alias     tool really called: False     codex#19871, informational
 
 NEXT TIME: open #19871 and #26234. If either is closed, run this file on a LOCAL
@@ -104,10 +104,10 @@ CALL_MARKER = START_MARKER.with_name(".mcp_tool_called")
 
 # THE ALIASES WHOSE BACKEND UNDERSTANDS CODEX'S `namespace` TOOL SHAPE, measured
 # with this file on BOTH gateways, 2026-09-23. On these the call is asserted; on
-# every other alias it is reported. Exact names, not a prefix: `openrouter-free`
+# every other alias it is reported. Exact names, not a prefix: `openrouter-gemma4-26b-free`
 # and the two `openai-*` chat aliases were never run through Codex, and a paid
 # alias is not something to guess about.
-CALLS_THE_TOOL = frozenset({"openrouter-26b"})
+CALLS_THE_TOOL = frozenset({"openrouter-gemma4-26b"})
 
 
 def scenario(model: str) -> str:

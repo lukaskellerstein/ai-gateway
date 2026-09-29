@@ -19,7 +19,7 @@ absence somebody eventually assumes away.
 
 THE LAST ROW IS THE ONE THAT COSTS PEOPLE AN AFTERNOON, and it is why
 `body_extras` carries `max_tokens` here. An AIGatewayRoute rule carries a request
-TIMEOUT but no token ceiling. Measured 2026-09-04 with `lms-4b` and one "count to
+TIMEOUT but no token ceiling. Measured 2026-09-04 with `lms-gemma4-e4b` and one "count to
 3000" prompt carrying NO `max_tokens`: finish_reason "stop" at 13946 completion
 tokens — nothing bounded it.
 
@@ -37,7 +37,7 @@ common.py and checks reality against it, so a failure always reads "the table
 says X and the gateway did Y", which is the sentence you want.
 
     uv run 04_gateway_contract.py
-    uv run 04_gateway_contract.py --model lms-26b
+    uv run 04_gateway_contract.py --model lms-gemma4-26b
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ def ceiling(gateway: Gateway) -> dict:
     IT IS READ FROM THE DECLARED CONTRACT, never branched on the gateway's name.
     `body_extras` already carries the right key — `max_tokens` almost everywhere,
     `max_completion_tokens` for `openai-*`, whose newer models reject the old name
-    with `400 unsupported_parameter` (measured 2026-09-05, `openai-mini` on 26000).
+    with `400 unsupported_parameter` (measured 2026-09-05, `openai-gpt54-mini` on 26000).
     LiteLLM renames it upstream and declares no extras at all, so the fallback here
     is what that project uses.
     """

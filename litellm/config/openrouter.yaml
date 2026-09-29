@@ -8,7 +8,7 @@
 # THIS FILE IS SELF-CONTAINED: it includes settings.yaml for the three settings blocks and
 # declares its own aliases.
 #
-# THE ENGINE IS IN THE NAME, exactly as it is for the three local ones. `openrouter-26b` says
+# THE ENGINE IS IN THE NAME, exactly as it is for the three local ones. `openrouter-gemma4-26b` says
 # who answers and therefore who bills you. There is no capability name — `cheap` and
 # `standard` existed here until 2026-08-31 and were renamed for that reason: a caller reading
 # `cheap` cannot tell it is not free.
@@ -23,20 +23,20 @@
 # quirks. `require_parameters: true` drops any provider that cannot honour the parameters
 # sent — in practice, the ones that would silently ignore `tools`. It also means the BUILD is
 # never pinned: OpenRouter does not say which quantisation an upstream provider serves, so
-# `openrouter-26b` against `lms-26b` is never a clean build-for-build comparison.
+# `openrouter-gemma4-26b` against `lms-gemma4-26b` is never a clean build-for-build comparison.
 
 include:
   - settings.yaml
 
 model_list:
-  # Gemma 4 26B A4B — the same weights `lms-26b`, `unsloth-26b` and `ollama-26b` run locally,
-  # so this is the cloud half of the comparison those aliases make: the same model, on
-  # hardware you do not own and do not have to keep loaded.
+  # Gemma 4 26B A4B — the same weights `lms-gemma4-26b`, `unsloth-gemma4-26b` and
+  # `ollama-gemma4-26b` run locally, so this is the cloud half of the comparison those aliases
+  # make: the same model, on hardware you do not own and do not have to keep loaded.
   #
   # $0.07 in / $0.34 out per 1M tokens, read from GET /api/v1/models on 2026-08-31. Those are
   # REAL prices, not the shadow prices the local routes carry: a budget ceiling on a key
   # holding this alias is protecting actual money.
-  - model_name: openrouter-26b
+  - model_name: openrouter-gemma4-26b
     litellm_params:
       model: openrouter/google/gemma-4-26b-a4b-it
       api_key: os.environ/OPENROUTER_API_KEY
@@ -60,7 +60,7 @@ model_list:
       #                 It KEEPS the pin above rather than weakening it — the pin is what
       #                 stops a provider returning tool calls as raw text, and dropping one
       #                 unsupported parameter is the smaller price.
-      # PROVEN:         2026-09-05, openrouter-26b, 6_codex_sdk
+      # PROVEN:         2026-09-05, openrouter-gemma4-26b, 6_codex_sdk
       # GUARDED BY:     tests/6_codex_sdk — all four scenarios fail without it
       #
       # THE SYMPTOM LIES, so read this before diagnosing. The 404 puts the deployment in the
@@ -93,7 +93,7 @@ model_list:
   # ENVOY CANNOT EXPRESS THIS PIN — it has no equivalent of extra_body — so this alias is
   # deliberately absent from envoy/config/openrouter.yaml and 404s on 26000. An unpinned copy
   # there would look like this route while carrying the failure the pin exists to stop.
-  - model_name: openrouter-free
+  - model_name: openrouter-gemma4-26b-free
     litellm_params:
       model: openrouter/google/gemma-4-26b-a4b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
@@ -109,3 +109,38 @@ model_list:
     model_info:
       max_input_tokens: 229376           # 262144 − a 32768 output reserve
       max_output_tokens: 32768
+
+  # Qwen 3.8 27B — the same model `lms-qwen38-27b` and `unsloth-qwen38-27b` run locally and
+  # `cerebras-qwen38-27b` runs on Cerebras. Chat, vision, tools and structured output, and IT
+  # THINKS: the thinking comes out of max_tokens, hence 16384, as on Cerebras.
+  #
+  # THE SPEND LOG RECORDS OPENROUTER'S OWN BILL, NOT THE PRICES BELOW. OpenRouter puts
+  # `usage.cost` in its reply and LiteLLM logs that figure: a tool call logged $0.0002397423,
+  # OpenRouter's `cost` to the last digit, where the prices below give $0.00038 (2026-09-29,
+  # non-streaming, 320 of 327 prompt tokens a cache hit that the provider discounted).
+  #
+  # SO THE PRICES BELOW ARE THE FALLBACK, for a reply that carries no `usage.cost`, and they
+  # are set where a ceiling trips early and never late. 16 providers serve these weights at
+  # $0.025-$0.45 in and $1.875-$4.40 out per 1M (GET /api/v1/models/qwen/qwen3.8-27b/endpoints,
+  # 2026-09-29) and OpenRouter picks one per call; $0.45 / $4.40 is the dearest on each side.
+  # A cache hit is priced as full input, because without that line LiteLLM prices it from its
+  # own cost map at about $0.01 / 1M — and an agent loop resends its history every turn.
+  #
+  # The same two provider settings as `openrouter-gemma4-26b`, for the same reasons: no
+  # provider for these weights supports `parallel_tool_calls` either (same endpoints call).
+  - model_name: openrouter-qwen38-27b
+    litellm_params:
+      model: openrouter/qwen/qwen3.8-27b
+      api_key: os.environ/OPENROUTER_API_KEY
+      input_cost_per_token: 0.00000045   # FALLBACK — $0.45 / 1M, the dearest provider 2026-09-29
+      output_cost_per_token: 0.0000044   # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000045  # a cache hit priced as full input — see above
+      max_tokens: 16384
+      timeout: 600
+      extra_body:
+        provider:
+          require_parameters: true
+      additional_drop_params: ["parallel_tool_calls"]
+    model_info:
+      max_input_tokens: 245760           # 262144 − a 16384 output reserve
+      max_output_tokens: 16384

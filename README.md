@@ -9,7 +9,7 @@
 
 **One OpenAI-compatible endpoint in front of every model on your machine.**
 
-Your projects call `http://localhost:24000` and ask for a name like `lms-4b` or `ollama-4b`.
+Your projects call `http://localhost:24000` and ask for a name like `lms-gemma4-e4b` or `ollama-gemma4-e4b`.
 Which model that name points at is decided **here**, in this repo's config — so swapping a
 model is one edit here, not an edit in every project that calls it.
 
@@ -17,15 +17,16 @@ model is one edit here, not an edit in every project that calls it.
 curl http://localhost:24000/v1/chat/completions \
   -H "Authorization: Bearer sk-litellm-master" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"lms-4b","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"lms-gemma4-e4b","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 It supports six engines: **LMStudio, Unsloth Studio and Ollama** on your own machine, and
-**OpenRouter, OpenAI and Cerebras** in the cloud. An engine is an engine — the alias prefix says which
-is which, and `openrouter-26b` is the same weights as `lms-26b` on hardware you do not own.
+**OpenRouter, OpenAI and Cerebras** in the cloud. An engine is an engine — the alias prefix says
+which is which, and the rest names the model: `openrouter-gemma4-26b` is the same weights as
+`lms-gemma4-26b` on hardware you do not own.
 
-**One engine runs at a time**, and one word in a `.env` picks it. That engine serves two or
-three aliases — a small chat model, a large one, an embedder. To compare two engines, change
+**One engine runs at a time**, and one word in a `.env` picks it. That engine serves one to
+four aliases — Gemma 4 at two sizes, Qwen 3.8 27B, an embedder. To compare two engines, change
 the word and `up -d` again: the names differ only in the prefix.
 
 ## What you get
@@ -95,12 +96,12 @@ flowchart LR
 
     engine{{"GATEWAY_ENGINE<br/>one per project"}}
 
-    lms["<b>LMStudio</b> · :1234<br/>lms-4b · lms-26b · lms-embed"]
-    uns["<b>Unsloth</b> · :8888<br/>unsloth-4b · unsloth-26b · unsloth-embed"]
-    oll["<b>Ollama</b> · :11434<br/>ollama-4b · ollama-26b · ollama-embed"]
-    orr["<b>OpenRouter</b> · cloud<br/>openrouter-26b · openrouter-free"]
-    oai["<b>OpenAI</b> · cloud<br/>openai-mini · openai-embed"]
-    cer["<b>Cerebras</b> · cloud<br/>cerebras-27b"]
+    lms["<b>LMStudio</b> · :1234<br/>lms-gemma4-e4b · lms-gemma4-26b · lms-nomic-embed"]
+    uns["<b>Unsloth</b> · :8888<br/>unsloth-gemma4-e4b · unsloth-gemma4-26b · unsloth-nomic-embed"]
+    oll["<b>Ollama</b> · :11434<br/>ollama-gemma4-e4b · ollama-gemma4-26b · ollama-nomic-embed"]
+    orr["<b>OpenRouter</b> · cloud<br/>openrouter-gemma4-26b · openrouter-gemma4-26b-free"]
+    oai["<b>OpenAI</b> · cloud<br/>openai-gpt54-mini · openai-embed3-small"]
+    cer["<b>Cerebras</b> · cloud<br/>cerebras-qwen38-27b"]
 
     callers -->|"/v1/chat/completions<br/>/v1/messages"| litellm
     callers -.->|"/v1/chat/completions<br/>/anthropic/v1/messages · /mcp"| env
@@ -171,7 +172,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:24000/v1", api_key="sk-litellm-master")
 
 reply = client.chat.completions.create(
-    model="unsloth-4b",                 # the alias, never the model name
+    model="unsloth-gemma4-e4b",                 # the alias, never the model name
     messages=[{"role": "user", "content": "say hi"}],
     max_tokens=512,                     # required on 26000, optional on 24000
 )
@@ -208,8 +209,8 @@ registered and answers `401` when something calls it.
 **`GATEWAY_ENGINE` names any file in `config/`, including one you never commit.** That is how
 you serve *your* machine's models without putting a model list in the repo: write
 `config/<yourname>.yaml`, add it to `.gitignore`, and set the word. This laptop has
-`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio, 40
-aliases on 24000 and 44 route rules on 26000, and no hosted route at all so it cannot spend.
+`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio, 44
+aliases on 24000 and 50 route rules on 26000, and no hosted route at all so it cannot spend.
 Each gateway needs its own copy; neither reads the other's.
 
 ## Endpoints
@@ -228,9 +229,9 @@ it returns — are in [`litellm/README.md`](litellm/README.md#call-it) and
 | the health probe | `GET /health/readiness` | `GET /v1/models` |
 
 All six verified on both ports on 2026-09-05, engine `unsloth`. **On 26000 the Anthropic route
-needs the `-anthropic` name** — `unsloth-4b-anthropic`, not `unsloth-4b`. That alias is the same
-model on the same engine, reached through a backend that speaks Anthropic natively so nothing
-is translated; [the tests section](#what-has-actually-been-run) says what happens when
+needs the `-anthropic` name** — `unsloth-gemma4-e4b-anthropic`, not `unsloth-gemma4-e4b`. That
+alias is the same model on the same engine, reached through a backend that speaks Anthropic
+natively so nothing is translated; [the tests section](#what-has-actually-been-run) says what happens when
 something is.
 
 **Never probe `26064/health`.** The admin port answers `OK` several seconds before the data
@@ -256,14 +257,15 @@ the last three are the cloud and cost money.
 
 |  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) | OpenRouter | OpenAI | Cerebras |
 |:--|:--|:--|:--|:--|:--|:--|
-| **Chat, small** | `lms-4b` | `unsloth-4b` | `ollama-4b` | — | `openai-mini` | — |
-| **Chat, large** | `lms-26b` | `unsloth-26b` | `ollama-26b` | `openrouter-26b` | — | `cerebras-27b` |
-| **Embed** | `lms-embed` | `unsloth-embed` | `ollama-embed` | — | `openai-embed` | — |
-| **Extra** | — | — | — | `openrouter-free` | — | — |
+| **Gemma 4 E4B** — chat, small | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — |
+| **Gemma 4 26B** — chat, large | `lms-gemma4-26b` | `unsloth-gemma4-26b` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
+| **Qwen 3.8 27B** — chat, large | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
+| **Other chat** | — | — | — | — | `openai-gpt54-mini` | — |
+| **Embed** | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
 | **Costs** | free | free | free | **paid** | **paid** | **paid** |
 
 That is every alias this repo defines **by hand**. `GATEWAY_ENGINE` selects **one column**, so
-a gateway serves two or three names at a time — never the whole table. The rows are the point:
+a gateway serves one to four names at a time — never the whole table. The rows are the point:
 the same model sits across a row, so changing the engine word and re-running the tests
 measures the engine and nothing else. You do not need every engine — name the one you have,
 and the rest are not in the config at all.
@@ -275,28 +277,31 @@ differently on `/v1/messages`. `litellm/README.md` § Provider × route has the 
 
 | Alias | Model | Provider | Gateways | Input | Build | Notes |
 |:--|:--|:--|:--|--:|:--|:--|
-| `lms-4b` | `google/gemma-4-e4b` | `lm_studio/` | both | 122880 | QAT | tools and vision both work |
-| `lms-26b` | `google/gemma-4-26b-a4b-qat` | `lm_studio/` | both | 253952 | QAT | 26B MoE, ~4B active |
-| `lms-embed` | `text-embedding-nomic-embed-text-v1.5` | `lm_studio/` | both | 2048 | Q4_K_M | 768 dims, 84 MB |
-| `unsloth-4b` | `unsloth/gemma-4-E4B-it-qat-GGUF` | `openai/` | both | 122880 | QAT | same weights as `lms-4b` |
-| `unsloth-26b` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | both | 253952 | QAT | same weights as `lms-26b`; **it reasons and `lms-26b` does not** |
-| `unsloth-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | `openai/` | both | 2048 | Q8_0 | 768 dims |
-| `ollama-4b` | `gemma4:e4b` | `openai/` | both | 122880 | **Q4_K_M** | not QAT — see below |
-| `ollama-26b` | `gemma4:26b` | `openai/` | both | 253952 | **Q4_K_M** | not QAT |
-| `ollama-embed` | `nomic-embed-text` | `openai/` | both | 2048 | **F16** | 768 dims, the heaviest of the three |
-| `openrouter-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | both | 245760 | not stated | **$0.07 · $0.34** per 1M in·out |
-| `openrouter-free` | `google/gemma-4-26b-a4b-it:free` | `openrouter/` | **24000 only** | 229376 | not stated | free, rate-limited — see below |
-| `openai-mini` | `gpt-5.4-mini` | `openai/` | both | — | — | **paid**; **it does have vision** — 4/4 on the multimodal scenario, 2026-09-05 |
-| `openai-embed` | `text-embedding-3-small` | `openai/` | both | 8191 | — | **paid**, 1536 dims |
-| `cerebras-27b` | `qwen-3.8-27b` | `cerebras/` | both | 49152 | FP16/FP8 | **$0.99 · $1.49** per 1M in·out; ~1000 tok/s; vision (base64 only), tools; **it reasons** — send `reasoning_effort` on long-output prompts or the thinking can eat all of `max_tokens` |
-| `<alias>-anthropic` | the same model as `<alias>` | — | **26000 only** | — | — | the Anthropic route for the Claude Agent SDK. Chat aliases only. **Pass-through** for `lms-*`, `unsloth-*`, `ollama-*` and `openrouter-26b`, whose backends speak Anthropic natively; **translated** for `openai-mini` and `cerebras-27b`, because api.openai.com and api.cerebras.ai do not — and the `openai-mini` route then hits an upstream `thinking` bug, see `TESTING.md` §5.2 |
+| `lms-gemma4-e4b` | `google/gemma-4-e4b` | `lm_studio/` | both | 122880 | QAT | tools and vision both work |
+| `lms-gemma4-26b` | `google/gemma-4-26b-a4b-qat` | `lm_studio/` | both | 253952 | QAT | 26B MoE, ~4B active |
+| `lms-qwen38-27b` | `qwen/qwen3.8-27b` | `lm_studio/` | both | 253952 | MLX 4-bit | 27B dense, tools and vision; **it reasons** — never give it a small `max_tokens` |
+| `lms-nomic-embed` | `text-embedding-nomic-embed-text-v1.5` | `lm_studio/` | both | 2048 | Q4_K_M | 768 dims, 84 MB |
+| `unsloth-gemma4-e4b` | `unsloth/gemma-4-E4B-it-qat-GGUF` | `openai/` | both | 122880 | QAT | same weights as `lms-gemma4-e4b` |
+| `unsloth-gemma4-26b` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | both | 253952 | QAT | same weights as `lms-gemma4-26b`; **it reasons and `lms-gemma4-26b` does not** |
+| `unsloth-qwen38-27b` | `unsloth/Qwen3.8-27B-GGUF` | `openai/` | both | 253952 | **UD-Q8_K_XL** | same model as `lms-qwen38-27b`, **not the same build**: Unsloth serves its Anthropic route for GGUF only, and the MLX build answered 503 there |
+| `unsloth-nomic-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | `openai/` | both | 2048 | Q8_0 | 768 dims |
+| `ollama-gemma4-e4b` | `gemma4:e4b` | `openai/` | both | 122880 | **Q4_K_M** | not QAT — see below |
+| `ollama-gemma4-26b` | `gemma4:26b` | `openai/` | both | 253952 | **Q4_K_M** | not QAT |
+| `ollama-nomic-embed` | `nomic-embed-text` | `openai/` | both | 2048 | **F16** | 768 dims, the heaviest of the three |
+| `openrouter-gemma4-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | both | 245760 | not stated | **$0.07 · $0.34** per 1M in·out |
+| `openrouter-gemma4-26b-free` | `google/gemma-4-26b-a4b-it:free` | `openrouter/` | **24000 only** | 229376 | not stated | free, rate-limited — see below |
+| `openrouter-qwen38-27b` | `qwen/qwen3.8-27b` | `openrouter/` | both | 245760 | not stated | **$0.025–$0.45 · $1.875–$4.40** per 1M in·out, by provider. LiteLLM logs OpenRouter's own `usage.cost`; the configured $0.45 · $4.40 is only the fallback. **It reasons** |
+| `openai-gpt54-mini` | `gpt-5.4-mini` | `openai/` | both | — | — | **paid**; **it does have vision** — 4/4 on the multimodal scenario, 2026-09-05 |
+| `openai-embed3-small` | `text-embedding-3-small` | `openai/` | both | 8191 | — | **paid**, 1536 dims |
+| `cerebras-qwen38-27b` | `qwen-3.8-27b` | `cerebras/` | both | 49152 | FP16/FP8 | **$0.99 · $1.49** per 1M in·out; ~1000 tok/s; vision (base64 only), tools; **it reasons** — send `reasoning_effort` on long-output prompts or the thinking can eat all of `max_tokens` |
+| `<alias>-anthropic` | the same model as `<alias>` | — | **26000 only** | — | — | the Anthropic route for the Claude Agent SDK. Chat aliases only. **Pass-through** for `lms-*`, `unsloth-*`, `ollama-*` and `openrouter-*`, whose backends speak Anthropic natively; **translated** for `openai-gpt54-mini` and `cerebras-qwen38-27b`, because api.openai.com and api.cerebras.ai do not — and the `openai-gpt54-mini` route then hits an upstream `thinking` bug, see `TESTING.md` §5.2 |
 
 Builds measured 2026-08-31 with `lms ls --json` and `ollama show`; the Unsloth figure is the
 one its model card states.
 
 `Input` is the usable prompt window: the model's context minus an output reserve — 8192 tokens
-on the local routes, larger on the two OpenRouter ones. E4B caps at 131072, hence 122880.
-`openai-embed`'s 8191 is the model's own limit, not a subtraction.
+on the local routes, larger on the hosted ones. E4B caps at 131072, hence 122880.
+`openai-embed3-small`'s 8191 is the model's own limit, not a subtraction.
 
 **Every alias in the table is hand-written**, in `litellm/config/<engine>.yaml` and
 `envoy/config/<engine>.yaml`. There is no generated configuration anywhere in this repo: an
@@ -304,22 +309,37 @@ auto-discovery service in `litellm/` used to add every model an engine held on d
 removed on 2026-09-06 — see [What was removed](#what-was-removed).
 
 **The default config serves all of them at once.** `GATEWAY_ENGINE=all` reads `config/all.yaml`
-in either project. On LiteLLM that file is six `include:` lines and copies nothing; on Envoy it
-copies the five engine files, because `aigw run` takes one file path and Envoy's config has no
-include mechanism. **So adding an alias to Envoy is two edits there, not one.**
+in either project. On LiteLLM that file is seven `include:` lines and copies nothing; on Envoy
+it copies the six engine files, because `aigw run` takes one file path and Envoy's config has
+no include mechanism. **So adding an alias to Envoy is two edits there, not one.**
+
+**The names changed on 2026-09-29, and the old ones now 404.** Until then an alias carried only
+its engine and a size, so `lms-26b` (Gemma) and `lms-27b` (Qwen) would have been one digit
+apart. There is no fallback from an old name to a new one — change the caller:
+
+| Old | New | | Old | New |
+|:--|:--|:--|:--|:--|
+| `lms-4b` | `lms-gemma4-e4b` | | `ollama-embed` | `ollama-nomic-embed` |
+| `lms-26b` | `lms-gemma4-26b` | | `openrouter-26b` | `openrouter-gemma4-26b` |
+| `lms-embed` | `lms-nomic-embed` | | `openrouter-free` | `openrouter-gemma4-26b-free` |
+| `unsloth-4b` | `unsloth-gemma4-e4b` | | `openai-mini` | `openai-gpt54-mini` |
+| `unsloth-26b` | `unsloth-gemma4-26b` | | `openai-embed` | `openai-embed3-small` |
+| `unsloth-embed` | `unsloth-nomic-embed` | | `cerebras-27b` | `cerebras-qwen38-27b` |
+| `ollama-4b` | `ollama-gemma4-e4b` | | `<old>-anthropic` | `<new>-anthropic` |
+| `ollama-26b` | `ollama-gemma4-26b` | | | |
 
 ### Two traps when you pick an alias
 
 - **Thinking models spend the reply's budget on thinking, and you cannot guess which ones
   do.** Reasoning tokens come out of the same `max_tokens` allowance as the answer, so a
   ceiling set too low returns **empty content**, `finish_reason: "length"`, and no error at
-  all. It is decided **per model and engine**: `unsloth-26b` emits a reasoning block while
-  `lms-26b` on identical weights does not (2026-08-27), and `lms-4b` spent 65 of 70 completion
+  all. It is decided **per model and engine**: `unsloth-gemma4-26b` emits a reasoning block while
+  `lms-gemma4-26b` on identical weights does not (2026-08-27), and `lms-gemma4-e4b` spent 65 of 70 completion
   tokens reasoning (2026-08-28). Treat every chat alias as capable of it. **On port 26000 this
   is your job** — Envoy cannot store a per-route `max_tokens`, so the caller must send one.
 - **Embedding vectors do not mix across models — or across *builds* of one model.** All three
   local embedders are nomic v1.5 at 768 dims in a **different build**: Q4_K_M on LMStudio,
-  Q8_0 on Unsloth, F16 on Ollama. `openai-embed` is a different model at 1536 dims. A query
+  Q8_0 on Unsloth, F16 on Ollama. `openai-embed3-small` is a different model at 1536 dims. A query
   embedded with one, matched against an index built with another, returns quietly worse
   neighbours and never errors. Use one alias per index and record which.
 
@@ -330,7 +350,7 @@ by `GATEWAY_ENGINE` — and differ in one way that is not architectural: **they 
 account**. Turn one on with `GATEWAY_ENGINE=openrouter` and the matching key exported. Three
 things to know:
 
-- **Do not remove the provider pin on `openrouter-free`.** It carries
+- **Do not remove the provider pin on `openrouter-gemma4-26b-free`.** It carries
   `order: ["google-ai-studio"]` and `allow_fallbacks: false`
   ([`litellm/config/openrouter.yaml`](litellm/config/openrouter.yaml)), because OpenRouter
   load-balances its free tier and one provider returns tool calls as **raw text** with
@@ -338,7 +358,7 @@ things to know:
   nothing, and stops. `allow_fallbacks: false` is half the pin — without it OpenRouter
   reroutes exactly when the pinned provider is busy. The price is a 429 when Google AI Studio
   is at its limit: a visible failure over an invisible one.
-- **`openrouter-free` is therefore absent from `envoy/`.** Envoy has no `extra_body`
+- **`openrouter-gemma4-26b-free` is therefore absent from `envoy/`.** Envoy has no `extra_body`
   equivalent, so it cannot carry the pin, and an unpinned copy would look like LiteLLM's route
   while carrying the failure the pin exists to stop. It is the one alias that 404s on 26000 by
   design.
@@ -407,13 +427,13 @@ translation puts a `thinking` block into the OpenAI body and the **engine** reje
 same 400 comes back with no gateway in the path. **All five engine configs carry those
 aliases now**, and four of the five are true pass-throughs: the three local engines and
 OpenRouter all serve the Anthropic Messages API natively, so nothing is translated.
-`openai-mini-anthropic` is the exception and must be translated, which is where the folder
+`openai-gpt54-mini-anthropic` is the exception and must be translated, which is where the folder
 fails on that one engine. The folder resolves the alias and refuses to run without it. See
 `envoy/tests/5_claude_agent_sdk/README.md`.
 
 Every script prints the full response, so each doubles as a sample to copy from; the exit code
 is `1` on any failure. **The default alias follows that project's `GATEWAY_ENGINE`** —
-`lms-4b`, `unsloth-4b`, `ollama-4b`, `openrouter-26b` or `openai-mini`, each being the one
+`lms-gemma4-e4b`, `unsloth-gemma4-e4b`, `ollama-gemma4-e4b`, `openrouter-gemma4-26b` or `openai-gpt54-mini`, each being the one
 route on that engine that is both vision- and tool-capable. Override it with `--model <alias>`
 on `run_all.py`, or `AI_GATEWAY_TEST_MODEL=<alias>` when you run one scenario directly.
 
@@ -443,11 +463,11 @@ scenarios — against that engine on that port.
 
 | Engine | Alias driven | LiteLLM 24000 | Envoy 26000 |
 |:--|:--|:--|:--|
-| `lms` | `lms-4b` | **7/7** | **7/7** |
-| `ollama` | `ollama-4b` | **7/7** | **7/7** |
-| `unsloth` | `unsloth-4b` | **7/7** | **7/7** |
-| `openrouter` | `openrouter-26b` | **7/7** | **7/7** |
-| `openai` | `openai-mini` | **7/7** | **5/7** — two upstream bugs, below |
+| `lms` | `lms-gemma4-e4b` | **7/7** | **7/7** |
+| `ollama` | `ollama-gemma4-e4b` | **7/7** | **7/7** |
+| `unsloth` | `unsloth-gemma4-e4b` | **7/7** | **7/7** |
+| `openrouter` | `openrouter-gemma4-26b` | **7/7** | **7/7** |
+| `openai` | `openai-gpt54-mini` | **7/7** | **5/7** — two upstream bugs, below |
 
 The whole local matrix — six cells, 42 folder runs — went green in one uninterrupted pass.
 **Proving the two paid engines cost a few cents**: OpenRouter billed **$0.0516** for the entire
@@ -464,7 +484,7 @@ session, agent loops included. That is worth knowing before anyone skips them ag
   which is why the same folder is green there. It is an open OpenCode bug with nothing on this
   side to change.
 
-The first is the reason the alias table marks `openai-mini-anthropic` **translated** rather than
+The first is the reason the alias table marks `openai-gpt54-mini-anthropic` **translated** rather than
 pass-through: api.openai.com serves no Anthropic route, so translation is the only option there.
 Neither bug touches the three local engines or OpenRouter, whose backends speak Anthropic
 natively.
@@ -561,13 +581,14 @@ copy of anything a sibling also uses, so either can be deleted whole. That is no
   files, then a generator script, both of which existed and both of which are gone. One word
   in a filename needs neither. The cost is that comparing two engines is a restart rather than
   a second alias; the gain is that the whole selection mechanism is a filename.
-- **Two or three aliases per engine, and no more.** A small chat model, a large one, an
-  embedder. There was a twenty-alias list with a size ladder and role names; it was deleted on
-  2026-08-31, because a gateway is useless until the models are on disk, and the ladder was
-  documentation of one laptop rather than a thing anyone else could run.
-- **Every alias names its engine.** `local` existed and hid which engine answered; `cheap`,
-  `standard` and `frontier` existed and hid who was **billed**. Both were removed for the same
-  reason — a name should answer the question you would otherwise have to go and look up.
+- **A few aliases per engine, one per row of the table.** Gemma 4 at two sizes, Qwen 3.8 27B,
+  an embedder — at most four. There was a twenty-alias list with a size ladder and role names;
+  it was deleted on 2026-08-31, because a gateway is useless until the models are on disk, and
+  the ladder was documentation of one laptop rather than a thing anyone else could run.
+- **Every alias names its engine and its model.** `local` existed and hid which engine
+  answered; `cheap`, `standard` and `frontier` existed and hid who was **billed**; `lms-26b`
+  existed until 2026-09-29 and hid which model family answered. All three were removed for the
+  same reason — a name should answer the question you would otherwise have to go and look up.
 - **No alias falls back to another.** A chain would be more resilient and would break the two
   things this repo is for: a comparison stops being a comparison the moment a request can
   silently run somewhere else, and a free session can silently become a paid one.
@@ -590,8 +611,8 @@ this repo does not name yet — and there is one rule that catches everyone:
 > that catches it.
 
 1. Fork, then branch — `git checkout -b feature/my-alias`.
-2. Edit that engine's file — `litellm/config/<engine>.yaml`. Keep it to two or three aliases:
-   a small chat model, a large one, an embedder. That shape is the point. On the LiteLLM side
+2. Edit that engine's file — `litellm/config/<engine>.yaml`. Name it `<engine>-<model>-<size>`,
+   and put it in a row the other engines share — that shape is the point. On the LiteLLM side
    an alias needs four things: the `model_list` entry, its shadow price, its
    `max_input_tokens`, and a row in the table above. Miss the price and a budget ceiling
    becomes a no-op.

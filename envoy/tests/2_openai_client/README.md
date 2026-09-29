@@ -50,7 +50,7 @@ message is always "the table says X and the gateway did Y".
 
 The last row above is the one that costs an afternoon. An `AIGatewayRoute` rule
 carries a request **timeout** but no token ceiling. Measured 2026-09-04 with
-`lms-4b`, one "count to 3000" prompt carrying **no** `max_tokens`:
+`lms-gemma4-e4b`, one "count to 3000" prompt carrying **no** `max_tokens`:
 
 | Gateway | `finish_reason` | completion tokens |
 |:--|:--|--:|
@@ -91,8 +91,8 @@ One at a time:
 
 ```bash
 uv run 01_simple_call.py
-uv run 02_tools_call.py --model lms-26b
-uv run 03_multimodal.py --model ollama-4b
+uv run 02_tools_call.py --model lms-gemma4-26b
+uv run 03_multimodal.py --model ollama-gemma4-e4b
 ```
 
 Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
@@ -115,7 +115,7 @@ There is no `--gateway` flag any more. The folder you are in is the gateway.
 ## Reasoning aliases and `MAX_TOKENS`
 
 `common.py` sends `max_tokens=2048`, and that number is load-bearing. Every
-`unsloth-*` and `ollama-*` route, and `lms-4b` too, spends the same allowance on a
+`unsloth-*` and `ollama-*` route, and `lms-gemma4-e4b` too, spends the same allowance on a
 reasoning block before writing a word. Run out mid-thought and the reply is
 **empty**, with `finish_reason: "length"` and no error at all.
 
@@ -133,12 +133,12 @@ at `stop`, not at the ceiling.
 ## Why the default alias follows `GATEWAY_ENGINE`
 
 **One engine runs at a time**, so the aliases of every other engine have no
-`AIGatewayRoute` rule at all. A fixed `lms-4b` default would therefore 404 on a
+`AIGatewayRoute` rule at all. A fixed `lms-gemma4-e4b` default would therefore 404 on a
 perfectly healthy gateway serving Ollama.
 
 `common.py` reads `GATEWAY_ENGINE` from `../../.env` — this project's own, not a
 repo-root one, and not the same file either sibling project reads — and picks that engine's
-small chat route: `lms-4b`, `unsloth-4b`, `ollama-4b` or `openrouter-26b`. Each is
+small chat route: `lms-gemma4-e4b`, `unsloth-gemma4-e4b`, `ollama-gemma4-e4b` or `openrouter-gemma4-26b`. Each is
 the one alias on its engine that is both vision- and tool-capable, which all three
 scripts need from a single loaded model.
 
@@ -173,7 +173,7 @@ Changing the engine here swaps the whole config file, so nothing from the previo
 engine is left answering. A gateway that keeps its endpoints in a database instead
 would need them pruned; this one has no database at all.
 
-Verified 2026-09-04: **4/4 on `ollama-4b`**. `02_tools_call.py` passing is the
+Verified 2026-09-04: **4/4 on `ollama-gemma4-e4b`**. `02_tools_call.py` passing is the
 result worth noting: it means a structured `tool_calls` reply came back, not the
 raw-text tool syntax that makes most local models useless from an agent.
 
@@ -184,7 +184,7 @@ Two extra requirements for the Unsloth one, and both fail quietly:
 2. **`Settings → API → Model auto-switch` must be on**, or the first call returns
    `400 No model loaded`. With it on, the first call unloads whatever was there and
    reads the new weights from disk, which shows up as one slow row and then nothing.
-   Note that this covers the embedder too: `unsloth-embed` and `unsloth-4b` evict
+   Note that this covers the embedder too: `unsloth-nomic-embed` and `unsloth-gemma4-e4b` evict
    each other — and so do the other two projects, if either is up on the same engine.
 
 ## `test_image.png`
@@ -217,6 +217,6 @@ byte-identical across all three.
   and register their aliases (checked 2026-09-04), but no call has been made through
   either — that would bill a real account.
 - **Fallback chains.** No route has one, so there is nothing to prove.
-- **`openrouter-free`.** Absent here by design — no `extra_body` for the provider pin.
+- **`openrouter-gemma4-26b-free`.** Absent here by design — no `extra_body` for the provider pin.
 - **That the same alias answers on 24000.** See the note at the top — no suite
   checks this any more.

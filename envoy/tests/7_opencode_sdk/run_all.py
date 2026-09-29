@@ -4,7 +4,7 @@ Each scenario is a separate child process and a separate row, so one failure
 names itself instead of hiding inside a combined result.
 
     uv run run_all.py
-    uv run run_all.py --model unsloth-26b
+    uv run run_all.py --model unsloth-gemma4-26b
     uv run run_all.py --verbose
     uv run 03_sdk_mcp.py                  one scenario, directly
 

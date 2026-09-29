@@ -39,7 +39,7 @@ model_list:
   #
   # `gpt-oss-120b` IS ALSO ON THIS KEY and is not here: it has no vision, so it cannot stand in
   # for the other chat aliases, and one alias per engine keeps the money surface small.
-  - model_name: cerebras-27b
+  - model_name: cerebras-qwen38-27b
     litellm_params:
       model: cerebras/qwen-3.8-27b
       api_key: os.environ/CEREBRAS_API_KEY

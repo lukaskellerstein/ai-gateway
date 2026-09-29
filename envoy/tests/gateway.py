@@ -104,7 +104,7 @@ API_KEY = "no-key-needed"
 
 # THE DEFAULT ALIAS FOLLOWS THE ENGINE THIS PROJECT IS SERVING. `GATEWAY_ENGINE` in
 # ../.env names ONE engine, and the aliases of every other engine have no
-# AIGatewayRoute rule at all — so a fixed `lms-4b` default would 404 on a healthy
+# AIGatewayRoute rule at all — so a fixed `lms-gemma4-e4b` default would 404 on a healthy
 # gateway.
 #
 # The chosen names are the small chat route on each engine: the one alias per engine
@@ -120,12 +120,12 @@ API_KEY = "no-key-needed"
 # at IMPORT time for this engine, so EVERY folder died in 0.0 s and the openai
 # engine could not be tested at all.
 DEFAULT_MODEL_BY_ENGINE = {
-    "lms": "lms-4b",
-    "unsloth": "unsloth-4b",
-    "ollama": "ollama-4b",
-    "openrouter": "openrouter-26b",
-    "openai": "openai-mini",
-    "cerebras": "cerebras-27b",
+    "lms": "lms-gemma4-e4b",
+    "unsloth": "unsloth-gemma4-e4b",
+    "ollama": "ollama-gemma4-e4b",
+    "openrouter": "openrouter-gemma4-26b",
+    "openai": "openai-gpt54-mini",
+    "cerebras": "cerebras-qwen38-27b",
 }
 
 ENGINE = _dotenv_value("GATEWAY_ENGINE", "lms").strip()
@@ -135,7 +135,7 @@ def _default_alias() -> str:
     """The alias for whichever engine this project's `.env` names.
 
     AN UNRECOGNISED ENGINE IS AN ERROR, NOT A FALLBACK. Quietly defaulting to
-    `lms-4b` was worse than failing: an alias with no AIGatewayRoute rule gets a
+    `lms-gemma4-e4b` was worse than failing: an alias with no AIGatewayRoute rule gets a
     404 (verified 2026-09-04), which from a perfectly healthy gateway serving a
     different engine reads as a broken gateway rather than a stale `.env`.
     """
@@ -164,11 +164,11 @@ REQUEST_TIMEOUT_SECONDS = 3600.0
 
 # THE ALLOWANCE EVERY CALLER SENDS, and on this gateway it is load-bearing — see
 # BODY_EXTRAS below. It has to clear a REASONING block: both `unsloth-*` chat
-# routes, both `ollama-*` ones and `lms-4b` spend this budget on thinking before
+# routes, both `ollama-*` ones and `lms-gemma4-e4b` spend this budget on thinking before
 # they write a word. A model that runs out mid-thought returns EMPTY content with
 # `finish_reason: "length"` and raises nothing, which reads as a broken alias. 150
 # was not enough for a one-sentence answer about an image (verified 2026-08-27 on
-# `unsloth-26b`).
+# `unsloth-gemma4-26b`).
 #
 # Raising it costs nothing when the model does not need it: generation stops at
 # `stop`, not at the ceiling.
@@ -176,7 +176,7 @@ MAX_TOKENS = 2048
 
 # WHAT A CALLER MUST ADD TO EVERY REQUEST, and here it is NOT OPTIONAL.
 #
-# Measured 2026-09-04, `lms-4b`, one "count from 1 to 3000" prompt sent with NO
+# Measured 2026-09-04, `lms-gemma4-e4b`, one "count from 1 to 3000" prompt sent with NO
 # `max_tokens` in the body:
 #
 #   Envoy   26000   finish_reason "stop" at 13946 completion tokens — nothing
@@ -193,7 +193,7 @@ MAX_TOKENS = 2048
 #   400 Unsupported parameter: 'max_tokens' is not supported with this model.
 #       Use 'max_completion_tokens' instead.
 #
-# Measured 2026-09-05, `openai-mini`, all four `2_openai_client` scripts on 26000.
+# Measured 2026-09-05, `openai-gpt54-mini`, all four `2_openai_client` scripts on 26000.
 # LiteLLM renames it for you and never shows you this; **Envoy is a pass-through and
 # does not**, so the caller has to send what the upstream actually accepts. That is
 # a real difference in the CALLING CONTRACT, not a bug in either gateway, and it

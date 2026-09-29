@@ -81,10 +81,10 @@
 #    NOT PER ENGINE. A route that hits the cap mid-thought returns EMPTY content with
 #    finish_reason "length" and raises no error at all. Two measurements that refuse the
 #    tidy story that only Unsloth and Ollama think:
-#      - 2026-08-28, `lms-4b` on LMSTUDIO: 65 of 70 completion tokens were reasoning, and at
+#      - 2026-08-28, `lms-gemma4-e4b` on LMSTUDIO: 65 of 70 completion tokens were reasoning, and at
 #        max_tokens 20 the content came back empty.
-#      - 2026-08-27, `lms-26b` on LMStudio: NO reasoning block, while `unsloth-26b` — the
-#        identical gemma-4-26b-a4b-qat — produced one.
+#      - 2026-08-27, `lms-gemma4-26b` on LMStudio: NO reasoning block, while
+#        `unsloth-gemma4-26b` — the identical gemma-4-26b-a4b-qat — produced one.
 #    Treat EVERY chat route as capable of thinking and keep max_tokens generous.
 #
 # Docs: https://docs.litellm.ai/docs/proxy/configs
@@ -103,13 +103,13 @@ litellm_settings:
   # `GUARDED BY` is the field that prevents that. It is not optional.
 
   # WHY:            without it the Claude Agent SDK gets NO thinking blocks from any
-  #                 `openai/`-provider alias — 0 runs out of 5, measured on unsloth-4b
+  #                 `openai/`-provider alias — 0 runs out of 5, measured on unsloth-gemma4-e4b
   # SCOPE:          provider=openai/  route=/v1/messages  client=5_claude_agent_sdk
   # GLOBAL BECAUSE: litellm/__init__.py:239 declares it as a module bool and
   #                 llms/anthropic/experimental_pass_through/messages/handler.py:78 reads
   #                 that global. There is NO per-model, per-alias or per-request override —
   #                 checked across the whole package on 2026-09-05, three occurrences total.
-  # PROVEN:         2026-09-05, litellm 1.99.1, unsloth-4b — 6/6 streaming and 4/5
+  # PROVEN:         2026-09-05, litellm 1.99.1, unsloth-gemma4-e4b — 6/6 streaming and 4/5
   #                 non-streaming carried thinking, against 0/5 before
   # GUARDED BY:     tests/5_claude_agent_sdk/07_thinking.py — it asserts
   #                 THINKING_REACHES_CLIENT, so deleting this line turns the ollama and
@@ -154,7 +154,7 @@ litellm_settings:
   # the request left the building.
   #
   # THE OLD CHAIN IS WORTH KNOWING ABOUT because it is the obvious thing to add back. It was
-  # `lms-26b -> cheap-free -> cheap`, and it was removed on 2026-08-31 along with the tier
+  # `lms-gemma4-26b -> cheap-free -> cheap`, and it was removed on 2026-08-31 along with the tier
   # names it pointed at. If you do add one: budget every key that can reach it, and read
   # `api_base` in /spend/logs to find out after the fact where a request actually ran.
   #

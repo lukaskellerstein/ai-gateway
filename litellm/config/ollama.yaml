@@ -36,10 +36,10 @@ include:
   - settings.yaml
 
 model_list:
-  # `lms-4b`'s twin: Gemma 4 E4B, the small chat route, tools and vision both working.
+  # `lms-gemma4-e4b`'s twin: Gemma 4 E4B, the small chat route, tools and vision both working.
   # `gemma4:latest` is the SAME model — one digest, two tags — but `latest` moves on the next
   # pull, so the explicit `:e4b` is used.
-  - model_name: ollama-4b
+  - model_name: ollama-gemma4-e4b
     litellm_params:
       model: openai/gemma4:e4b
       api_base: os.environ/OLLAMA_API_BASE
@@ -52,9 +52,9 @@ model_list:
       max_input_tokens: 122880            # gemma4.context_length 131072 − the reserve
       max_output_tokens: 8192
 
-  # `lms-26b`'s twin: the 26B mixture of experts, the large chat route. Q4_K_M here against
+  # `lms-gemma4-26b`'s twin: the 26B mixture of experts, the large chat route. Q4_K_M here against
   # QAT on the other two local engines, so this pair moves the build as well as the engine.
-  - model_name: ollama-26b
+  - model_name: ollama-gemma4-26b
     litellm_params:
       model: openai/gemma4:26b
       api_base: os.environ/OLLAMA_API_BASE
@@ -69,7 +69,7 @@ model_list:
 
   # The same nomic-embed-text v1.5 model the other local engines serve, at 768 dimensions on
   # a 2048 window (verified 2026-08-27 from GET /api/show) — but the F16 build at 274 MB,
-  # against `lms-embed`'s Q4_K_M at 84 MB and `unsloth-embed`'s Q8_0 at 146 MB (measured
+  # against `lms-nomic-embed`'s Q4_K_M at 84 MB and `unsloth-nomic-embed`'s Q8_0 at 146 MB (measured
   # 2026-08-31). It is the most accurate of the three and the heaviest.
   #
   # VECTORS DO NOT MIX ACROSS BUILDS — see the note in lms.yaml. Record which alias built
@@ -78,7 +78,7 @@ model_list:
   # No tag is pinned: `nomic-embed-text` resolves to :latest, which has been v1.5 for a long
   # time but is not guaranteed to stay. Pin `nomic-embed-text:v1.5` if reproducibility of the
   # VECTORS matters — a moved tag re-embeds differently and silently invalidates an index.
-  - model_name: ollama-embed
+  - model_name: ollama-nomic-embed
     litellm_params:
       model: openai/nomic-embed-text
       api_base: os.environ/OLLAMA_API_BASE

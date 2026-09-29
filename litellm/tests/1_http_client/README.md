@@ -5,7 +5,7 @@ The gateway with **no client library at all**: `urllib` from the standard librar
 
 ```bash
 uv run main.py
-uv run main.py --model lms-26b
+uv run main.py --model lms-gemma4-26b
 ```
 
 | What it does | Why it is here |
@@ -31,7 +31,7 @@ POST http://localhost:24000/v1/chat/completions
 Authorization: Bearer sk-litellm-master
 Content-Type: application/json
 
-{"model": "unsloth-4b", "messages": [{"role": "user", "content": "..."}]}
+{"model": "unsloth-gemma4-e4b", "messages": [{"role": "user", "content": "..."}]}
 ```
 
 Two headers. `Authorization` is enforced here — a bogus token gets **401**, which
@@ -78,5 +78,5 @@ gateway; everything specific comes from `../gateway.py`.
 
 ## Verified
 
-2026-09-04, `unsloth-4b`: the plain call returned Paris and the stream counted to
+2026-09-04, `unsloth-gemma4-e4b`: the plain call returned Paris and the stream counted to
 five. 0.2 s warm — see the note on timings in [`../README.md`](../README.md).
