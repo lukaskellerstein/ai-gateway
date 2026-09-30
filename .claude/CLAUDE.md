@@ -50,6 +50,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   stay as independent as before. It times ONE HTTP request against both ports with the engine,
   model, body and `max_tokens` held identical, and it is the closest thing here to the
   cross-gateway check that went away at the split. Results live in `COMPARISON.md`.
+  **`benchmark/cache_report.py` (2026-09-30) is its second script**: it turns both projects'
+  `tests/run_cache.py` output into one table, and reads only the files named on its command
+  line — so the folder still reads nothing a project owns. `benchmark/README.md` opens with
+  the map of both measurements.
 - **`name: ai-gateway` IN `litellm/compose.yml` IS LOAD-BEARING.** The volume resolves to
   `<project>_postgres_data`, so that word is what keeps it attached to
   `ai-gateway_postgres_data` — every virtual key, spend log and budget ceiling ever issued.
@@ -153,7 +157,11 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   `pyproject.toml` and `.venv`; `uv run --directory` builds whichever is missing, so there is
   no `uv sync` step. `tests/run_all.py` runs all seven; `tests/gateway.py` holds the base URL,
   the key and the alias **once per project** and imports nothing outside the standard library,
-  because it must import inside `1_http_client`'s empty venv.
+  because it must import inside `1_http_client`'s empty venv. **Beside `run_all.py` sits
+  `run_cache.py`** (2026-09-30): one live session per agent on the aliases you name, recording
+  the prompt cache and the speed. It is byte-identical in both projects; `gateway_records.py`
+  beside it is the one file that differs, because each gateway records a request its own way.
+  `benchmark/cache_report.py` turns both projects' `cache-results/` into one table.
 - **ALL SEVEN FOLDERS RUN ON BOTH GATEWAYS.** That was not true of `mlflow/`, which had
   neither an Anthropic route nor `/v1/responses` (both 404, measured 2026-09-04) and carried
   two probe-only folders to prove it. Those went with the folder. **A gateway that cannot do
@@ -187,6 +195,32 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   Agent SDK**, which speaks no other route. Envoy's `-anthropic` alias does not translate, so
   the engine's own thinking block arrives whole on all three local engines. Both folders'
   `07_thinking.py` DECLARE this as `THINKING_REACHES_CLIENT` and assert it.
+- **LITELLM DROPS `reasoning_effort` ON QWEN 3.8 UNLESS THE ALIAS ALLOWS IT, AND THE
+  DEFAULT IS `xhigh`** (measured 2026-09-30). `drop_params` removes the field on the
+  `lm_studio/` AND the `openai/` (Unsloth) route, so every caller's level is ignored and
+  Qwen thinks at `xhigh` — one agent step took 693 s and answered nothing. The cure is
+  `allowed_openai_params: ["reasoning_effort"]` on `lms-qwen38-27b` and
+  `unsloth-qwen38-27b`, **and on the same entries in the personal `lukas.yaml`**. The
+  proof is the prompt size, because Qwen's template writes the level into the system
+  prompt: 62 tokens at `xhigh`, 24 at `medium`. `2_openai_client/05_reasoning_effort.py`
+  goes red without it. Envoy passes the field untouched. **AND THE LINE BREAKS CODEX ON
+  `lm_studio/`**: LiteLLM makes `/v1/responses` a chat call and passes Codex's
+  `{effort, summary}` as a whole object, which LMStudio answers with a 400. So
+  `lms-qwen38-27b` is the ONE `lms-*` alias on `openai/` — native `/v1/responses` — and must
+  stay there while it carries the line. The full route table is in `litellm/README.md`
+  § Provider × route.
+- **A LOCAL ENGINE'S CACHE IS A PREFIX CACHE, SO NEVER REWRITE AN EARLIER PART OF A PROMPT**
+  (measured 2026-09-30, `tests/run_cache.py`, both gateways). The engine reuses only what the
+  new prompt shares with the last one FROM THE FIRST TOKEN; one changed character before the
+  end recomputes everything after it. **The gateway does not change the reuse** — same agent,
+  same model, same share through either port. **Claude Code is the client that breaks it**: a
+  new `<total_tokens>` line in its system prompt after every tool result held the last turn to
+  22% (Gemma) and 0% (Qwen) on LMStudio. `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` plus
+  `CLAUDE_CODE_ATTRIBUTION_HEADER=0` gave 76–93%. So: **no hook, callback or setting that
+  inserts, moves or rewrites earlier messages on a local route.** `run_cache.py` records the
+  engine's own prompt text where a prompt parts from the last one — read that before guessing.
+  **LiteLLM reports 0 cached tokens on every LMStudio route but native `/v1/responses`, even on
+  a 98% hit**; Envoy reports them on `/v1/messages` and `/v1/responses`.
 - **UNSLOTH SOMETIMES 500s ON A VISION CALL, AND IT IS THE ENGINE** (seen 2026-09-04):
   `500 The model produced output that does not match the expected peg-gemma4 format`, from a
   request that succeeded three times out of three on retry. It surfaced through Envoy on

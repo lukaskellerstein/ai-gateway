@@ -157,6 +157,37 @@ Two extra requirements when `GATEWAY_ENGINE=unsloth`, and both fail quietly:
    `400 No model loaded`. Unsloth holds **one model at a time**, so more than one
    gateway on `unsloth` will thrash it — run one suite at a time.
 
+## `run_cache.py` — the prompt cache and the speed, per agent
+
+`run_all.py` asks "does it work". `run_cache.py` asks **"does the prompt cache work, and how
+fast is it"**, for every way of calling the gateway, on the aliases you name:
+
+```bash
+uv run run_cache.py --aliases lms-gemma4-26b,lms-qwen38-27b
+uv run run_cache.py --aliases unsloth-qwen38-27b --agents claude,claude-tuned
+```
+
+It runs **one multi-turn scenario per folder** — the one where a second request can reuse
+the first one's prompt — live, one after another, at thinking level `medium`. Nothing is
+replayed. Claude runs twice: `claude` as shipped, and `claude-tuned` with the two
+variables that stop it rewriting the prompt on every request.
+
+| Number | Read from |
+|:--|:--|
+| what the engine REALLY reused, TTFT, decode tok/s, the level in the prompt | `lms log stream` — **LMStudio only** |
+| what the client was TOLD was cached, tokens, TTFT on a streamed call, cost | [`gateway_records.py`](gateway_records.py) → `/spend/logs` |
+
+One JSON line per session goes to `cache-results/` (gitignored). The table comes from
+`../../benchmark/cache_report.py`, which reads the files of both gateways at once:
+
+```bash
+cd ../../benchmark && uv run cache_report.py ../litellm/tests/cache-results/*.jsonl ../envoy/tests/cache-results/*.jsonl
+```
+
+**`/spend/logs` needs the master key.** `gateway_records.py` reads `LITELLM_MASTER_KEY`
+from the shell, else the compose default. A paid alias bills through `AI_GATEWAY_KEY`
+when the shell carries one — mint a capped key for a paid run.
+
 ## What is NOT tested here
 
 - **Embeddings.** Every `*-embed` alias needs a different route from the chat one

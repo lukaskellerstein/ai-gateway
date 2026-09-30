@@ -42,7 +42,7 @@ from openai import OpenAI
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gateway import ALIAS as DEFAULT_MODEL  # noqa: E402
-from gateway import API_KEY, BASE_URL, BODY_EXTRAS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
+from gateway import API_KEY, BASE_URL, BODY_EXTRAS, EFFORT_EXTRAS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
 
 IMAGE_PATH = Path(__file__).resolve().parent / "test_image.png"
 
@@ -109,7 +109,8 @@ GATEWAY = Gateway(
     name=NAME,
     base_url=BASE_URL,
     api_key=API_KEY,
-    body_extras=BODY_EXTRAS,
+    # Plus the thinking level a run asks for, and nothing when it asks for none.
+    body_extras={**BODY_EXTRAS, **EFFORT_EXTRAS},
     checks_api_key=True,
     lists_models=True,
     echoes_alias=True,

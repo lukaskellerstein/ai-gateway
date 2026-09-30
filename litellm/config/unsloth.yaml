@@ -93,6 +93,18 @@ model_list:
       output_cost_per_token: 0.000001875
       max_tokens: 8192
       timeout: 3600
+      # WHY:        `drop_params: true` DELETES `reasoning_effort` on this `openai/` route too,
+      #             so Qwen's template ran its default, `xhigh`, for every caller. One system +
+      #             user message, `max_tokens: 1`: 62 prompt tokens at `xhigh` and 24 at
+      #             `medium` on 8888 direct, 62 and 62 through this route (2026-09-30). The
+      #             full reasoning, and what `xhigh` costs, is on `lms-qwen38-27b` in lms.yaml.
+      #             Unsloth's own /v1/messages ignores Claude Code's `output_config.effort`
+      #             with no gateway in between (62 and 62 on 8888), so no line here reaches it.
+      # SCOPE:      provider=openai (Unsloth)  route=/v1/chat/completions  client=every tests/
+      #             folder that sends a level
+      # PROVEN:     see GUARDED BY — green with this line, red without it (2026-09-30)
+      # GUARDED BY: tests/2_openai_client/05_reasoning_effort.py --model unsloth-qwen38-27b
+      allowed_openai_params: ["reasoning_effort"]
     model_info:
       max_input_tokens: 253952            # 262144 − the 8192 output reserve
       max_output_tokens: 8192

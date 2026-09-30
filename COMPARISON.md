@@ -11,6 +11,7 @@ This file answers that. It is the only place in the repo that compares them.
 - **[Seeing what went through](#seeing-what-went-through)** — the difference people hit first.
 - **[What they cost to run](#what-they-cost-to-run)** — memory, disk, startup. Measured.
 - **[What they cost per request](#what-they-cost-per-request)** — the benchmark.
+- **[Does the prompt cache hold](#does-the-prompt-cache-hold)** — every agent, both gateways, three engines.
 - **[Pick by situation](#pick-by-situation)** — a table you can point at.
 
 ---
@@ -25,6 +26,8 @@ This file answers that. It is the only place in the repo that compares them.
 | Caps spending | **yes** — virtual keys, budgets, spend logs | no, and cannot in this mode |
 | Would deploy to a cluster | no | **yes — the config is the cluster's config** |
 | Per-request cost | 10–20 ms | 10–20 ms — **the same** |
+| What the engine reuses from its cache | the same | **the same** — the client decides it, not the proxy |
+| Tells the client what was cached, on LMStudio | only on an `openai/` route's `/v1/responses` | on `/v1/messages` and `/v1/responses` |
 
 **Run LiteLLM.** It is the one every project on this laptop should call. It is the only one
 that can tell you what a request cost, cap what a caller spends, and show you the prompt and
@@ -253,6 +256,85 @@ Studio, MacBook with 128 GB. 10 rounds per scenario, round-robin, one warm-up ro
 
 ---
 
+## Does the prompt cache hold
+
+**Each agent's own multi-turn scenario, live, on both gateways, three engines, two models, at
+thinking level `medium`.** Run it yourself: `uv run run_cache.py --aliases <alias>` in each
+project's `tests/`, then `uv run cache_report.py <files>` in `benchmark/`. Measured
+**2026-09-30**: 96 sessions, **95 passed first time**, and the one failure passes after the fix
+below. Claude runs twice — as shipped,
+and with the two settings that stop it rewriting its prompt.
+
+### What the engine reused — LMStudio, last turn of each session
+
+LMStudio's own log says what it took from its cache, and **it was the same through both
+gateways**: same agent, same model, same share, to within a 256-token block. So one column per
+model, not per gateway:
+
+| Agent | Gemma 4 26B | Qwen 3.8 27B |
+|:--|--:|--:|
+| `1_http_client` | 23% | 0% — its two calls share no prefix |
+| `2_openai_client` | 80% | 56% |
+| `3_langchain_langgraph` | 79% | 57% |
+| `4_deepagents` | 97% | 93% |
+| **Claude Agent SDK, as shipped** | **22%** | **0%** |
+| Claude Agent SDK, two settings | 85–93% | 76–79% |
+| Codex | 97–98% | 98% |
+| OpenCode | 98% | 96–97% |
+
+- **The gateway does not change the reuse. The client does.** The only low rows with a real
+  conversation are Claude as shipped.
+- **Claude Code rewrites its own system prompt after every tool result.** It adds a
+  `<total_tokens>` line there, in front of the tool list and every message, so the whole
+  conversation is recomputed each turn. `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` and
+  `CLAUDE_CODE_ATTRIBUTION_HEADER=0` fix it — `litellm/README.md` § Use it from Claude Code,
+  trap 4. The second one matters across sessions: the billing header carries a suffix that
+  changes per conversation, so no two Claude sessions share even the system prompt. Codex and
+  OpenCode reuse their whole harness from the session before.
+- **Short prompts read low because LMStudio mostly reuses in 256-token blocks.** 47 of the 49
+  reuse counts above 256 were exact multiples of 256, so a 450-token prompt can lose up to 255
+  tokens of a perfect hit. At Codex's 8 500 tokens the loss is 2%.
+
+### What the client is told
+
+| | LiteLLM | Envoy |
+|:--|:--|:--|
+| LMStudio, `/v1/chat/completions` | 0 — LMStudio reports none on this route, even on a 98% hit | 0, the same |
+| LMStudio, Claude (`/v1/messages`) | 0 — LiteLLM makes it a chat call | **reported**, 24–44% of the session; 0 for Claude as shipped on Qwen |
+| LMStudio, Codex (`/v1/responses`) | 0 on `lm_studio/`; 80% on `lms-qwen38-27b`, which is on `openai/` | **reported**, 49–79% |
+| Unsloth, chat | reported, 42–69% | reported, 42–69% |
+| OpenRouter Gemma | reported, 40–69% | reported, 40–69% |
+| OpenRouter Qwen | 0 on most sessions | 45–53% on three sessions, 0 on the rest |
+
+These are shares of the **whole session**, first request included, so a two-request session
+with a perfect second hit reads **50%**. OpenRouter's Qwen figure depends on which provider
+OpenRouter picks for the call, not on the gateway. Unsloth reported 0 on Claude through Envoy
+and on Codex through both — whether it hit is unknown, because it keeps no log to read.
+
+### Speed and cost
+
+Medians over each alias's eight sessions. The decode speed is the engine's own on LMStudio and
+LiteLLM's streamed figure elsewhere; Envoy records no first token, so it has none of its own.
+
+| Alias | Decode tok/s | Time to first token | Cost of all 8 sessions |
+|:--|--:|--:|--:|
+| `lms-gemma4-26b` | 102–112 | 0.3–0.4 s | $0.006–0.008, shadow |
+| `lms-qwen38-27b` | 31 | 1.3 s | $0.009–0.010, shadow |
+| `unsloth-gemma4-26b` | 119 | 0.2 s | $0.005, shadow |
+| `unsloth-qwen38-27b` | 27 | 2.1 s | $0.008, shadow |
+| `openrouter-gemma4-26b` | 57 | 0.7 s | $0.004 |
+| `openrouter-qwen38-27b` | 39 | 0.5 s | $0.026–0.028 |
+
+The whole paid run cost about **$0.04** across both gateways. LiteLLM's half logged $0.0186
+on its key, three pre-check calls included — OpenRouter's own figure — against $0.030 at the
+table prices, because the Qwen route's price is the dearest provider's.
+
+**The one fix.** Codex failed on `lms-qwen38-27b` through LiteLLM after the thinking-level fix
+of the same day: LiteLLM turned Codex's `reasoning` object into a malformed field on the
+`lm_studio/` provider. Moving that alias to `openai/` fixed it — `TESTING.md` §6.12.
+
+---
+
 ## Pick by situation
 
 | If you are… | Choose | Because |
@@ -268,6 +350,7 @@ Studio, MacBook with 128 GB. 10 rounds per scenario, round-robin, one warm-up ro
 | running many gateways, or on a small machine | **Envoy** | 130 MB and a 1.3 s start, against 1 GB and a database |
 | comparing two engines' behaviour | **either** | they serve the same aliases; that is the point |
 | choosing on latency | **either** | 10–20 ms apart. This is not the decision |
+| checking whether an agent's prompt cache holds | **Envoy** | it reports cached tokens on the Claude and Codex routes; LiteLLM reports 0 there on LMStudio. The engine reuses the same through both |
 
 ### Running both
 

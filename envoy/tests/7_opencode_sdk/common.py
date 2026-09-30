@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 # The shared facts — the base URL, the key, the alias.
 sys.path.insert(0, str(HERE.parent))
 
-from gateway import ALIAS, API_KEY, BASE_URL, NAME, ROOT_URL  # noqa: E402
+from gateway import ALIAS, API_KEY, BASE_URL, NAME, REASONING_EFFORT, ROOT_URL  # noqa: E402
 
 DEFAULT_MODEL = ALIAS
 
@@ -49,6 +49,13 @@ START_HINT = "cd ../.. && podman compose up -d"
 # The provider id carries the gateway's name, so a stray `~/.config/opencode`
 # entry cannot collide with it.
 PROVIDER_ID = f"ai-gateway-{NAME}"
+
+# THE THINKING LEVEL a run asks for (../gateway.py). OpenCode hands a model's
+# `options` to the AI SDK provider, which sends `reasoningEffort` as the body's
+# `reasoning_effort`.
+EFFORT_MODEL_OPTIONS: dict[str, Any] = (
+    {"options": {"reasoningEffort": REASONING_EFFORT}} if REASONING_EFFORT else {}
+)
 
 # Scenario 04 has OpenCode spawn this file and talk to it over stdio.
 STDIO_SERVER = HERE / "mcp_server.py"
@@ -71,7 +78,7 @@ def config_for(alias: str, **extra: Any) -> dict:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": f"AI Gateway ({NAME})",
                 "options": {"baseURL": BASE_URL, "apiKey": API_KEY},
-                "models": {alias: {"name": alias}},
+                "models": {alias: {"name": alias, **EFFORT_MODEL_OPTIONS}},
             }
         },
         "model": f"{PROVIDER_ID}/{alias}",

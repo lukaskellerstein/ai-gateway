@@ -94,7 +94,10 @@ def ceiling(gateway: Gateway) -> dict:
     LiteLLM renames it upstream and declares no extras at all, so the fallback here
     is what that project uses.
     """
-    return {next(iter(gateway.body_extras), "max_tokens"): TINY_CEILING}
+    # BY NAME, not the first key: `body_extras` also carries `reasoning_effort` when
+    # a run sets a thinking level, and that must never become the ceiling's name.
+    names = ("max_completion_tokens", "max_tokens")
+    return {next((name for name in names if name in gateway.body_extras), "max_tokens"): TINY_CEILING}
 
 
 def check_api_key(gateway: Gateway, model: str) -> str:

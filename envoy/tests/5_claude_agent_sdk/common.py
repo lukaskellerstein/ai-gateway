@@ -70,6 +70,7 @@ from gateway import (  # noqa: E402
     BASE_URL,
     BODY_EXTRAS,
     NAME,
+    REASONING_EFFORT,
     REQUEST_TIMEOUT_SECONDS,
     ROOT_URL,
 )
@@ -83,6 +84,10 @@ os.environ["ANTHROPIC_AUTH_TOKEN"] = API_KEY
 # servers. Left in the shell it silently sends the prompt to api.anthropic.com and
 # bills a real account, so it is removed rather than blanked.
 os.environ.pop("ANTHROPIC_API_KEY", None)
+# THE THINKING LEVEL a run asks for (../gateway.py). The CLI reads its own variable
+# and sends the level as `output_config.effort`; left unset it sends `xhigh`.
+if REASONING_EFFORT:
+    os.environ["CLAUDE_CODE_EFFORT_LEVEL"] = REASONING_EFFORT
 
 import anyio  # noqa: E402
 

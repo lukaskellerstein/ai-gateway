@@ -166,6 +166,25 @@ case §6.6 fixed. **That variable no longer exists** — auto-discovery was remo
 were a few hundred small `gpt-5.4-mini` requests. **Neither engine cost more than a few
 cents**, which is worth knowing before anyone avoids testing them again.
 
+### The cache run — every agent, 2026-09-30
+
+`tests/run_cache.py` in both projects: one live session per agent (8, Claude twice), at
+`medium`, both gateways on `all`. Results and the reading of them: `COMPARISON.md` § Does the
+prompt cache hold.
+
+| Alias | LiteLLM | Envoy |
+|:--|:--|:--|
+| `lms-gemma4-26b` | ✅ 8/8 | ✅ 8/8 |
+| `lms-qwen38-27b` | ✅ 8/8 — Codex after §6.12 | ✅ 8/8 |
+| `unsloth-gemma4-26b` | ✅ 8/8 | ✅ 8/8 |
+| `unsloth-qwen38-27b` | ✅ 8/8 | ✅ 8/8 |
+| `openrouter-gemma4-26b` | ✅ 8/8 | ✅ 8/8 |
+| `openrouter-qwen38-27b` | ✅ 8/8 | ✅ 8/8 |
+
+Plus the whole LiteLLM suite, 7/7, on `lms-qwen38-27b` after its provider moved (§6.12). Versions:
+the Claude SDK's bundled CLI 2.1.259 (not the `claude` on PATH, 2.1.285), openai-codex
+0.155.1, opencode 1.18.30.
+
 ### Why the 2026-09-04 cells could not be trusted — discard them
 
 A `matrix.sh` left running by the previous session kept `sed`-ing both `.env` files and
@@ -387,6 +406,18 @@ agent at Envoy with a hosted OpenAI model. *Prove a gap, never shim it.*
 `2_openai_client/03_multimodal.py`. Passed 3/3 on retry when it appeared on 2026-09-04, and
 **did not reappear anywhere in the 2026-09-05 runs.** Re-run first; only investigate if it
 repeats.
+
+### 5.5 Claude Code's main turns reach Qwen at `xhigh` through LiteLLM
+
+Found 2026-09-30 by `tests/run_cache.py`, whose engine log records the level each prompt
+carries. On `lms-qwen38-27b` through LiteLLM, Claude's side calls arrived at `medium` and its
+conversation turns at `xhigh`, with `CLAUDE_CODE_EFFORT_LEVEL=medium` set. LiteLLM's
+`/v1/messages` delivers the level only when the body carries `thinking: {type: adaptive}` next
+to `output_config.effort`; `output_config.effort` alone is dropped, and a `thinking` budget is
+mapped to a level of its own (`litellm/README.md` § Provider × route). Envoy's `-anthropic`
+alias does not translate and does not have it. **Nothing fails** — the turn is only slower, so
+`run_all.py` stays green. Next step: record which form the SDK's CLI 2.1.259 sends, then decide
+between a per-alias setting and an upstream report.
 
 ---
 
@@ -720,6 +751,30 @@ ignores this key — the SDK drives the app-server, not `codex exec`, and there 
 
 **It does not make a LOCAL alias call the tool.** That is §5.1, a different bug in the same
 scenario.
+
+### 6.12 LiteLLM dropped Qwen's thinking level — and the fix broke Codex until the provider moved
+
+**Symptom, 2026-09-30.** Every caller's `reasoning_effort` vanished on `lms-qwen38-27b` and
+`unsloth-qwen38-27b`, and Qwen ran its default, `xhigh` — one agent step took 693 s. Qwen writes
+the level into its system prompt, so the prompt size shows it: 62 tokens at `xhigh`, 24 at
+`medium`, and 62 / 62 through LiteLLM.
+
+**Fix 1:** `allowed_openai_params: ["reasoning_effort"]` on both routes — `drop_params` had
+removed the field. Guarded by `2_openai_client/05_reasoning_effort.py`, red before, green after.
+
+**Fix 1 broke Codex on `lms-qwen38-27b`**, found by `tests/run_cache.py`: `400 'reasoning_effort'
+must be a string` in 0.5 s. Codex sends `reasoning: {effort, summary}`; `lm_studio/` has no
+native Responses config, so LiteLLM makes the call a chat call and, because `summary` is set,
+passes the whole object. `unsloth-qwen38-27b` was already on `openai/` and passed.
+
+**Fix 2:** `lms-qwen38-27b` moved to `openai/` against the same LMStudio, so `/v1/responses`
+reaches LMStudio's own Responses route, which takes the object and applies the level (54 / 12
+tokens). The whole LiteLLM suite passed 7/7 on it at `medium`, and Codex now also reports its
+cached tokens (80% over a session, against 0 before).
+
+**Tried and rejected:** a second deployment for `/v1/responses` only. LiteLLM's router does not
+pick a deployment by `model_info.supported_endpoints`, so it would load-balance Codex onto the
+broken one at random.
 
 ## 7. How config fixes are kept straight
 

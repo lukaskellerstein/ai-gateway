@@ -87,13 +87,54 @@ model_list:
   # $1.875 per 1M (2026-09-29) — the cloud twin's rate, so a budget ceiling still trips.
   - model_name: lms-qwen38-27b
     litellm_params:
-      model: lm_studio/qwen/qwen3.8-27b
+      # WHY:        `openai/`, NOT `lm_studio/` like every other alias here, and only because
+      #             of the `allowed_openai_params` line below. Codex sends
+      #             `reasoning: {effort, summary}` on /v1/responses. `lm_studio/` has no native
+      #             Responses config, so LiteLLM turns the call into a chat call and — because
+      #             `summary` is set — passes the WHOLE OBJECT as `reasoning_effort`
+      #             (litellm/responses/litellm_completion_transformation/transformation.py,
+      #             main-stable 2026-09-30). Once the line below let it through, LMStudio
+      #             answered `400 'reasoning_effort' must be a string` and Codex failed in
+      #             0.5 s. `openai/` HAS a native Responses config, so the call reaches
+      #             LMStudio's own /v1/responses untouched, which takes the object and applies
+      #             the level: 54 prompt tokens at `xhigh`, 12 at `medium` (2026-09-30, direct).
+      #             `unsloth-qwen38-27b` was already `openai/`, and Codex passed there.
+      # SCOPE:      provider=openai→LMStudio  route=/v1/responses  client=6_codex_sdk
+      # PROVEN:     2026-09-30, tests/run_cache.py codex × lms-qwen38-27b: fail on `lm_studio/`
+      #             with the line below, pass on `openai/`
+      # GUARDED BY: tests/6_codex_sdk/02_session.py --model lms-qwen38-27b
+      # TRIED AND REJECTED: a second deployment for /v1/responses only — LiteLLM's router
+      #             does not filter deployments by `model_info.supported_endpoints`, so it would
+      #             load-balance Codex onto the chat one at random. Dropping the line below —
+      #             that puts every caller back on `xhigh`.
+      model: openai/qwen/qwen3.8-27b
       api_base: os.environ/LM_STUDIO_API_BASE
       api_key: "sk-lmstudio"
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.000001875
       max_tokens: 8192
       timeout: 3600
+      # WHY:        LiteLLM's `lm_studio/` provider does not list `reasoning_effort`, so
+      #             `drop_params: true` (settings.yaml) DELETED it and Qwen's template ran its
+      #             own default, `xhigh`, for every caller — Claude Code's `output_config.effort`
+      #             included, which LiteLLM maps to this same field. The template writes the
+      #             level into the top of the system prompt, which is how to see it: one system
+      #             + user message, `max_tokens: 1`, 62 prompt tokens at `xhigh` and 24 at
+      #             `medium` on LMStudio direct, but 62 and 62 through this route (2026-09-30).
+      #             `xhigh` is not a small cost: one agent step took 693 s and answered NOTHING,
+      #             `medium` 231 s (2026-09-30, straight to LMStudio).
+      #             Values, the same direct and through this route (2026-09-30, `openai/`):
+      #             LMStudio runs `high` as `xhigh` and `minimal` as `low`, and answers `max`
+      #             with a 400; `none` turns thinking off.
+      # SCOPE:      provider=openai→LMStudio (see `model:` above)  route=/v1/chat/completions,
+      #             and /v1/messages, which LiteLLM turns into it. /v1/responses goes native
+      #             and needs no allowance  client=every tests/ folder but 6_codex_sdk
+      # PROVEN:     see GUARDED BY — red without this line (2026-09-30, on `lm_studio/` here and
+      #             on Unsloth's `openai/` route), green with it on `openai/` (the whole suite
+      #             7/7 at `medium`, 2026-09-30)
+      # GUARDED BY: tests/2_openai_client/05_reasoning_effort.py --model lms-qwen38-27b
+      # KEEP IT on any new or renamed LMStudio Qwen alias, and on the copy in lukas.yaml.
+      allowed_openai_params: ["reasoning_effort"]
     model_info:
       max_input_tokens: 253952            # 262144 − the 8192 output reserve
       max_output_tokens: 8192

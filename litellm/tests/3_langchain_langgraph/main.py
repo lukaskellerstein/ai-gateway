@@ -47,7 +47,16 @@ from langgraph.prebuilt import ToolNode, tools_condition
 # The three shared facts — base URL, key, alias. See ../gateway.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway import ALIAS, API_KEY, BASE_URL, BODY_EXTRAS, MAX_TOKENS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
+from gateway import (  # noqa: E402
+    ALIAS,
+    API_KEY,
+    BASE_URL,
+    BODY_EXTRAS,
+    MAX_TOKENS,
+    NAME,
+    REASONING_EFFORT,
+    REQUEST_TIMEOUT_SECONDS,
+)
 
 # ---------------------------------------------------------------------------
 # Two tools that return FIXED NUMBERS
@@ -94,6 +103,7 @@ def build_model(alias: str) -> ChatOpenAI:
         base_url=BASE_URL,
         api_key=API_KEY,
         max_tokens=BODY_EXTRAS.get("max_tokens"),
+        reasoning_effort=REASONING_EFFORT,  # None sends nothing — see ../gateway.py
         timeout=REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
         temperature=0,  # an agent that answers differently on Tuesday is a bug

@@ -50,6 +50,7 @@ from gateway import (  # noqa: E402
     BASE_URL,
     BODY_EXTRAS,
     NAME,
+    REASONING_EFFORT,
     REQUEST_TIMEOUT_SECONDS,
     ROOT_URL,
 )
@@ -93,6 +94,7 @@ def build_model(alias: str) -> ChatOpenAI:
         base_url=BASE_URL,
         api_key=API_KEY,
         max_tokens=BODY_EXTRAS.get("max_tokens"),
+        reasoning_effort=REASONING_EFFORT,  # None sends nothing — see ../gateway.py
         timeout=REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
         temperature=0,
