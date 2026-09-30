@@ -134,6 +134,11 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   file must also keep its two `<alias>-anthropic` rules and its `Anthropic`-schema
   `AIServiceBackend`**, or `tests/5_claude_agent_sdk` exits on that engine — by design, and
   the message names the file.
+- **You touched the prompt path** — an alias's provider, a callback, a Claude Code setting,
+  anything that can change what an engine sees — run `uv run run_cache.py --aliases <alias>`
+  in BOTH `tests/`. The "last turn" column must not fall, and `cache_report.py`'s rewrite list
+  names the text that broke it. LMStudio only shows what the engine reused; for the other
+  engines only the reported figure exists.
 - **Tool calling or `/v1/messages`** — a plain completion is not enough. Send a request
   carrying a tool schema and confirm a structured `tool_calls` reply, not raw-text tool
   syntax. That distinction is the entire reason the provider pin exists.

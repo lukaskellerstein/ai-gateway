@@ -161,16 +161,49 @@ Both scripts check PATH first and print the install line rather than failing ins
 a library. `6_codex_sdk` needs nothing extra: `openai-codex` ships its own pinned
 runtime.
 
+## `run_cache.py` — the prompt cache and the speed, per agent
+
+`run_all.py` asks "does it work". `run_cache.py` asks **"does the prompt cache work, and how
+fast is it"**, for every way of calling the gateway, on the aliases you name:
+
+```bash
+uv run run_cache.py --aliases lms-gemma4-26b,lms-qwen38-27b
+uv run run_cache.py --aliases unsloth-qwen38-27b --agents claude,claude-tuned
+```
+
+It runs **one multi-turn scenario per folder** — the one where a second request can reuse
+the first one's prompt — live, one after another, at thinking level `medium`. Nothing is
+replayed. Claude runs twice: `claude` as shipped, and `claude-tuned` with the two
+variables that stop it rewriting the prompt on every request.
+
+| Number | Read from |
+|:--|:--|
+| what the engine REALLY reused, TTFT, decode tok/s, the level in the prompt | `lms log stream` — **LMStudio only** |
+| per request: tokens, duration, status | [`gateway_records.py`](gateway_records.py) → the access log, via `podman logs` |
+| per session: cached tokens the client was TOLD about | `gateway_records.py` → `gen_ai_client_token_usage` on `26064/metrics` |
+
+**The access log needs `AIGW_DEBUG=true`.** Without it Envoy writes no per-request line
+at all, and every session reports zero requests. It also carries no time to first token
+and no cost — `cache_report.py` prices the tokens itself.
+
+One JSON line per session goes to `cache-results/` (gitignored). The table comes from
+`../../benchmark/cache_report.py`, which reads the files of both gateways at once:
+
+```bash
+cd ../../benchmark && uv run cache_report.py ../litellm/tests/cache-results/*.jsonl ../envoy/tests/cache-results/*.jsonl
+```
+
 ## What is NOT tested here
 
 - **Embeddings.** The `*-embed` aliases route fine, but the chat client these
   folders share does not drive `/v1/embeddings`.
 - **`/mcp`.** The MCP gateway needs `--mcp-config`, which `../compose.yml` does not
   pass. Nothing is wired up, so there is nothing to test yet.
-- **`/metrics` on 26064.** Prometheus output, untested.
-- **The two PAID engines.** `config/openrouter.yaml` and `config/openai.yaml` parse
-  and register their aliases, but no call has been made through either — that would
-  bill a real account.
+- **`/metrics` on 26064**, beyond the one histogram `run_cache.py` reads —
+  `gen_ai_client_token_usage`.
+- **`openai.yaml`.** It parses and registers its aliases, but no call has been made
+  through it — that would bill a real account. OpenRouter has: `run_cache.py` ran
+  every agent on both OpenRouter aliases on 2026-09-30.
 - **`openrouter-gemma4-26b-free`.** Absent here by design: no `extra_body`, so no provider pin.
 - **That the same alias answers on 24000.** See the note above.
 

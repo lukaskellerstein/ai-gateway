@@ -177,6 +177,24 @@ Set it to `true` and you get one JSON line per request:
 Authorization header redacted. That is this gateway's equivalent of LiteLLM's Logs tab, and it
 is also the reason not to leave it on.
 
+### The prompt cache
+
+**The access line carries no cached tokens. `26064/metrics` does**, whatever `AIGW_DEBUG` says:
+`gen_ai_client_token_usage_sum{gen_ai_token_type="cached_input", gen_ai_original_model="<alias>"}`
+is the running total per alias. What reaches it depends on the route, because Envoy forwards
+the Anthropic and Responses routes to LMStudio untranslated (`tests/run_cache.py`, 2026-09-30):
+
+| Route, on LMStudio | Cached tokens reported |
+|:--|:--|
+| `/v1/chat/completions` | **0**, even on a 98% hit — LMStudio reports none on this route |
+| `/anthropic/v1/messages` on `<alias>-anthropic` | reported — 24–44% over a Claude session with the two settings, down to 0 without |
+| `/v1/responses` | reported — 49–79% over a Codex session |
+
+LiteLLM reports 0 on all three unless the alias is on `openai/`. **What the engine reuses is the
+same through either gateway** — that is the engine and the client, not the proxy. Claude Code
+is the client that defeats it; the two settings that fix it are in `../litellm/README.md`
+§ Use it from Claude Code, trap 4, and apply here unchanged.
+
 ## One file per engine, and one that holds them all
 
 `config/` carries seven files. Six are one engine each; `all.yaml` is the default and holds

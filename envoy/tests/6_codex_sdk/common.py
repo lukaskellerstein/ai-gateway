@@ -45,7 +45,7 @@ HERE = Path(__file__).resolve().parent
 # The shared facts — the Responses base URL, the key, the alias.
 sys.path.insert(0, str(HERE.parent))
 
-from gateway import ALIAS, API_KEY, NAME, RESPONSES_BASE_URL, ROOT_URL  # noqa: E402
+from gateway import ALIAS, API_KEY, NAME, REASONING_EFFORT, RESPONSES_BASE_URL, ROOT_URL  # noqa: E402
 
 from openai_codex import (  # noqa: E402
     ApprovalMode,
@@ -80,6 +80,11 @@ RUNTIME_ENV = {CODEX_KEY_ENV: API_KEY, "CODEX_HOME": CODEX_HOME.name}
 
 PROVIDER = "ai_gateway"
 
+# THE THINKING LEVEL a run asks for (../gateway.py), in Codex's own config key.
+EFFORT_OVERRIDES: tuple[str, ...] = (
+    (f'model_reasoning_effort="{REASONING_EFFORT}"',) if REASONING_EFFORT else ()
+)
+
 # Scenario 04 spawns this file as a SEPARATE PROCESS and Codex talks to it over
 # stdio. It writes a marker when it starts, which is what 04 asserts on.
 STDIO_SERVER = HERE / "mcp_server.py"
@@ -110,7 +115,8 @@ def codex_config(alias: str) -> CodexConfig:
             # directory's cleanup then raced with it and failed (2026-09-23).
             # The tests want no plugin at all, so the feature is off.
             "features.plugins=false",
-        ),
+        )
+        + EFFORT_OVERRIDES,
     )
 
 

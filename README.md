@@ -526,9 +526,16 @@ you wait for. Run the numbers yourself with [`benchmark/`](benchmark/README.md):
 cd benchmark && uv run main.py --rounds 10
 ```
 
+**The gateway does not change what an engine reuses from its prompt cache either — the client
+does.** Every agent was run on both gateways on 2026-09-30, and the one that defeats the cache
+is Claude Code as shipped: set `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` and
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` against a local engine. Each project's
+`tests/run_cache.py` measures it.
+
 > **[`COMPARISON.md`](COMPARISON.md) is the full comparison** — every feature side by side, the
-> observability difference in detail, the measured resource table, the benchmark, and a
-> pick-by-situation table. Read it before committing a project to one of them.
+> observability difference in detail, the measured resource table, the benchmark, the prompt
+> cache per agent, and a pick-by-situation table. Read it before committing a project to one
+> of them.
 
 ## Repository layout
 
@@ -544,10 +551,13 @@ ai-gateway/
 │   ├── .env.example                tracked; the key lines are blank BY DESIGN
 │   ├── config/                     the alias list — YAML, one file per engine,
 │   │                               plus all.yaml which INCLUDES all five
-│   ├── tests/                      SEVEN folders: raw HTTP, the OpenAI client, 5 agent SDKs
+│   ├── tests/                      SEVEN folders: raw HTTP, the OpenAI client, 5 agent SDKs,
+│   │                               run_all.py (does it work) and run_cache.py (is the
+│   │                               prompt cache used, how fast)
 │   └── README.md
 ├── benchmark/                  what the GATEWAY itself costs — the only thing here
-│                               that calls both ports. No dependencies
+│                               that calls both ports — and cache_report.py, the one
+│                               table over both projects' run_cache.py. No dependencies
 ├── envoy/                      compose project `ai-gateway-envoy`      PORT 26000
 │   ├── compose.yml                 ONE service: aigw. No database
 │   ├── .env.example

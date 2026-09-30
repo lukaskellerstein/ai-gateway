@@ -49,7 +49,7 @@ from pathlib import Path
 # lets this dependency-free folder use it.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gateway import ALIAS, API_KEY, BASE_URL, BODY_EXTRAS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
+from gateway import ALIAS, API_KEY, BASE_URL, BODY_EXTRAS, EFFORT_EXTRAS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
 
 QUESTION = "What is the capital of France? Answer in one short sentence."
 
@@ -94,6 +94,8 @@ def plain_call(model: str) -> str:
         # EMPTY on LiteLLM and `{"max_tokens": 2048}` on the two sibling gateways.
         # LiteLLM stores a ceiling on the route; they store none. See ../gateway.py.
         **BODY_EXTRAS,
+        # The thinking level a run asks for, and nothing when it asks for none.
+        **EFFORT_EXTRAS,
     }
 
     print(f"--- Request body: ---\n{json.dumps(body, indent=2)}")
@@ -119,6 +121,7 @@ def streaming_call(model: str) -> str:
         "messages": [{"role": "user", "content": "Count from 1 to 5, digits only."}],
         "stream": True,
         **BODY_EXTRAS,
+        **EFFORT_EXTRAS,
     }
 
     print("--- Streaming: ---")

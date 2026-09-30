@@ -1,7 +1,14 @@
 # benchmark — what does the gateway itself cost?
 
-One question: both gateways serve the same alias from the same engine, so
-**does the choice of gateway change what a caller waits for?**
+**The repo measures two things, and this table is the map to both:**
+
+| Question | Run | Lives there because |
+|:--|:--|:--|
+| What does the proxy itself cost per request? | `main.py`, here | it calls both ports and nothing else, so it belongs to neither project |
+| Does each agent's prompt cache hold, and how fast is it? | `<project>/tests/run_cache.py`, then `cache_report.py` here | it runs that project's seven test folders; only the table spans both gateways — [§ below](#cache_reportpy--the-table-for-testsrun_cachepy) |
+
+The rest of this page is about the first question: both gateways serve the same alias
+from the same engine, so **does the choice of gateway change what a caller waits for?**
 
 ```bash
 cd benchmark
@@ -97,3 +104,18 @@ it still will not tell you that an alias present on 24000 is missing on 26000.
 
 **Read the medians.** A local engine's tail is the engine — a model that pauses
 for 60 ms because something else touched the GPU is not a slow proxy.
+
+## `cache_report.py` — the table for `tests/run_cache.py`
+
+`main.py` times one request. Each project's `tests/run_cache.py` runs whole agent
+sessions and records the prompt cache and the speed per request. `cache_report.py` turns
+those files into two Markdown tables — cache per agent, and every session:
+
+```bash
+uv run cache_report.py ../litellm/tests/cache-results/*.jsonl ../envoy/tests/cache-results/*.jsonl
+```
+
+It reads **only the files named on the command line**, so this folder still reads
+nothing a project owns. Its prices are copied by hand from `litellm/config/`, with
+the date, for the same reason — and Envoy records no cost to read anyway. How to read
+the two cache columns is at the top of the file.

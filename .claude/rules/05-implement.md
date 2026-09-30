@@ -302,7 +302,8 @@ ai-gateway/
 │                            pick which. THE BENCHMARK RESULTS LIVE HERE
 ├── TESTING.md              the testing handover: versions, coverage, open bugs
 ├── benchmark/              what the gateway itself costs. Calls both ports;
-│                            reads no project's files. No dependencies
+│                            reads no project's files. No dependencies.
+│                            cache_report.py: the table over tests/run_cache.py
 ├── litellm/                compose project `ai-gateway`         PORT 24000
 │   ├── compose.yml             postgres · litellm. name: DO NOT RENAME
 │   ├── .env.example            tracked; the key lines are blank BY DESIGN

@@ -95,6 +95,8 @@ two paths** — `../envoy` serves `/anthropic/v1/messages`, but only on a separa
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `1` | beta headers a non-Anthropic backend does not implement |
 | `API_TIMEOUT_MS` | `3600000` | the default expires while a local model is still reading the prompt |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | the alias's `Input` figure | without it Claude Code assumes 200000 for every alias |
+| `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` | `off` | it rewrites the system prompt after every tool result — trap 4 |
+| `CLAUDE_CODE_ATTRIBUTION_HEADER` | `0` | a per-conversation line at the very top of the system prompt — trap 4 |
 
 ```bash
 ANTHROPIC_BASE_URL="http://localhost:24000" \
@@ -106,6 +108,8 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL="lms-gemma4-e4b" \
 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
 API_TIMEOUT_MS=3600000 \
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=122880 \
+CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off \
+CLAUDE_CODE_ATTRIBUTION_HEADER=0 \
 claude
 ```
 
@@ -113,7 +117,7 @@ The same keys go in a `.claude/settings.json` `env` block if you want them to pe
 warnings about that file: **never commit a gateway key into it**, and an `env` block there
 silently overrides anything you set on the command line.
 
-Three traps, in the order people hit them:
+Four traps, in the order people hit them:
 
 1. **Set all three model variables.** Leave one unset and Claude Code sends a real Claude
    model id, which this gateway has never heard of:
@@ -126,6 +130,15 @@ Three traps, in the order people hit them:
    first, that patience is wasted.
 3. **Never pick the `[1m]` variant in `/model`.** It forces a 1.0M window unconditionally and
    ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so auto-compact never fires in time.
+4. **Turn off the two things that rewrite the prompt, or a local engine's cache cannot help.**
+   A local engine reuses only the PREFIX its last prompt shares with the new one. After every
+   tool result Claude Code writes a new `<total_tokens>` line into its system prompt, which sits
+   in front of the tool list and every message — so the whole conversation is recomputed on
+   every turn. Measured with `tests/run_cache.py` on LMStudio, both gateways, 2026-09-30: the
+   last turn reused **22% on Gemma 4 26B and 0% on Qwen 3.8 27B as shipped, 76–93% with both
+   variables set**. The billing header adds a suffix that changes per conversation
+   (`cc_version=2.1.259.994`) at the very top, so without it no two sessions share even the
+   system prompt. Codex and OpenCode need neither: 96–98% on the same engines.
 
 **Tool calling works on all three default aliases.** `lms-gemma4-e4b`, `unsloth-gemma4-e4b` and `ollama-gemma4-e4b`
 each returned a structured `tool_calls` reply — verified 2026-08-27, and re-verified on
@@ -211,6 +224,55 @@ streaming runs carried thinking, against 0/5 before.**
 | Upgrade 1.95.0 → 1.99.1 on its own | no effect — 0/5. The bug is routing, not version |
 | `model_info.supports_reasoning: true` | no effect — 0/3 |
 | Waiting on BerriAI/litellm#29518, #27946 | **both already closed** before this was measured, and neither fixes it; #29518's fix shipped in 1.95.0 where it still reproduced |
+
+### The thinking level — `reasoning_effort` is DROPPED unless the alias allows it
+
+Qwen 3.8 writes the level into the TOP of its system prompt, and defaults to `xhigh` —
+where one agent step took 693 s and answered nothing. `medium` writes nothing. So the
+prompt size is the proof the level arrived: **62 prompt tokens at `xhigh`, 24 at
+`medium`, 50 at `low`** on a one-line prompt (2026-09-30, `lms-qwen38-27b`). Gemma 4
+ignores the field: 25 tokens at every level.
+
+| Route | What arrives | Measured 2026-09-30 |
+|:--|:--|:--|
+| `lm_studio/` or `openai/`, `/v1/chat/completions` | **nothing** — `drop_params` drops it | 62 / 62 before the fix; 62 / 24 with `allowed_openai_params: ["reasoning_effort"]`, on both providers |
+| `lm_studio/`, `/v1/responses` | LiteLLM makes it a chat call, and passes Codex's `{effort, summary}` **as a whole object** | with the fix, LMStudio answers `400 'reasoning_effort' must be a string` — Codex fails in 0.5 s |
+| `openai/`, `/v1/responses` | **native** — the object arrives as sent | 54 / 12 on LMStudio direct; Codex 4/4 through the route |
+| `/v1/messages`, `thinking: {type: adaptive}` + `output_config.effort` | the level | 24 at `medium` |
+| `/v1/messages`, `output_config.effort` alone | **nothing** | 62 |
+| `/v1/messages`, `thinking` enabled with a budget | a level from the budget | 1024 → 50 (`low`); 4096 → 62 |
+| `openrouter/`, `/v1/chat/completions` | the level | 68 prompt tokens at `low`, 42 at `high` |
+
+The fix is per alias, on the two Qwen routes in `config/lms.yaml` and
+`config/unsloth.yaml`, each with its four-field header. `tests/2_openai_client/05_reasoning_effort.py`
+goes red without it. **`lms-qwen38-27b` is the one `lms-*` alias on `openai/`**, for the
+`/v1/responses` rows: with the fix, `lm_studio/` breaks Codex. A second deployment for
+`/v1/responses` only was the first idea and does not work — LiteLLM's router does not pick a
+deployment by `model_info.supported_endpoints`, so it would send Codex to either at random.
+**Unsloth's own `/v1/messages` ignores `output_config.effort` with no gateway in the path**,
+so that row is the engine, not LiteLLM. Envoy passes the field through untouched on every
+route.
+
+**Claude Code's main turns still reach Qwen at `xhigh` through LiteLLM**
+(`tests/run_cache.py`, 2026-09-30): it sends the level in a form from the `/v1/messages` rows
+above that LiteLLM drops. Its side calls arrive at `medium`. Envoy's `-anthropic` alias does not
+have the problem.
+
+### What the client is told about the cache
+
+The engine's own log is the truth — `lms log stream -s runtime` prints `Prompt cache restore:
+cached_tokens=N`. What reaches the client depends on the route (`tests/run_cache.py`,
+2026-09-30):
+
+| Route, on LMStudio | Cached tokens the client sees |
+|:--|:--|
+| `/v1/chat/completions` | **0**, even on a 98% hit — LMStudio reports none on this route |
+| `/v1/messages`, `/v1/responses` on `lm_studio/` | **0** — LiteLLM turns both into chat calls |
+| `/v1/responses` on `openai/` | reported — 80% over a Codex session on `lms-qwen38-27b` |
+
+So a budget ceiling on local traffic charges every cached token as a full one here, and
+LiteLLM's Logs tab says nothing about the cache. Envoy reports it on its native routes —
+root `COMPARISON.md` § Does the prompt cache hold.
 
 **If a client ever needs the opposite of a global flag, do not flip it.** Give that alias its
 own route — `model_info.supported_endpoints: ["/v1/messages"]` is per-alias — and record both

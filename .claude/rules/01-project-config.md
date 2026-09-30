@@ -20,7 +20,9 @@ The one root folder is `benchmark/` (2026-09-04). It is **not a project**: it st
 reads no project's files, and times one HTTP request against both ports with the engine,
 model, body and `max_tokens` held identical — see
 [`../../benchmark/README.md`](../../benchmark/README.md). Its results are in
-[`../../COMPARISON.md`](../../COMPARISON.md) § What they cost per request.
+[`../../COMPARISON.md`](../../COMPARISON.md) § What they cost per request. Since 2026-09-30 it
+also holds `cache_report.py`, the table over both projects' `tests/run_cache.py` output; it
+reads only the result files named on its command line.
 
 Both images are stock: **no Dockerfile and no build step**. A `litellm/Dockerfile` returns
 the day a callback needs a package the base image lacks.

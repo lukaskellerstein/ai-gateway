@@ -206,3 +206,22 @@ BODY_EXTRAS: dict = (
     if ALIAS.startswith("openai-")
     else {"max_tokens": MAX_TOKENS}
 )
+
+# THE THINKING LEVEL A RUN ASKS FOR, and NOTHING unless the run sets one.
+#
+# `run_cache.py` sets AI_GATEWAY_REASONING_EFFORT=medium, and every folder hands it to
+# its own client in that client's own words: a body field in 1 and 2,
+# `reasoning_effort=` on ChatOpenAI in 3 and 4, CLAUDE_CODE_EFFORT_LEVEL in 5, a
+# `model_reasoning_effort` override in 6, a provider option in 7.
+#
+# IT MATTERS FOR QWEN 3.8 ONLY, and there it decides the run time. Its template
+# defaults to `xhigh` and writes the level into the TOP of the system prompt
+# ("Reasoning effort is set to xhigh. ..."); `medium` writes nothing. Measured
+# 2026-09-30, LMStudio direct, one system + user message: 62 prompt tokens at
+# `xhigh`, 24 at `medium`. One agent step at `xhigh` took 693 s and 15,198
+# thinking tokens and answered NOTHING; at `medium` 231 s (the same day, straight
+# to LMStudio). Gemma 4's template ignores the field: 25 tokens at every level.
+REASONING_EFFORT = os.environ.get("AI_GATEWAY_REASONING_EFFORT") or None
+
+# The same level as a body field, for the folders that build the request by hand.
+EFFORT_EXTRAS: dict = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
