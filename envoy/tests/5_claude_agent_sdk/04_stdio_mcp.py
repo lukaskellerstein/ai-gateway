@@ -14,7 +14,7 @@ passes 01 and 02 and fails here.
 dependencies without any PATH lookup. Naming `python` instead would find whatever
 the shell happens to have.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

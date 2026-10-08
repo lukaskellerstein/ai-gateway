@@ -26,7 +26,7 @@ which is which, and the rest names the model: `openrouter-gemma4-26b` is the sam
 `lms-gemma4-26b` on hardware you do not own.
 
 **One engine runs at a time**, and one word in a `.env` picks it. That engine serves one to
-four aliases — Gemma 4 at two sizes, Qwen 3.8 27B, an embedder. To compare two engines, change
+six aliases — Gemma 4 at up to three sizes, Qwen 3.8 27B, an embedder. To compare two engines, change
 the word and `up -d` again: the names differ only in the prefix.
 
 ## What you get
@@ -96,8 +96,8 @@ flowchart LR
 
     engine{{"GATEWAY_ENGINE<br/>one per project"}}
 
-    lms["<b>LMStudio</b> · :1234<br/>lms-gemma4-e4b · lms-gemma4-26b · lms-nomic-embed"]
-    uns["<b>Unsloth</b> · :8888<br/>unsloth-gemma4-e4b · unsloth-gemma4-26b · unsloth-nomic-embed"]
+    lms["<b>LMStudio</b> · :1234<br/>lms-gemma4-e4b · lms-gemma4-12b · lms-gemma4-26b · lms-nomic-embed"]
+    uns["<b>Unsloth</b> · :8888<br/>unsloth-gemma4-e4b · unsloth-gemma4-12b · unsloth-gemma4-26b · unsloth-nomic-embed · unsloth-nomic-embed-sidecar"]
     oll["<b>Ollama</b> · :11434<br/>ollama-gemma4-e4b · ollama-gemma4-26b · ollama-nomic-embed"]
     orr["<b>OpenRouter</b> · cloud<br/>openrouter-gemma4-26b · openrouter-gemma4-26b-free"]
     oai["<b>OpenAI</b> · cloud<br/>openai-gpt54-mini · openai-embed3-small"]
@@ -209,8 +209,8 @@ registered and answers `401` when something calls it.
 **`GATEWAY_ENGINE` names any file in `config/`, including one you never commit.** That is how
 you serve *your* machine's models without putting a model list in the repo: write
 `config/<yourname>.yaml`, add it to `.gitignore`, and set the word. This laptop has
-`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio, 44
-aliases on 24000 and 50 route rules on 26000, and no hosted route at all so it cannot spend.
+`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio, 48
+aliases on 24000 and 60 route rules on 26000, and no hosted route at all so it cannot spend.
 Each gateway needs its own copy; neither reads the other's.
 
 ## Endpoints
@@ -240,9 +240,15 @@ reset.
 
 **LiteLLM alone has a control plane** — `/key/generate`, `/key/info`, `/spend/logs`,
 `/model/info`, and an admin UI at `/ui` whose Logs tab carries the prompt and the response.
-**Envoy alone has `/mcp`**, an MCP gateway that puts several MCP servers behind one endpoint
-(the route exists; it needs `--mcp-config` and is not wired up here), and Prometheus metrics
-on 26064.
+**Envoy alone has Prometheus metrics** on 26064.
+
+**Both put MCP servers behind one endpoint, `/mcp`** (since 2026-10-07). A caller is given
+one URL. The gateway lists every server's tools, renames them by server, and forwards each
+call: `bench_hardware-bench_serial` on LiteLLM, which checks the caller's key there, and
+`bench-hardware__bench_serial` on Envoy, which does not. Each agent folder in `tests/`
+proves it on both ports, Codex excepted: on a local model it calls no MCP tool
+(openai/codex#19871), and through Envoy it drops the whole tool list (`TESTING.md` §5.7). `litellm/README.md` and
+`envoy/README.md` § MCP servers behind the gateway have the config.
 
 ## The aliases
 
@@ -258,14 +264,15 @@ the last three are the cloud and cost money.
 |  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) | OpenRouter | OpenAI | Cerebras |
 |:--|:--|:--|:--|:--|:--|:--|
 | **Gemma 4 E4B** — chat, small | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — |
-| **Gemma 4 26B** — chat, large | `lms-gemma4-26b` | `unsloth-gemma4-26b` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
+| **Gemma 4 12B** — chat, dense | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — |
+| **Gemma 4 26B** — chat, large | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
 | **Qwen 3.8 27B** — chat, large | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
 | **Other chat** | — | — | — | — | `openai-gpt54-mini` | — |
-| **Embed** | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
+| **Embed** | `lms-nomic-embed` | `unsloth-nomic-embed` · `unsloth-nomic-embed-sidecar` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
 | **Costs** | free | free | free | **paid** | **paid** | **paid** |
 
 That is every alias this repo defines **by hand**. `GATEWAY_ENGINE` selects **one column**, so
-a gateway serves one to four names at a time — never the whole table. The rows are the point:
+a gateway serves one to seven names at a time — never the whole table. The rows are the point:
 the same model sits across a row, so changing the engine word and re-running the tests
 measures the engine and nothing else. You do not need every engine — name the one you have,
 and the rest are not in the config at all.
@@ -278,13 +285,17 @@ differently on `/v1/messages`. `litellm/README.md` § Provider × route has the 
 | Alias | Model | Provider | Gateways | Input | Build | Notes |
 |:--|:--|:--|:--|--:|:--|:--|
 | `lms-gemma4-e4b` | `google/gemma-4-e4b` | `lm_studio/` | both | 122880 | QAT | tools and vision both work |
+| `lms-gemma4-12b` | `google/gemma-4-12b-qat` | `lm_studio/` | both | 253952 | QAT, Q4_0 | 12B **dense**, 7.0 GB: half the 26B's memory, but **half its decode speed** — 58–59 against 113–114 tok/s, 2026-10-03. **It reasons** here, where `lms-gemma4-26b` does not |
 | `lms-gemma4-26b` | `google/gemma-4-26b-a4b-qat` | `lm_studio/` | both | 253952 | QAT | 26B MoE, ~4B active |
-| `lms-qwen38-27b` | `qwen/qwen3.8-27b` | `lm_studio/` | both | 253952 | MLX 4-bit | 27B dense, tools and vision; **it reasons** — never give it a small `max_tokens` |
+| `lms-qwen38-27b` | `qwen/qwen3.8-27b` | `openai/` | both | 253952 | MLX 4-bit | 27B dense, tools and vision; **it reasons** — never give it a small `max_tokens` |
 | `lms-nomic-embed` | `text-embedding-nomic-embed-text-v1.5` | `lm_studio/` | both | 2048 | Q4_K_M | 768 dims, 84 MB |
 | `unsloth-gemma4-e4b` | `unsloth/gemma-4-E4B-it-qat-GGUF` | `openai/` | both | 122880 | QAT | same weights as `lms-gemma4-e4b` |
+| `unsloth-gemma4-12b` | `lmstudio-community/gemma-4-12B-it-QAT-GGUF` | `openai/` | both | 253952 | QAT, Q4_0 | **the same file** as `lms-gemma4-12b`: Studio lists LMStudio's folder. 58–60 against 137–198 tok/s for `unsloth-gemma4-26b`, 2026-10-03 |
 | `unsloth-gemma4-26b` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | both | 253952 | QAT | same weights as `lms-gemma4-26b`; **it reasons and `lms-gemma4-26b` does not** |
-| `unsloth-qwen38-27b` | `unsloth/Qwen3.8-27B-GGUF` | `openai/` | both | 253952 | **UD-Q8_K_XL** | same model as `lms-qwen38-27b`, **not the same build**: Unsloth serves its Anthropic route for GGUF only, and the MLX build answered 503 there |
+| `unsloth-gemma4-26b-fast` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | both | 253952 | QAT | **the fast route**: the same file with thinking **off**, stored on the route — see below |
+| `unsloth-qwen38-27b` | `unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL` | `openai/` | both | 253952 | **UD-Q8_K_XL** | same model as `lms-qwen38-27b`, **not the same build**: Unsloth serves its Anthropic route for GGUF only, and the MLX build answered 503 there |
 | `unsloth-nomic-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | `openai/` | both | 2048 | Q8_0 | 768 dims |
+| `unsloth-nomic-embed-sidecar` | `nomic-ai/nomic-embed-text-v1.5` | `openai/` | both | 512 | nomic-ai release | 768 dims. Studio's own `Settings -> embedding model`, run **beside** the chat model, so it evicts nothing — every other Unsloth alias does. Not interchangeable with `unsloth-nomic-embed` |
 | `ollama-gemma4-e4b` | `gemma4:e4b` | `openai/` | both | 122880 | **Q4_K_M** | not QAT — see below |
 | `ollama-gemma4-26b` | `gemma4:26b` | `openai/` | both | 253952 | **Q4_K_M** | not QAT |
 | `ollama-nomic-embed` | `nomic-embed-text` | `openai/` | both | 2048 | **F16** | 768 dims, the heaviest of the three |
@@ -327,6 +338,19 @@ apart. There is no fallback from an old name to a new one — change the caller:
 | `unsloth-embed` | `unsloth-nomic-embed` | | `cerebras-27b` | `cerebras-qwen38-27b` |
 | `ollama-4b` | `ollama-gemma4-e4b` | | `<old>-anthropic` | `<new>-anthropic` |
 | `ollama-26b` | `ollama-gemma4-26b` | | | |
+
+### The fast route
+
+**For speed, call `unsloth-gemma4-26b-fast`** — the same model and the same loaded file as
+`unsloth-gemma4-26b`, so a caller changes the name and nothing else, and switching between the
+two swaps nothing. The gateway stores thinking OFF on the route, on chat, `/v1/responses` and the
+Anthropic route alike. The three-turn task of `run_benchmark.py`, two runs per gateway,
+2026-10-04: **1.6–1.7 s** a session against 4.8–9.7 s, 249–260 against 167–203 tok/s, 0 thinking
+tokens against 556–573, every run correct. To think, call the name without `-fast`.
+`tests/2_openai_client/06_thinking_off.py` is the example and the guard.
+
+There is no `lms-` twin because none is needed: LMStudio never turns Gemma's thinking on, so
+`lms-gemma4-26b` already answers this way.
 
 ### Two traps when you pick an alias
 
@@ -378,7 +402,7 @@ fails differently when the model is not there, and **only Ollama fails loudly**:
 |:--|:--|:--|:--|
 | Key | any string | **required** — every route 401s | ignored entirely |
 | Model not loaded | JIT-loads it, quietly at 8192 context | `400 No model loaded`, unless auto-switch is on | loads it, at the model's own context |
-| Models held at once | several | **one**, chat and embedder alike — a new request unloads the last | several |
+| Models held at once | several | **one active**, chat and embedder alike — a request for another replaces it; models pre-loaded with `Keep other models loaded` stay beside it | several |
 | Idle eviction | 1 h TTL on a JIT load | none — it holds until the next swap | **5 minutes**, by default |
 | Reasoning on Gemma 4 | **depends on the model** — off on the 26B, on for E4B | **on** | **on** |
 | Build pulled here | QAT | QAT | **Q4_K_M** |
@@ -389,9 +413,14 @@ does **not** inherit hand-load flags: a model you loaded at 262144 comes back at
 with a 1 h TTL. So a session that worked this morning fails this afternoon with nothing
 changed, and the error looks like a gateway bug.
 
-**Unsloth is the one that thrashes when more than one gateway runs.** It holds one model at a
-time across chat and embeddings, so a second gateway asking for a different alias swaps the
-model back and forth. LMStudio and Ollama do not have this problem.
+**Unsloth is the one that thrashes when more than one gateway runs.** A gateway call for a model
+that is not loaded replaces its one active model, across chat and embeddings, so a second
+gateway asking for a different alias swaps the model back and forth — 13-17 s a swap. The cure,
+since Studio v0.1.903-beta, is to turn on `Settings → Resources → Keep multiple models loaded`
+and load the models you want in Studio with **Keep other models loaded**: those stay, and a
+gateway call to any of them answers with no reload (verified 2026-10-07, on 8888 and through
+24000). A gateway cannot load a model that way itself. LMStudio and Ollama do not have this
+problem.
 
 Each engine's config file carries its own load commands and every trap it has, next to the
 aliases they apply to — [`litellm/config/lms.yaml`](litellm/config/lms.yaml),
@@ -410,17 +439,19 @@ cd envoy/tests   && uv run run_all.py    # 7 rows against 26000
 **A suite is seven folders, one per way of calling the gateway**, ordered by distance from the
 wire. Each is its own uv project with its own dependencies, so a folder can be read and copied
 on its own; `uv run --directory` builds whichever venv is missing, so there is no `uv sync`
-step. The base URL, the key and the alias live once per project, in `tests/gateway.py`.
+step. **Each folder is an example to copy**: its own `settings.py` holds the URL, the key, the
+default alias, the thinking level and every client setting that matters for the prompt cache,
+and it is the one file that differs between the two projects. Copy a folder, edit that file.
 
 | Folder | Calls the gateway with | LiteLLM | Envoy |
 |:--|:--|:--|:--|
 | `1_http_client` | `urllib`, no dependencies at all | yes | yes |
 | `2_openai_client` | `openai` — 4 call kinds + the contract test | yes | yes |
-| `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop by hand | yes | yes |
-| `4_deepagents` | a deep agent. **Seven scenarios: query, todos, filesystem, tools, MCP, subagent, skill** | yes | yes |
-| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → the Anthropic Messages API. **Seven scenarios**: query, session, in-process MCP, stdio MCP, subagent, skill, thinking | yes | yes¹ |
-| `6_codex_sdk` | a `model_providers` override → the Responses API. **Four scenarios: query, session, structured output, MCP wiring** | yes | yes |
-| `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider. **Five scenarios: query, session, agent, MCP, structured output** | yes | yes |
+| `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop by hand, then a tool from the gateway's `/mcp` | yes | yes |
+| `4_deepagents` | a deep agent. **Eight scenarios: query, todos, filesystem, tools, MCP, subagent, skill, gateway MCP** | yes | yes |
+| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → the Anthropic Messages API. **Eight scenarios**: query, session, in-process MCP, stdio MCP, subagent, skill, thinking, gateway MCP | yes | yes¹ |
+| `6_codex_sdk` | a `model_providers` override → the Responses API. **Five scenarios: query, session, structured output, MCP wiring, gateway MCP wiring** | yes | yes |
+| `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider. **Six scenarios: query, session, agent, MCP, structured output, gateway MCP** | yes | yes |
 
 ¹ every scenario runs on an `<alias>-anthropic` alias, because Envoy's Anthropic→OpenAI
 translation puts a `thinking` block into the OpenAI body and the **engine** rejects it — the
@@ -432,10 +463,14 @@ fails on that one engine. The folder resolves the alias and refuses to run witho
 `envoy/tests/5_claude_agent_sdk/README.md`.
 
 Every script prints the full response, so each doubles as a sample to copy from; the exit code
-is `1` on any failure. **The default alias follows that project's `GATEWAY_ENGINE`** —
-`lms-gemma4-e4b`, `unsloth-gemma4-e4b`, `ollama-gemma4-e4b`, `openrouter-gemma4-26b` or `openai-gpt54-mini`, each being the one
-route on that engine that is both vision- and tool-capable. Override it with `--model <alias>`
-on `run_all.py`, or `AI_GATEWAY_TEST_MODEL=<alias>` when you run one scenario directly.
+is `1` on any failure. **The default alias is `lms-gemma4-e4b`**, set in each folder's
+`settings.py`. Override it with `--model <alias>` on `run_all.py`, or `AI_GATEWAY_MODEL=<alias>`
+when you run one scenario directly.
+
+**Each folder also has a `run_benchmark.py`** — the same three-turn task with that folder's
+client, one session per model, and the first token, decode speed and cached tokens of every
+request in its `RESULTS.md`. That is where to look before choosing a client and a model for a
+project: the numbers, and the setup that produced them.
 
 **This is how you compare engines.** Run a suite, change `GATEWAY_ENGINE`, `up -d`, run it
 again: the `-26b` aliases are the same weights on four engines, so the difference is the
@@ -529,8 +564,8 @@ cd benchmark && uv run main.py --rounds 10
 **The gateway does not change what an engine reuses from its prompt cache either — the client
 does.** Every agent was run on both gateways on 2026-09-30, and the one that defeats the cache
 is Claude Code as shipped: set `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` and
-`CLAUDE_CODE_ATTRIBUTION_HEADER=0` against a local engine. Each project's
-`tests/run_cache.py` measures it.
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` against a local engine. Each test folder's `run_benchmark.py`
+measures its own client.
 
 > **[`COMPARISON.md`](COMPARISON.md) is the full comparison** — every feature side by side, the
 > observability difference in detail, the measured resource table, the benchmark, the prompt
@@ -551,13 +586,12 @@ ai-gateway/
 │   ├── .env.example                tracked; the key lines are blank BY DESIGN
 │   ├── config/                     the alias list — YAML, one file per engine,
 │   │                               plus all.yaml which INCLUDES all five
-│   ├── tests/                      SEVEN folders: raw HTTP, the OpenAI client, 5 agent SDKs,
-│   │                               run_all.py (does it work) and run_cache.py (is the
-│   │                               prompt cache used, how fast)
+│   ├── tests/                      SEVEN folders: raw HTTP, the OpenAI client, 5 agent SDKs.
+│   │                               Each: settings.py (edit it when you copy the folder),
+│   │                               run_benchmark.py and RESULTS.md (cache and speed, per model)
 │   └── README.md
 ├── benchmark/                  what the GATEWAY itself costs — the only thing here
-│                               that calls both ports — and cache_report.py, the one
-│                               table over both projects' run_cache.py. No dependencies
+│                               that calls both ports. No dependencies
 ├── envoy/                      compose project `ai-gateway-envoy`      PORT 26000
 │   ├── compose.yml                 ONE service: aigw. No database
 │   ├── .env.example

@@ -5,7 +5,7 @@ description = "OpenCode driven over its HTTP server API, answered by the Envoy g
 readme = "README.md"
 requires-python = ">=3.12"
 # OpenCode has no Python SDK. It has a documented HTTP server API, so the client
-# here is `httpx` and about sixty lines — see main.py. The `opencode` binary
+# here is `httpx` and about sixty lines — see common.py. The `opencode` binary
 # itself comes from its own installer and must already be on PATH.
 dependencies = [
     "httpx>=0.28.1",

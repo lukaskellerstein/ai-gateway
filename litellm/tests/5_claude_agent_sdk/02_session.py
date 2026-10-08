@@ -9,7 +9,7 @@ way to answer it is for the first exchange to come back inside the second
 request. If the gateway drops, reshapes or rejects any block of the assistant's
 own reply, this is the file that goes red.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

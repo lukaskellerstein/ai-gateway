@@ -105,7 +105,7 @@ def scenario(gateway: Gateway, model: str) -> str:
         {"role": "user", "content": "What is the current stock price for MSFT?"},
     ]
 
-    # `**gateway.body_extras` is the per-gateway calling contract from common.py.
+    # `**gateway.body_extras` is the per-gateway calling contract from settings.py.
     # BOTH TURNS CARRY IT: a tool loop that sets a ceiling on the first call and
     # forgets it on the second gets an empty final answer on Envoy, which reads
     # like the tool result never arrived.

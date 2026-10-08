@@ -1,45 +1,11 @@
-"""The Anthropic surface of THIS gateway, and the machinery every scenario shares.
+"""The machinery every scenario shares: options, a transcript, and the runner.
 
-THE SIX NUMBERED SCRIPTS BESIDE THIS ONE ARE BYTE-IDENTICAL TO LITELLM'S. Every
-difference between the two gateways lives here, as data — the same rule
-`../2_openai_client/common.py` follows for the OpenAI surface. A scenario that
-read the gateway's name would have stopped being portable, and porting these six
-files to a third gateway is then a copy plus one new `common.py`.
-
-WHAT IS DIFFERENT ABOUT ENVOY, and it is one line: `anthropic_alias()` below.
-Envoy serves /anthropic/v1/messages by TRANSLATING Anthropic -> OpenAI onto the
-engine's OpenAI schema, and that translation cannot carry an agent conversation.
-The reason is not the gateway:
-
-    `thinking` blocks. Envoy builds one into every reply out of the engine's
-    `reasoning_content`. Claude Code stores the reply and sends it back on the
-    next turn, the translator passes the block straight into the OpenAI body, and
-    the ENGINE rejects it —
-
-        400 messages.N.content.str: Input should be a valid string
-
-    which reads like "content must be a string" and means "no branch of the
-    content union matched". Measured 2026-09-04 DIRECT ON THE ENGINE, port 8888,
-    with no gateway in the path at all: byte-identical error. Unsloth, LMStudio
-    and Ollama all reject it, because an OpenAI `content` part may only be `text`
-    or `image_url`.
-
-    It was intermittent, which is worse than broken: the engine emits
-    `reasoning_content` on some replies and not others, so a one-shot usually
-    passed and an agent run failed about one time in five.
-
-THE CURE IS THE `-anthropic` PASS-THROUGH ALIAS, and it is already in
-../config/<engine>.yaml. It points at an `AIServiceBackend` whose schema is
-`Anthropic`, so the body reaches the engine UNTRANSLATED. All three local engines
-serve POST /v1/messages themselves — verified 2026-09-04, 200 from each — so
-there is nothing to bridge and no block to mangle. `anthropic_alias()` resolves
-the caller's alias to that route and REFUSES TO RUN without it, because a run
-that silently used the translated path would go red at random later.
-
-`MAX_THINKING_TOKENS=0` USED TO BE REQUIRED HERE AND NO LONGER IS. It existed to
-stop `400 thinking.type` from the same translator; on the pass-through path the
-engine accepts Claude Code's `thinking` field as sent. Verified 2026-09-04: a
-multi-turn session with the variable unset now completes.
+THE NUMBERED SCRIPTS, `run_all.py` AND THIS FILE ARE BYTE-IDENTICAL IN BOTH
+PROJECTS. Every difference between the two gateways lives in settings.py, as data —
+the Anthropic base URL, the key, which alias carries the Anthropic protocol, and
+what the gateway does with reasoning. A scenario that read the gateway's name would
+have stopped being portable; porting this folder to a third gateway is a copy plus
+one new settings.py.
 """
 
 from __future__ import annotations
@@ -48,46 +14,41 @@ import argparse
 import json
 import os
 import shutil
+import socket
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
-import urllib.error
-import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-HERE = Path(__file__).resolve().parent
-
-# The shared facts — the Anthropic base URL, the key, the alias, the port.
-sys.path.insert(0, str(HERE.parent))
-
-from gateway import (  # noqa: E402
-    ALIAS,
+from settings import (
     ANTHROPIC_BASE_URL,
     API_KEY,
     BASE_URL,
-    BODY_EXTRAS,
+    CLI_ENVIRONMENT,
+    MCP_SERVER_PORT,
+    MODEL,
     NAME,
-    REASONING_EFFORT,
     REQUEST_TIMEOUT_SECONDS,
-    ROOT_URL,
+    anthropic_alias,
+    body_extras,
 )
+
+HERE = Path(__file__).resolve().parent
 
 # THE ENVIRONMENT MUST BE SET BEFORE THE SDK IS IMPORTED-AND-RUN, because the
 # values are read when it spawns the CLI, and the CLI inherits this process's
 # environment. Setting them after a scenario has started changes nothing.
-os.environ["ANTHROPIC_BASE_URL"] = ANTHROPIC_BASE_URL
-os.environ["ANTHROPIC_AUTH_TOKEN"] = API_KEY
+os.environ.update(CLI_ENVIRONMENT)
 # ANTHROPIC_API_KEY takes precedence over AUTH_TOKEN and points at Anthropic's own
 # servers. Left in the shell it silently sends the prompt to api.anthropic.com and
 # bills a real account, so it is removed rather than blanked.
 os.environ.pop("ANTHROPIC_API_KEY", None)
-# THE THINKING LEVEL a run asks for (../gateway.py). The CLI reads its own variable
-# and sends the level as `output_config.effort`; left unset it sends `xhigh`.
-if REASONING_EFFORT:
-    os.environ["CLAUDE_CODE_EFFORT_LEVEL"] = REASONING_EFFORT
 
 import anyio  # noqa: E402
 
@@ -102,32 +63,8 @@ from claude_agent_sdk import (  # noqa: E402
     query,
 )
 
-DEFAULT_MODEL = ALIAS
-
-# WHAT `run_all.py` PROBES BEFORE IT STARTS, and on Envoy it is the DATA PLANE.
-# aigw's admin server on 26064 answers /health several seconds BEFORE the listener
-# on 26000 accepts a connection, so probing the admin port races the thing being
-# tested and the first scenario then fails with a connection reset (measured
-# 2026-09-04). /v1/models needs no key and only answers once 26000 is really up.
-HEALTH_URL = f"{ROOT_URL}/v1/models"
-START_HINT = "cd ../.. && podman compose up -d"
-
-# ENVOY PASSES THE ENGINE'S REASONING THROUGH, because the `-anthropic` alias does
-# not translate: the engine's own `/v1/messages` reply reaches the caller as it was
-# written. Verified 2026-09-04 on all three local engines — unsloth 8 runs in 8,
-# LMStudio 1033 characters, Ollama 891.
-#
-# NO PER-ENGINE TABLE IS NEEDED HERE, and that is the whole argument for the
-# pass-through alias. LiteLLM's copy of this file carries one, because its
-# Anthropic route translates and then loses the reasoning for the unsloth backend
-# while keeping it for the other two.
-THINKING_REACHES_CLIENT = True
-
-# PRINTED BY 07_thinking.py ON EVERY RUN. Nothing to warn about on this gateway —
-# the pass-through alias carries the engine's reasoning whole.
-THINKING_NOTE = ""
-
 # Scenario 04 spawns this file as a SEPARATE PROCESS and talks to it over stdio.
+# Scenario 08 runs the SAME file over HTTP, behind the gateway — `gateway_mcp_server`.
 STDIO_SERVER = HERE / "mcp_server.py"
 
 # Scenario 06 loads its skill from here. A LOCAL PLUGIN RATHER THAN
@@ -136,45 +73,6 @@ STDIO_SERVER = HERE / "mcp_server.py"
 # above this folder, which makes the run depend on where the repo is checked out.
 # A plugin directory is self-contained and copies into another project as it is.
 PLUGIN_DIR = HERE / "bench_plugin"
-
-
-# ---------------------------------------------------------------------------
-# Which alias carries the Anthropic protocol
-# ---------------------------------------------------------------------------
-
-
-def anthropic_alias(alias: str) -> str:
-    """The alias that reaches the engine UNTRANSLATED — see the note at the top.
-
-    ASKED AT RUNTIME, NEVER ASSUMED. ../config/<engine>.yaml is edited by hand and
-    the answer is different per engine, so the gateway is the only honest source.
-
-    A MISSING ROUTE IS A HARD FAILURE, not a skip. Every local engine can serve
-    one, so its absence is an unfinished config file and the message says which
-    file and what to add.
-    """
-    if alias.endswith("-anthropic"):
-        return alias
-
-    candidate = f"{alias}-anthropic"
-    try:
-        with urllib.request.urlopen(f"{ROOT_URL}/v1/models", timeout=10) as response:
-            listed = {row["id"] for row in json.load(response).get("data", [])}
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
-        raise SystemExit(f"cannot list the aliases on {ROOT_URL}/v1/models: {error}") from error
-
-    if candidate in listed:
-        return candidate
-
-    raise SystemExit(
-        f"{candidate!r} is not among the aliases this gateway serves.\n"
-        f"  The Claude Agent SDK cannot run on {alias!r} alone. Envoy translates\n"
-        "  Anthropic -> OpenAI for that route, and the engine rejects the `thinking`\n"
-        "  blocks the replies carry — 400 messages.N.content.str, intermittently.\n"
-        f"  Add a {candidate!r} rule to ../config/<engine>.yaml pointing at an\n"
-        "  `Anthropic`-schema AIServiceBackend. config/unsloth.yaml is the worked\n"
-        "  example, and README.md § The pass-through alias explains the shape."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -192,17 +90,18 @@ def reasoning_baseline(model: str) -> int:
     flat declaration reported that as a gateway bug.
 
     `-anthropic` is stripped because Envoy's pass-through alias exists only on the
-    Anthropic surface; the OpenAI route serves the plain name. `**BODY_EXTRAS`
-    carries whatever ceiling this gateway needs, under whatever name the upstream
-    accepts.
+    Anthropic surface; the OpenAI route serves the plain name. `body_extras()`
+    carries whatever ceiling and level this gateway needs, under whatever name the
+    upstream accepts.
 
     Standard library only — folder 5's venv has no HTTP client of its own.
     """
+    plain = model.removesuffix("-anthropic")
     body = json.dumps(
         {
-            "model": model.removesuffix("-anthropic"),
+            "model": plain,
             "messages": [{"role": "user", "content": "What is 17 * 23? Think it through."}],
-            **BODY_EXTRAS,
+            **body_extras(plain),
         }
     ).encode()
     request = urllib.request.Request(
@@ -227,7 +126,7 @@ def agent_options(model: str, **overrides: Any) -> ClaudeAgentOptions:
     and a ceiling of 1 raises `Reached maximum number of turns` instead of
     returning the reply it was about to produce.
     """
-    settings: dict[str, Any] = {
+    options: dict[str, Any] = {
         "model": model,
         "system_prompt": "You are a helpful assistant. Answer in one short sentence.",
         "max_turns": 6,
@@ -245,8 +144,8 @@ def agent_options(model: str, **overrides: Any) -> ClaudeAgentOptions:
         # rather than printed, and printed only when a scenario fails.
         "stderr": _remember_stderr,
     }
-    settings.update(overrides)
-    return ClaudeAgentOptions(**settings)
+    options.update(overrides)
+    return ClaudeAgentOptions(**options)
 
 
 _STDERR: list[str] = []
@@ -323,6 +222,43 @@ async def turn(client: ClaudeSDKClient, prompt: str) -> Transcript:
     return await _collect(client.receive_response())
 
 
+@contextmanager
+def gateway_mcp_server() -> Iterator[None]:
+    """Run `mcp_server.py` over HTTP, on the port the GATEWAY expects, for one scenario.
+
+    THE AGENT IS NEVER TOLD THIS PORT. The gateway's own config points at it — an
+    `mcp_servers` entry on LiteLLM, an `MCPRoute` on Envoy — and the agent gets only
+    `MCP_URL`, so a scenario that passes made its calls THROUGH the gateway.
+
+    A PORT THAT IS ALREADY TAKEN FAILS LOUDLY, rather than testing a server some
+    other run left behind.
+    """
+    if _listening(MCP_SERVER_PORT):
+        raise RuntimeError(f"port {MCP_SERVER_PORT} is already in use: another run, or a server left behind")
+    with tempfile.TemporaryFile() as log:
+        server = subprocess.Popen(
+            [sys.executable, str(STDIO_SERVER), "--http", str(MCP_SERVER_PORT)], stdout=log, stderr=log
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not _listening(MCP_SERVER_PORT):
+                if server.poll() is not None or time.monotonic() > deadline:
+                    log.seek(0)
+                    output = log.read().decode(errors="replace")
+                    raise RuntimeError(f"mcp_server.py never listened on {MCP_SERVER_PORT}:\n{output}")
+                time.sleep(0.2)
+            yield
+        finally:
+            server.terminate()
+            server.wait(timeout=10)
+
+
+def _listening(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
 def report(label: str, transcript: Transcript) -> None:
     """One line per exchange, in the same shape for every scenario."""
     tools = ",".join(transcript.tools) or "-"
@@ -348,7 +284,7 @@ def run(scenario: Scenario, description: str) -> int:
     captured stderr underneath so a real error is never swallowed.
     """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     args = parser.parse_args()
 
     title = description.strip().splitlines()[0]

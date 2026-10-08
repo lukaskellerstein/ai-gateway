@@ -15,7 +15,7 @@ only be answered if turn one — thinking block and all — came back intact.
 
 **And the reasoning either reaches the caller or it does not.** That is a real
 difference between the two gateways, so it is DECLARED as
-`THINKING_REACHES_CLIENT` in common.py and checked here rather than described in
+`THINKING_REACHES_CLIENT` in settings.py and checked here rather than described in
 prose. Measured 2026-09-04 on the same engine with the same prompt:
 
     Envoy    the `-anthropic` alias does not translate, so the engine's own
@@ -27,7 +27,7 @@ A failure here reads "the table says X and the gateway did Y", which is the same
 contract this suite applies to the OpenAI surface in
 `../2_openai_client/04_gateway_contract.py`.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 
@@ -35,16 +35,8 @@ from __future__ import annotations
 
 import sys
 
-from common import (
-    THINKING_NOTE,
-    THINKING_REACHES_CLIENT,
-    ClaudeSDKClient,
-    agent_options,
-    reasoning_baseline,
-    report,
-    run,
-    turn,
-)
+from common import ClaudeSDKClient, agent_options, reasoning_baseline, report, run, turn
+from settings import THINKING_NOTE, THINKING_REACHES_CLIENT
 
 PRODUCT = "391"
 DOUBLED = "782"
@@ -91,7 +83,7 @@ async def scenario(model: str) -> str:
 
     if reached != THINKING_REACHES_CLIENT:
         raise AssertionError(
-            f"common.py declares THINKING_REACHES_CLIENT={THINKING_REACHES_CLIENT} and this "
+            f"settings.py declares THINKING_REACHES_CLIENT={THINKING_REACHES_CLIENT} and this "
             f"gateway returned {first.thinking_chars} characters of thinking, while the same "
             f"route produced {baseline} characters on /v1/chat/completions. The reasoning "
             "EXISTS and the Anthropic route lost it — check "

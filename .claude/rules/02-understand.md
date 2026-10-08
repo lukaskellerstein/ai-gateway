@@ -64,9 +64,11 @@ container.
 4. **The alias was added on one side only.** `litellm/config/<engine>.yaml` and
    `envoy/config/<engine>.yaml` are maintained separately and no test compares them.
 5. **The model is not loaded.** LMStudio JIT-loads at 8192 context with a 1 h TTL
-   (`lms ps --json`); Unsloth returns `400 No model loaded` unless auto-switch is on, and
-   holds one model at a time — **more than one gateway on `unsloth` thrashes it**; Ollama evicts
-   after 5 minutes idle (`ollama ps`).
+   (`lms ps --json`); Unsloth returns `400 No model loaded` unless auto-switch is on, and a
+   gateway call swaps its one active model — **more than one gateway on `unsloth` thrashes it**
+   unless the models were pre-loaded in Studio with `Keep other models loaded`
+   (`GET /api/inference/loaded-models` lists them); Ollama evicts after 5 minutes idle
+   (`ollama ps`).
 6. **A provider key is missing from the shell.** `UNSLOTH_API_KEY`, `OPENROUTER_API_KEY`
    and `OPENAI_API_KEY` are blank in every `.env` **on purpose** and arrive from
    `~/Projects/.envrc`. Compose reads the shell first, so an auth failure usually means the

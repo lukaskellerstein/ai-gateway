@@ -37,7 +37,7 @@ def scenario(gateway: Gateway, model: str) -> str:
                 ],
             },
         ],
-        # The per-gateway calling contract from common.py. It matters most here:
+        # The per-gateway calling contract from settings.py. It matters most here:
         # the request body is large, and a vision model that describes an image
         # often reasons first — so a missing ceiling on Envoy is the difference
         # between an answer and empty content.

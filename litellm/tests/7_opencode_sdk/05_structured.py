@@ -11,7 +11,7 @@ fails even when everything worked — which is exactly what happened the first
 time this was written. A schema failure shows up as `info.error` with the name
 `StructuredOutputError`.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

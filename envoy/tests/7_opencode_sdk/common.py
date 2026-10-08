@@ -1,7 +1,7 @@
-"""Where this gateway is, and the OpenCode server every scenario drives.
+"""The OpenCode server every scenario drives, and the config it is handed.
 
-THE NUMBERED SCRIPTS BESIDE THIS ONE ARE BYTE-IDENTICAL TO LITELLM'S. Every
-difference between the two gateways lives here.
+THIS FILE IS BYTE-IDENTICAL IN BOTH PROJECTS, like every file here but one: where the
+gateway is, which alias to call and how OpenCode is isolated all live in settings.py.
 
 OPENCODE HAS NO PYTHON SDK. What it has is a documented HTTP server API: you
 start `opencode serve` and everything after that is ordinary REST. So the
@@ -13,7 +13,8 @@ resolves providers through the Vercel AI SDK, and `@ai-sdk/openai-compatible` is
 the driver for anything that speaks the OpenAI protocol — which is what this
 gateway is. The whole configuration is a dict handed to the server through
 `OPENCODE_CONFIG_CONTENT`, so nothing is written to your `~/.config/opencode`
-and a run cannot disturb your own setup.
+and a run cannot disturb your own setup — and settings.py keeps your setup out of
+the run.
 """
 
 from __future__ import annotations
@@ -24,40 +25,40 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from settings import (
+    API_KEY,
+    BASE_URL,
+    MCP_SERVER_PORT,
+    MODEL,
+    NAME,
+    OPENCODE_ENVIRONMENT,
+    PROVIDER_ID,
+    REASONING_EFFORT,
+    REQUEST_TIMEOUT_SECONDS,
+)
+
 HERE = Path(__file__).resolve().parent
 
-# The shared facts — the base URL, the key, the alias.
-sys.path.insert(0, str(HERE.parent))
-
-from gateway import ALIAS, API_KEY, BASE_URL, NAME, REASONING_EFFORT, ROOT_URL  # noqa: E402
-
-DEFAULT_MODEL = ALIAS
-
-# WHAT `run_all.py` PROBES BEFORE IT STARTS, and on Envoy it is the DATA PLANE.
-HEALTH_URL = f"{ROOT_URL}/v1/models"
-START_HINT = "cd ../.. && podman compose up -d"
-
-# The provider id carries the gateway's name, so a stray `~/.config/opencode`
-# entry cannot collide with it.
-PROVIDER_ID = f"ai-gateway-{NAME}"
-
-# THE THINKING LEVEL a run asks for (../gateway.py). OpenCode hands a model's
+# THE THINKING LEVEL a run asks for (settings.py). OpenCode hands a model's
 # `options` to the AI SDK provider, which sends `reasoningEffort` as the body's
 # `reasoning_effort`.
 EFFORT_MODEL_OPTIONS: dict[str, Any] = (
     {"options": {"reasoningEffort": REASONING_EFFORT}} if REASONING_EFFORT else {}
 )
 
-# Scenario 04 has OpenCode spawn this file and talk to it over stdio.
+# Scenario 04 has OpenCode spawn this file and talk to it over stdio. Scenario 06
+# runs the SAME file over HTTP, behind the gateway — `gateway_mcp_server`.
 STDIO_SERVER = HERE / "mcp_server.py"
 START_MARKER = HERE / ".mcp_server_started"
 CALL_MARKER = HERE / ".mcp_tool_called"
@@ -85,11 +86,56 @@ def config_for(alias: str, **extra: Any) -> dict:
         "small_model": f"{PROVIDER_ID}/{alias}",
         # A transport test has no business editing files or running commands.
         # It is also the lever that stops a small model answering a tool
-        # question with the shell — see 04.
-        "permission": {"bash": "deny", "edit": "deny"},
+        # question with the shell — see 04. Denied outright, the tools are not
+        # even offered: `bash`, `edit` and `write` are absent from every request
+        # (stub provider, OpenCode 1.18.30, 2026-09-30).
+        # `external_directory` is denied for the opposite reason: its default is
+        # `ask`, and nobody is there to answer. Gemma 4 31B asked `read` for
+        # `/order.json` — the disk root, not the working directory — and the
+        # session sat on that prompt until the 3600 s request timeout
+        # (lms-gemma-4-31b through Envoy, 2026-10-02). Denied, the tool returns
+        # an error the model can recover from.
+        "permission": {"bash": "deny", "edit": "deny", "external_directory": "deny"},
     }
     config.update(extra)
     return config
+
+
+@contextmanager
+def gateway_mcp_server() -> Iterator[None]:
+    """Run `mcp_server.py` over HTTP, on the port the GATEWAY expects, for one scenario.
+
+    THE AGENT IS NEVER TOLD THIS PORT. The gateway's own config points at it — an
+    `mcp_servers` entry on LiteLLM, an `MCPRoute` on Envoy — and the agent gets only
+    `MCP_URL`, so a scenario that passes made its calls THROUGH the gateway.
+
+    A PORT THAT IS ALREADY TAKEN FAILS LOUDLY, rather than testing a server some
+    other run left behind.
+    """
+    if _listening(MCP_SERVER_PORT):
+        raise RuntimeError(f"port {MCP_SERVER_PORT} is already in use: another run, or a server left behind")
+    with tempfile.TemporaryFile() as log:
+        server = subprocess.Popen(
+            [sys.executable, str(STDIO_SERVER), "--http", str(MCP_SERVER_PORT)], stdout=log, stderr=log
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not _listening(MCP_SERVER_PORT):
+                if server.poll() is not None or time.monotonic() > deadline:
+                    log.seek(0)
+                    output = log.read().decode(errors="replace")
+                    raise RuntimeError(f"mcp_server.py never listened on {MCP_SERVER_PORT}:\n{output}")
+                time.sleep(0.2)
+            yield
+        finally:
+            server.terminate()
+            server.wait(timeout=10)
+
+
+def _listening(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
 def free_port() -> int:
@@ -99,26 +145,29 @@ def free_port() -> int:
 
 
 @asynccontextmanager
-async def opencode_server(alias: str, **extra: Any):
+async def opencode_server(alias: str, directory: Path = HERE, **extra: Any):
     """Start `opencode serve` on a free port, yield a client, always stop it.
 
     A free port rather than a fixed one because this must not collide with an
     OpenCode the user already has running — and because `../run_all.py` may run
-    folders back to back.
+    folders back to back. `directory` is OpenCode's working directory: the one its
+    file tools see, and the one its system prompt names.
     """
     port = free_port()
     url = f"http://127.0.0.1:{port}"
-    environment = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config_for(alias, **extra))}
+    environment = {
+        **os.environ,
+        **OPENCODE_ENVIRONMENT,
+        "OPENCODE_CONFIG_CONTENT": json.dumps(config_for(alias, **extra)),
+    }
 
     process = await asyncio.create_subprocess_exec(
         "opencode", "serve", "--hostname=127.0.0.1", f"--port={port}",
-        cwd=str(HERE), env=environment,
+        cwd=str(directory), env=environment,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
     try:
-        # A local model can take minutes to answer, so the request timeout is an
-        # hour — the same 3600 s every route in ../../config/ allows.
-        async with httpx.AsyncClient(base_url=url, timeout=3600.0) as client:
+        async with httpx.AsyncClient(base_url=url, timeout=REQUEST_TIMEOUT_SECONDS) as client:
             for _ in range(300):
                 if process.returncode is not None:
                     raise RuntimeError(f"opencode exited during startup with status {process.returncode}")
@@ -137,6 +186,10 @@ async def opencode_server(alias: str, **extra: Any):
 
 
 async def new_session(client: httpx.AsyncClient, title: str) -> str:
+    """A new conversation. THE TITLE IS NOT DECORATION: an untitled session has
+    `small_model` write one, a second model request beside the first (stub
+    provider, 2026-09-30).
+    """
     response = await client.post("/session", json={"title": title})
     response.raise_for_status()
     return response.json()["id"]
@@ -187,7 +240,7 @@ Scenario = Callable[[str], Awaitable[str]]
 def run(scenario: Scenario, description: str) -> int:
     """Parse `--model`, drive one scenario, print one PASS/FAIL row."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     args = parser.parse_args()
 
     title = description.strip().splitlines()[0]

@@ -17,6 +17,7 @@
 #   `lms ps --json` is the truth, not the UI:
 #
 #     lms load google/gemma-4-e4b        --context-length 131072 --parallel 1 --gpu max
+#     lms load google/gemma-4-12b-qat     --context-length 262144 --parallel 1 --gpu max
 #     lms load google/gemma-4-26b-a4b-qat --context-length 262144 --parallel 1 --gpu max
 #     lms load qwen/qwen3.8-27b           --context-length 262144 --parallel 1 --gpu max
 #
@@ -48,6 +49,39 @@ model_list:
       timeout: 3600                       # see the timeout note in settings.yaml
     model_info:
       max_input_tokens: 122880            # 131072 − the 8192 output reserve
+      max_output_tokens: 8192
+
+  # Gemma 4 12B QAT — a DENSE 12B, the middle chat route. It keeps the large builds' 262144
+  # window, tools and vision, in 7.0 GB of Q4_0 against the 26B's 15.6 GB.
+  #
+  # IT SAVES MEMORY, NOT TIME. Dense means every token runs all 12B weights, while the 26B
+  # MoE below runs ~4B per token — so the 26B is the FASTER of the two. tests/1_http_client
+  # run_benchmark.py, the same task, two runs (one per gateway), 2026-10-03: 58–59 tok/s
+  # decode here against 113–114 for `lms-gemma4-26b`, first token 1.44–1.74 s against
+  # 0.66–0.87 s, and the whole session 31–44 s against 8.6–9.7 s. Pick this one when the 26B
+  # does not fit beside something else.
+  #
+  # IT THINKS HERE, WHERE THE 26B DOES NOT: LMStudio's model.yaml for this build sets
+  # `enableThinking` on. 78 of 85 completion tokens were reasoning on "say hi in one word",
+  # 556 of 967 on 17 * 23 (2026-10-03, on 1234 direct) — hence 8192, not the 26B's 4096.
+  #
+  # THE SAME FILE AS `unsloth-gemma4-12b`, not merely the same weights:
+  # lmstudio-community/gemma-4-12B-it-QAT-GGUF, which Unsloth Studio lists from this folder.
+  #
+  # SHADOW PRICE: OpenRouter lists no Gemma 4 12B (checked 2026-10-03), so this carries the
+  # rate the other Gemma routes do — above OpenRouter's 26B and 31B rates, so rounded UP,
+  # as settings.yaml § 2 asks.
+  - model_name: lms-gemma4-12b
+    litellm_params:
+      model: lm_studio/google/gemma-4-12b-qat
+      api_base: os.environ/LM_STUDIO_API_BASE
+      api_key: "sk-lmstudio"
+      input_cost_per_token: 0.00000012
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                    # it reasons, and the thinking spends this first
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952            # 262144 − the 8192 output reserve
       max_output_tokens: 8192
 
   # Gemma 4 26B A4B QAT — the large chat route, and the flagship local model. A 26B mixture
@@ -83,6 +117,13 @@ model_list:
   # the same model, max_tokens 128 came back EMPTY with finish_reason `length` and 2048
   # answered in 242 tokens (measured 2026-09-08). Hence 8192, not the 4096 above.
   #
+  # STRUCTURED OUTPUT COMES BACK EMPTY on /v1/chat/completions: with `response_format:
+  # json_schema` LMStudio returns `content: ''` and puts the JSON in `reasoning_content` —
+  # measured on 1234 with no gateway in the path, 2026-09-29, and through this route on
+  # `openai/`, 2026-09-30. Codex is not hit: on `openai/` (below) its /v1/responses goes native
+  # and the structured scenario passed 2/2, against 0/4 on `lm_studio/`. TESTING.md § 5.6.
+  # `unsloth-qwen38-27b` returns the JSON in `content`.
+  #
   # SHADOW PRICE: DeepInfra's unquantised bf16 rate for these weights on OpenRouter, $0.15 /
   # $1.875 per 1M (2026-09-29) — the cloud twin's rate, so a budget ceiling still trips.
   - model_name: lms-qwen38-27b
@@ -100,7 +141,7 @@ model_list:
       #             the level: 54 prompt tokens at `xhigh`, 12 at `medium` (2026-09-30, direct).
       #             `unsloth-qwen38-27b` was already `openai/`, and Codex passed there.
       # SCOPE:      provider=openai→LMStudio  route=/v1/responses  client=6_codex_sdk
-      # PROVEN:     2026-09-30, tests/run_cache.py codex × lms-qwen38-27b: fail on `lm_studio/`
+      # PROVEN:     2026-09-30, a live Codex session × lms-qwen38-27b: fail on `lm_studio/`
       #             with the line below, pass on `openai/`
       # GUARDED BY: tests/6_codex_sdk/02_session.py --model lms-qwen38-27b
       # TRIED AND REJECTED: a second deployment for /v1/responses only — LiteLLM's router
@@ -135,6 +176,25 @@ model_list:
       # GUARDED BY: tests/2_openai_client/05_reasoning_effort.py --model lms-qwen38-27b
       # KEEP IT on any new or renamed LMStudio Qwen alias, and on the copy in lukas.yaml.
       allowed_openai_params: ["reasoning_effort"]
+      # WHY:        THE LEVEL FOR A CALLER WHO SENDS NONE, or whose level LiteLLM drops. Without
+      #             it Qwen's template runs `xhigh`, and the line above only helps callers who
+      #             send a level. Claude Code was the one that paid: its main turns reached the
+      #             engine at `xhigh` with CLAUDE_CODE_EFFORT_LEVEL=medium (TESTING.md § 5.5). A
+      #             caller's own level still wins — this is a default, not a cap.
+      # SCOPE:      provider=openai→LMStudio  route=all three  client=every caller that sends no
+      #             level. Per alias, not in settings.yaml: Gemma's template ignores the field
+      # PROVEN:     2026-09-30, one system + user message, prompt tokens, no level / `xhigh`:
+      #             chat 24 / 62, /v1/messages 24 (and 24 for `output_config.effort` alone,
+      #             which LiteLLM still drops), /v1/responses 23 / 61 — 62, 62 and 61 with no
+      #             level before this line. Live Claude sessions at `medium`: all 6
+      #             engine requests at `medium`; at `low`: 2 of 3 at `low`, 1 at this default.
+      #             Codex 01-03 green.
+      # GUARDED BY: tests/2_openai_client/05_reasoning_effort.py --model lms-qwen38-27b — its
+      #             no-level call must match `Gateway.default_effort`
+      # TRIED AND REJECTED: nothing on Envoy — aigw cannot add a body field
+      #             (envoyproxy/ai-gateway#1985), so a Qwen caller there who sends no level
+      #             still gets `xhigh`. Envoy's `Gateway.default_effort` is None and says so.
+      reasoning_effort: medium
     model_info:
       max_input_tokens: 253952            # 262144 − the 8192 output reserve
       max_output_tokens: 8192

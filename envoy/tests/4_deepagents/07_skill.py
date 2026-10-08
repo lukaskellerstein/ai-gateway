@@ -17,7 +17,7 @@ loads a skill still cannot write to your disk.
 THE CODE IS ONLY IN THE SKILL FILE — not in any prompt here — so it can reach the
 answer only by the agent opening `skills/bench-facts/SKILL.md`.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

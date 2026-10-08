@@ -80,7 +80,7 @@ NEXT TIME: open #19871 and #26234. If either is closed, run this file on a LOCAL
 alias. When that line says True there too, delete the note above, add the alias
 to CALLS_THE_TOOL — or drop the set and assert for everyone.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

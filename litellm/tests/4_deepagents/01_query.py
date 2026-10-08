@@ -9,7 +9,7 @@ a todo list, a virtual filesystem and a subagent spawner — about a dozen tool
 schemas in front of every turn. A model that answers a plain question here
 without reaching for any of them is behaving correctly.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

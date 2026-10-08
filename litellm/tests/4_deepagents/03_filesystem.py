@@ -9,7 +9,7 @@ WHAT IT PROVES ABOUT THE GATEWAY: a two-step tool chain where the SECOND call
 depends on the result of the first. A gateway that loses a tool result passes 01
 and fails here.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

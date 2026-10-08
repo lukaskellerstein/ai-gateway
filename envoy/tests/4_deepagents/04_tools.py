@@ -12,7 +12,7 @@ THE TOOLS RETURN FIXED NUMBERS. A test calling a real API could not tell "the
 gateway is broken" from "the API is down", and the values are unguessable so a
 model that invents an answer fails the assertion.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

@@ -7,10 +7,16 @@ requires-python = ">=3.12"
 # `langchain[openai]` pulls in `langchain-openai`, which is the whole trick: the
 # gateway is OpenAI-compatible, so `ChatOpenAI(base_url=...)` is all it takes.
 # `langgraph` is listed explicitly even though langchain depends on it, because
-# main.py imports it directly and an implicit dependency is one a resolver may drop.
+# run.py imports it directly and an implicit dependency is one a resolver may drop.
 dependencies = [
     "langchain[openai]>=1.4.0",
     "langgraph>=1.2.11",
+    # Demo 3's tools come from the gateway's /mcp through this adapter, as ordinary
+    # LangChain tools — the same one folder 4 uses.
+    "langchain-mcp-adapters>=0.3.2",
+    # 1.x, BECAUSE THE ADAPTER CAPS IT: 0.3.2 declares `mcp>=1.24.0,<2.0.0`. Named
+    # anyway because `mcp_server.py` imports it directly. Folder 4 has the full note.
+    "mcp>=1.30.0",
 ]
 
 [tool.uv]

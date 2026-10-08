@@ -15,7 +15,7 @@ THE FACT LIVES ONLY IN THE SUBAGENT'S PROMPT. No model knows the bench mascot, s
 the name can only reach the final answer by travelling out to the subagent and
 back. That is the assertion.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

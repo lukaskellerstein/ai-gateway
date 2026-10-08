@@ -22,12 +22,31 @@
 #   and answers 401 when you call it, and the Envoy gateway on 26000 does the same. Nothing
 #   complains while the gateway boots.
 #
-#   IT SERVES ONE MODEL AT A TIME, and that limit SPANS chat and the embedder: calling
+#   A GATEWAY CALL SWAPS ONE ACTIVE MODEL, and that slot SPANS chat and the embedder: calling
 #   `unsloth-nomic-embed` unloads `unsloth-gemma4-26b`, and the next chat call swaps it back. So a
-#   retrieval loop that alternates embed and chat pays a model swap on every call — measured
-#   at 14 s cold and 4.4 s warm. `Settings > API > Model auto-switch` must be ON or the
-#   second alias you call returns 400 "No model loaded". Leave `auto_download_model` OFF, or
-#   an unknown model id becomes a multi-gigabyte download rather than an error.
+#   retrieval loop that alternates embed and chat pays a model swap on every call — 13-17 s
+#   each, measured 2026-10-07. Auto-switch replaces only the model the last plain load brought
+#   in, which Studio calls ACTIVE — not the least recently used one. `Settings > API > Model
+#   auto-switch` must be ON or the second alias you call returns 400 "No model loaded". Leave
+#   `auto_download_model` OFF, or an unknown model id becomes a multi-gigabyte download rather
+#   than an error.
+#
+#   A MODEL PRE-LOADED IN STUDIO STAYS BESIDE THE ACTIVE ONE (Studio v0.1.903-beta). It needs
+#   `Settings > Resources > Keep multiple models loaded` — off by default, ON on this laptop
+#   since 2026-10-07 — and a load with `Keep other models loaded` in Studio's model picker, or
+#   `"alongside": true` on `POST /api/inference/load`. NO GATEWAY CALL CAN LOAD ONE THAT WAY:
+#   auto-switch only ever replaces the active slot. `GET /api/inference/loaded-models` lists
+#   what is held. Measured 2026-10-07 with E4B, the 26B and `unsloth-nomic-embed` held at once:
+#   0.0-0.3 s per call on 8888 and through 24000, nothing evicted; E4B and the 26B decoding at
+#   the same moment ran ~95 tok/s each against ~140 alone, 3.7 s for the pair against ~5.3 s
+#   one after the other. When memory runs out Studio unloads the least recently used held
+#   model first (unslothai/unsloth#11591) — not measured here, 128 GB never ran out.
+#
+#   THE OTHER EXCEPTION IS STUDIO'S OWN EMBEDDER — the model in `Settings -> embedding model`.
+#   Studio runs it in a separate process BESIDE the chat model, so it evicts nothing. That is
+#   `unsloth-nomic-embed-sidecar` below. Measured 2026-10-03 with the 26B loaded: the sidecar
+#   answered in 0.04 s and the 26B stayed loaded; `unsloth-nomic-embed` replaced the 26B, and
+#   the next chat call took 13.4 s to load it back.
 #
 #   IT TURNS REASONING ON where LMStudio does not. Verified 2026-08-27: `unsloth-gemma4-26b`
 #   returns a reasoning block that `lms-gemma4-26b` — the identical gemma-4-26b-a4b-qat — does not.
@@ -54,6 +73,25 @@ model_list:
       max_input_tokens: 122880            # 131072 − the 8192 output reserve
       max_output_tokens: 8192
 
+  # `lms-gemma4-12b`'s twin, and THE SAME FILE, not an Unsloth upload: Studio lists LMStudio's
+  # models folder too, and lmstudio-community/gemma-4-12B-it-QAT-GGUF is the only Gemma 4 12B on
+  # this disk — one Q4_0, so a bare name cannot load a different quant. A dense 12B: it saves
+  # memory against the 26B below and costs speed — 58–60 tok/s decode against 137–198, the
+  # session 41–132 s against 7–18 s (run_benchmark.py, two runs, 2026-10-03). Window 262144,
+  # read from GET /v1/status with this model loaded. lms.yaml has the full note.
+  - model_name: unsloth-gemma4-12b
+    litellm_params:
+      model: openai/lmstudio-community/gemma-4-12B-it-QAT-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000012    # no hosted twin — see lms-gemma4-12b
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192                    # reasoning and reply share this — see above
+      timeout: 3600
+    model_info:
+      max_input_tokens: 253952            # 262144 − the 8192 output reserve
+      max_output_tokens: 8192
+
   # `lms-gemma4-26b`'s twin: the same gemma-4-26b-a4b-qat weights on a different engine. This
   # pair is the cleanest engine comparison in the repo — identical build, identical model.
   - model_name: unsloth-gemma4-26b
@@ -71,8 +109,49 @@ model_list:
       max_input_tokens: 253952
       max_output_tokens: 8192
 
+  # THE FAST ROUTE: `unsloth-gemma4-26b` WITH THINKING OFF. The same model id, so the same
+  # loaded file — calling one after the other swaps nothing. A caller that wants speed changes
+  # the name and nothing else. To think, call `unsloth-gemma4-26b`. A caller's thinking LEVEL
+  # does not turn it back on; a body that says `enable_thinking: true` outright does, because
+  # LiteLLM lets the caller's field win over `extra_body` (2026-10-04). Envoy's copy overwrites
+  # it, so there nothing turns it back on.
+  #
+  # NO `lms-` TWIN IS NEEDED: LMStudio does not turn Gemma's reasoning on at all (see the note
+  # at the top), so `lms-gemma4-26b` already answers like this.
+  - model_name: unsloth-gemma4-26b-fast
+    litellm_params:
+      model: openai/unsloth/gemma-4-26B-A4B-it-qat-GGUF
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0.00000012
+      output_cost_per_token: 0.00000035
+      max_tokens: 8192
+      timeout: 3600
+      # WHY:        Unsloth turns Gemma's thinking on by default, and it is most of the wait.
+      #             One question on 8888 direct: 697 reasoning chars, 301 tokens, 1.7 s with
+      #             it; none, 14 tokens, 0.2 s without. EACH ROUTE OBEYS A DIFFERENT FIELD, so
+      #             both go: `enable_thinking` on chat and /v1/messages, `chat_template_kwargs`
+      #             on /v1/responses. Together they hold against a caller's `reasoning_effort:
+      #             high`, Codex's `reasoning` and Claude Code's `thinking: adaptive`.
+      # SCOPE:      provider=openai (Unsloth)  route=all three  client=every folder
+      # PROVEN:     2026-10-04, the 26B loaded. 8888 direct: the numbers above. Through this
+      #             route: chat, /v1/responses and /v1/messages each 14 tokens and no thinking
+      #             block, against 331–544 tokens with one on `unsloth-gemma4-26b`
+      # TRIED AND REJECTED: `enable_thinking` alone — /v1/responses still thought (903
+      #             chars). `chat_template_kwargs` alone — /v1/messages still thought (886),
+      #             and a caller's `reasoning_effort` beat it on chat (864). `reasoning_effort:
+      #             none` — never reaches the engine through this route.
+      # GUARDED BY: tests/2_openai_client/06_thinking_off.py --model unsloth-gemma4-26b-fast
+      extra_body:
+        enable_thinking: false
+        chat_template_kwargs:
+          enable_thinking: false
+    model_info:
+      max_input_tokens: 253952            # 262144 − the 8192 output reserve
+      max_output_tokens: 8192
+
   # Qwen 3.8 27B, the SAME MODEL as `lms-qwen38-27b` but NOT THE SAME BUILD: this is Unsloth's
-  # UD-Q8_K_XL GGUF, 32 GB, where LMStudio runs the 16 GB MLX 4-bit. A dense 27B that thinks
+  # UD-Q8_K_XL GGUF, 31.5 GB, where LMStudio runs the 16 GB MLX 4-bit. A dense 27B that thinks
   # before it answers — see lms.yaml for the measurement behind max_tokens and the price.
   #
   # WHY NOT THE MLX BUILD LMSTUDIO USES: Unsloth serves its Anthropic route, POST /v1/messages,
@@ -82,11 +161,14 @@ model_list:
   # (both 2026-09-29). This file is not what needs the route, but one alias, one build: the
   # two gateways must mean the same weights by this name.
   #
-  # The same file on disk as LMStudio's `qwen3.8-27b`, hard-linked from the HuggingFace cache.
+  # PINNED WITH `:UD-Q8_K_XL` (2026-10-02). The repo also holds UD-Q4_K_XL on this disk, and a
+  # bare repo name loads whichever quant ranks first in Unsloth's GGUF_QUANT_PREFERENCE — the
+  # Q4. Q8 was chosen on speed: 23 against 21 tok/s, faster in 12 of 14 paired sessions of
+  # `run_benchmark.py`, both with Unsloth's MTP draft (COMPARISON.md § Per client and per model).
   # Window 262144, read from GET /v1/status with this model loaded.
   - model_name: unsloth-qwen38-27b
     litellm_params:
-      model: openai/unsloth/Qwen3.8-27B-GGUF
+      model: openai/unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL
       api_base: os.environ/UNSLOTH_API_BASE
       api_key: os.environ/UNSLOTH_API_KEY
       input_cost_per_token: 0.00000015
@@ -105,6 +187,12 @@ model_list:
       # PROVEN:     see GUARDED BY — green with this line, red without it (2026-09-30)
       # GUARDED BY: tests/2_openai_client/05_reasoning_effort.py --model unsloth-qwen38-27b
       allowed_openai_params: ["reasoning_effort"]
+      # THE LEVEL FOR A CALLER WHO SENDS NONE — `medium`, not the template's `xhigh`. A caller's
+      # own level still wins. Why, and every route measured: `lms-qwen38-27b` in lms.yaml.
+      # PROVEN:     2026-09-30, prompt tokens with no level / at `xhigh`: chat 24 / 62,
+      #             /v1/responses 24 / 62, /v1/messages 24 (4 + 20 cache-read)
+      # GUARDED BY: tests/2_openai_client/05_reasoning_effort.py --model unsloth-qwen38-27b
+      reasoning_effort: medium
     model_info:
       max_input_tokens: 253952            # 262144 − the 8192 output reserve
       max_output_tokens: 8192
@@ -125,3 +213,28 @@ model_list:
       output_cost_per_token: 0
     model_info:
       max_input_tokens: 2048              # context_length from Unsloth's GET /v1/status
+
+  # STUDIO'S OWN EMBEDDER, run BESIDE the chat model — so, unlike every other alias in this
+  # file, calling it evicts nothing (measured 2026-10-03, see the note at the top). A RAG loop
+  # that embeds and then chats needs this one: with `unsloth-nomic-embed` it pays two model
+  # swaps per question.
+  #
+  # IT IS ONLY THE SIDECAR WHILE THIS EXACT ID IS STUDIO'S `Settings -> embedding model`. Set
+  # anything else there and this name goes through auto-switch like the alias above, and
+  # evicts the chat model again — with no error to say so.
+  #
+  # THE SAME nomic v1.5, A DIFFERENT BUILD from `unsloth-nomic-embed` (nomic-ai's own release,
+  # not second-state's GGUF), so vectors from the two are NOT interchangeable. ai-agent-rag's
+  # vector stores are built with this one.
+  #
+  # The model reads 2048 tokens, but Studio runs this embedder at 512 and answers 400 to an
+  # input over 510 (measured 2026-09-27, ai-agent-rag).
+  - model_name: unsloth-nomic-embed-sidecar
+    litellm_params:
+      model: openai/nomic-ai/nomic-embed-text-v1.5
+      api_base: os.environ/UNSLOTH_API_BASE
+      api_key: os.environ/UNSLOTH_API_KEY
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 512

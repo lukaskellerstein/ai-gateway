@@ -12,7 +12,7 @@ So this file times ONE HTTP REQUEST and nothing else.
 
 WHAT IS HELD CONSTANT, and each of these is a way the comparison could have lied:
 
-    the engine      both proxy to ONE Unsloth on :8888, which holds one model
+    the engine      both proxy to ONE Unsloth on :8888 and one loaded model
     the model       one alias, and the upstream id is READ BACK and compared
     the body        byte-identical messages, temperature 0
     max_tokens      SENT EXPLICITLY to both. This one is not optional: LiteLLM

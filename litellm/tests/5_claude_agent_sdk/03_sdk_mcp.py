@@ -18,7 +18,7 @@ TWO TOOLS, NOT ONE. With a single tool a model that always calls the only thing
 it has looks correct. Two tools and one question that needs both is the smallest
 test of actual selection.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

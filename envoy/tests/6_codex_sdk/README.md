@@ -7,12 +7,12 @@ Codex at all, however well it serves chat completions. This one serves it at
 `26000/v1/responses`.
 
 ```bash
-uv run run_all.py                     # all four
-uv run run_all.py --model unsloth-gemma4-26b # the same four on another alias
+uv run run_all.py                     # all five
+uv run run_all.py --model unsloth-gemma4-26b # the same five on another alias
 uv run 04_mcp.py                      # one scenario, directly
 ```
 
-## The four scenarios
+## The five scenarios
 
 | File | Feature | What a red row means |
 |:--|:--|:--|
@@ -20,8 +20,9 @@ uv run 04_mcp.py                      # one scenario, directly
 | `02_session.py` | a `Thread` that remembers | the conversation does not survive the round trip |
 | `03_structured.py` | `output_schema` | the gateway drops structured output — the reply is prose, not JSON |
 | `04_mcp.py` | an MCP server over stdio | Codex could not start the server or read its config — or, on `openrouter-gemma4-26b` only, the model did not call the tool |
+| `05_gateway_mcp.py` | the same server **behind the gateway**, through `/mcp` | Codex never listed the tools through the gateway |
 
-## ⚠ The MCP scenario asserts the tool call on ONE alias, and the wiring on the rest
+## ⚠ The MCP scenarios assert the tool call on ONE alias, and the wiring on the rest
 
 `04_mcp.py` proves Codex spawns the server, completes the handshake and asks
 for its tools — on every alias. It asserts that the model **called** the tool
@@ -119,6 +120,69 @@ Python SDK cannot drive that runtime.
 every run. When that says `True` there too, delete this section and add the
 alias to `CALLS_THE_TOOL`, or drop the set and assert for everyone.
 
+### The gateway does not change it — `05_gateway_mcp.py`
+
+`05` gives Codex ONE server, the gateway's `/mcp`, and the gateway forwards to
+`mcp_server.py` on the port its config names. **The gateway renames the tools and
+does not flatten them**: Codex still builds one `namespace` tool out of whatever it
+is given, so a local model sees nothing it can call. `05` therefore asserts the
+wiring — the server writes `.mcp_tools_listed` when a client lists its tools — and
+prints the call. The aliases it asserts are `GATEWAY_MCP_CALLS_THE_TOOL` in
+`settings.py`: `openrouter-gemma4-26b` on LiteLLM, which called the tool there (one paid
+run, 2026-10-07), and **none on Envoy, on any model**. Codex lists Envoy's tools and then
+drops them: Envoy's `tools/list` result carries `"cacheScope":""`, and Codex 0.155.1
+discards any result that carries `cacheScope`. `TESTING.md` §5.7 has the measurement.
+
+The marker cannot lie, measured on both gateways 2026-10-07: with no client
+connected, 60 idle seconds brought no listing to the server, and each of two
+client listings in a row reached it — neither gateway caches the list.
+
+**Its prompt ends with a way out** — *"If you cannot call it, say so in one
+sentence and stop"* — and runs in an empty directory. Without both,
+`unsloth-gemma4-26b` went looking for the tool through the shell: one turn took 10
+minutes and 25 requests, another read the serial number out of `mcp_server.py`.
+With them a turn is 4–9 s on both gateways.
+
+## Copy this folder
+
+`settings.py` is **the one file to edit** when you take this folder into another
+project: the URLs, the key, the default model, the thinking level, the timeout and the
+context window Codex compacts against. Every other file is byte-identical to the same
+folder in the other project and names no port, key or model.
+
+**The thinking level is sent on every request** — `model_reasoning_effort="medium"`,
+which Codex puts on the wire as `reasoning: {effort, summary: "auto"}`. Qwen 3.8
+defaults to `xhigh`, where one agent step took 693 s and answered nothing (2026-09-30).
+Copy `common.py` with it: the empty `CODEX_HOME` and `features.plugins=false` are what
+keep this machine's `~/.codex` out of the request.
+
+## What it costs, per model — `run_benchmark.py`
+
+```bash
+uv run run_benchmark.py                                  # every default model, writes RESULTS.md
+uv run run_benchmark.py --aliases lms-gemma4-26b --no-write
+```
+
+The same three-turn task as every other folder, in ONE Codex thread. Codex reads
+`order.json` with its own shell from a temporary working directory, and each model
+request is one row, closed by Codex's `thread/tokenUsage/updated` event. The numbers
+are in [`RESULTS.md`](RESULTS.md); the task and the table are the shared part at the
+bottom of `run_benchmark.py`, byte-identical in all fourteen folders. OpenRouter rows cost money.
+
+Two things the numbers cannot say on their own, both measured 2026-09-30 and both
+written into `RESULTS.md`:
+
+- **Through LiteLLM there is no first token or decode speed.** LiteLLM's Responses
+  stream opens the reasoning item without a `summary` field and never opens the message
+  item, and Codex then surfaces no delta at all. Envoy passes LMStudio's own stream
+  through, and both kinds arrive.
+- **A cached count of 0 can mean "not reported".** Codex's count is a required integer,
+  and LiteLLM's `/v1/responses` sends none for LMStudio. Envoy passes LMStudio's through.
+
+Run it **outside any other macOS sandbox**: Codex's read-only sandbox is `sandbox-exec`,
+which cannot nest, and inside one every command exits 71 with `sandbox_apply: Operation
+not permitted`.
+
 ## Two things that are not obvious
 
 - **An empty `CODEX_HOME` is load-bearing.** Codex reads
@@ -132,7 +196,7 @@ alias to `CALLS_THE_TOOL`, or drop the set and assert for everyone.
   is off because an empty home otherwise clones the plugin marketplace in the
   background. This is the Codex equivalent of `setting_sources=[]` in folder 5,
   and without it the run depends on who is at the keyboard.
-- **`mcp_server.py` writes marker files**, and `04` asserts on them rather than
+- **`mcp_server.py` writes marker files**, and `04` and `05` assert on them rather than
   on the answer. That is not belt-and-braces: a model with shell access read the
   serial number straight out of the server's source and reported it correctly
   without calling anything (measured 2026-09-04). An answer-only assertion would
@@ -142,11 +206,14 @@ alias to `CALLS_THE_TOOL`, or drop the set and assert for everyone.
 
 ```text
 6_codex_sdk/
-├── common.py          the provider config, the thread defaults, the runner
-├── run_all.py         globs NN_*.py
-├── 01_query.py … 04_mcp.py
-└── mcp_server.py      the MCP server 04 spawns. NOT a test
+├── settings.py          THE ONE FILE TO EDIT: URLs, key, model, level, timeout
+├── common.py            the provider config, the thread defaults, the runner
+├── run_all.py           globs NN_*.py
+├── 01_query.py … 05_gateway_mcp.py
+├── mcp_server.py        the MCP server: 04 spawns it, 05 runs it behind the gateway. NOT a test
+├── run_benchmark.py     the three-turn task, one row per model request
+└── RESULTS.md           what run_benchmark.py measured
 ```
 
-**`01`–`04`, `run_all.py` and `mcp_server.py` are byte-identical to
-`../../../litellm/tests/6_codex_sdk/`.** Only `common.py` differs, in the health URL `run_all.py` probes.
+**Every Python file but `settings.py` is byte-identical to
+`../../../litellm/tests/6_codex_sdk/`.**

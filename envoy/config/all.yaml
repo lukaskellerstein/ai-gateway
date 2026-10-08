@@ -1,13 +1,15 @@
 # EVERY ENGINE AT ONCE — the default config, and what this gateway serves unless
 # .env names a single engine instead.
 #
-# 28 ROUTE RULES: 16 model aliases, and an `-anthropic` twin for each of the 12
+# 35 ROUTE RULES: 20 model aliases, and an `-anthropic` twin for each of the 15
 # chat ones.
 #
-#   LMStudio        free   lms-gemma4-e4b         lms-gemma4-26b         lms-qwen38-27b
-#                          lms-nomic-embed
-#   Unsloth Studio  free   unsloth-gemma4-e4b     unsloth-gemma4-26b     unsloth-qwen38-27b
-#                          unsloth-nomic-embed
+#   LMStudio        free   lms-gemma4-e4b         lms-gemma4-12b         lms-gemma4-26b
+#                          lms-qwen38-27b         lms-nomic-embed
+#   Unsloth Studio  free   unsloth-gemma4-e4b     unsloth-gemma4-12b     unsloth-gemma4-26b
+#                          unsloth-gemma4-26b-fast
+#                          unsloth-qwen38-27b     unsloth-nomic-embed
+#                          unsloth-nomic-embed-sidecar
 #   Ollama          free   ollama-gemma4-e4b      ollama-gemma4-26b      ollama-nomic-embed
 #   OpenRouter      PAID   openrouter-gemma4-26b  openrouter-qwen38-27b
 #   OpenAI          PAID   openai-gpt54-mini      openai-embed3-small
@@ -35,11 +37,11 @@
 # Measured 2026-09-06. So each engine keeps its OWN route — `aigw-run-<engine>` —
 # and all six attach to the same Gateway through `parentRefs`. Several HTTPRoutes
 # on one Gateway is ordinary Gateway API, every match here is an exact header
-# value, and all 28 values are distinct, so nothing is ambiguous.
+# value, and all 35 values are distinct, so nothing is ambiguous.
 #
 # IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Six engines at
 # 15 aliases each is fine; one engine at 16 is not. The fullest today are
-# `aigw-run-lms` and `aigw-run-unsloth` at 7.
+# `aigw-run-unsloth` at 12 and `aigw-run-lms` at 9.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # THIS FILE IS A COPY OF THE OTHER SIX, AND THAT IS THE PRICE OF ENVOY.
@@ -193,6 +195,18 @@ spec:
         # 5-15 minutes before its first token. This is the same fact that puts
         # `timeout: 3600` on every local route in ../../litellm/config/.
         request: 60m
+    # A DENSE 12B: half the 26B's memory, but slower per token. ../../litellm/config/lms.yaml
+    # has the measurement.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-gemma4-12b
+      backendRefs:
+        - name: lms
+          modelNameOverride: google/gemma-4-12b-qat
+      timeouts:
+        request: 60m
     - matches:
         - headers:
             - type: Exact
@@ -261,6 +275,16 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
+              value: lms-gemma4-12b-anthropic
+      backendRefs:
+        - name: lms-anthropic
+          modelNameOverride: google/gemma-4-12b-qat
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
               value: lms-gemma4-26b-anthropic
       backendRefs:
         - name: lms-anthropic
@@ -320,6 +344,17 @@ spec:
           modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
       timeouts:
         request: 60m
+    # LMSTUDIO'S OWN FILE — the same Q4_0 `lms-gemma4-12b` loads. See unsloth.yaml.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-gemma4-12b
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: lmstudio-community/gemma-4-12B-it-QAT-GGUF
+      timeouts:
+        request: 60m
     - matches:
         - headers:
             - type: Exact
@@ -330,6 +365,24 @@ spec:
           modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
       timeouts:
         request: 60m
+    # THE FAST ROUTE: the 26B above with thinking OFF — see unsloth.yaml.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-gemma4-26b-fast
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+          bodyMutation:
+            set:
+              - path: enable_thinking
+                value: "false"
+              - path: chat_template_kwargs
+                value: '{"enable_thinking": false}'
+      timeouts:
+        request: 60m
+    # PINNED with `:UD-Q8_K_XL` (2026-10-02) — see unsloth.yaml.
     - matches:
         - headers:
             - type: Exact
@@ -337,7 +390,7 @@ spec:
               value: unsloth-qwen38-27b
       backendRefs:
         - name: unsloth
-          modelNameOverride: unsloth/Qwen3.8-27B-GGUF
+          modelNameOverride: unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL
       timeouts:
         request: 60m
     - matches:
@@ -348,6 +401,18 @@ spec:
       backendRefs:
         - name: unsloth
           modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
+      timeouts:
+        request: 60m
+    # Studio's own embedder, run beside the chat model — evicts nothing while it is the
+    # `Settings -> embedding model`. Not interchangeable with the GGUF above.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-nomic-embed-sidecar
+      backendRefs:
+        - name: unsloth
+          modelNameOverride: nomic-ai/nomic-embed-text-v1.5
       timeouts:
         request: 60m
     # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
@@ -400,7 +465,7 @@ spec:
               value: unsloth-qwen38-27b-anthropic
       backendRefs:
         - name: unsloth-anthropic
-          modelNameOverride: unsloth/Qwen3.8-27B-GGUF
+          modelNameOverride: unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL
       timeouts:
         request: 60m
     - matches:
@@ -411,6 +476,33 @@ spec:
       backendRefs:
         - name: unsloth-anthropic
           modelNameOverride: unsloth/gemma-4-E4B-it-qat-GGUF
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-gemma4-12b-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: lmstudio-community/gemma-4-12B-it-QAT-GGUF
+      timeouts:
+        request: 60m
+    # The fast route for Claude Code — see unsloth.yaml.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: unsloth-gemma4-26b-fast-anthropic
+      backendRefs:
+        - name: unsloth-anthropic
+          modelNameOverride: unsloth/gemma-4-26B-A4B-it-qat-GGUF
+          bodyMutation:
+            set:
+              - path: enable_thinking
+                value: "false"
+              - path: chat_template_kwargs
+                value: '{"enable_thinking": false}'
       timeouts:
         request: 60m
   # What lands in the access log above. Without these the token fields are empty.
@@ -1329,3 +1421,70 @@ spec:
   apiKey:
     secretRef:
       name: cerebras-apikey
+---
+# =============================================================================
+# THE MCP SERVERS BEHIND THIS GATEWAY — /mcp on 26000. A TOOL SERVER IS NOT AN
+# ENGINE, so this same block closes EVERY file in this directory: the six engine
+# files, all.yaml and the personal lukas.yaml. `aigw run` reads one file and
+# Envoy has no `include:`, so a copy in each is the only way /mcp answers
+# whatever GATEWAY_ENGINE says. Keep the copies identical — `tail` two files
+# and compare.
+#
+# A caller connects to ONE endpoint and gets the tools of every backend below,
+# each renamed `<backend>__<tool>`. It never learns where a server runs, so
+# moving one changes nothing that calls the gateway.
+#
+# NOTHING CHECKS THE CALLER, the same as on the LLM routes: anything that
+# reaches 26000 can list and call these tools. `securityPolicy.apiKeyAuth` on
+# the MCPRoute is the lever when a server with real side effects goes here. It
+# is not set, because the test server's two tools return fixed strings.
+#
+# `bench-hardware` IS THE TEST SERVER, AND IT RUNS ONLY WHILE A TEST RUNS: each
+# agent folder in ../tests starts its own `mcp_server.py --http 26090` for one
+# scenario and stops it after. 26090 and not LiteLLM's 24090, so both suites
+# can run at the same time.
+#
+# SO /mcp ANSWERS 500 BETWEEN TEST RUNS, and that is correct. With no backend
+# up, `initialize` gets `failed to create MCP session to any backend` (measured
+# 2026-10-07). LiteLLM answers at the same moment with an empty tool list.
+#
+# NOT `--mcp-config`. aigw reads that flag ONLY when no config file is given
+# (cmd/aigw/config.go, `readConfig`), and compose always passes one, so the flag
+# would be ignored without an error. An MCPRoute in this file is read by the
+# same code path as the AIGatewayRoutes above (cmd/aigw/translate.go,
+# `case "MCPRoute"`).
+#
+# GUARDED BY: ../tests/4_deepagents/08_gateway_mcp.py and the same scenario in
+# folders 3, 5, 6 and 7. Delete this block and every one of them goes red.
+# =============================================================================
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: aigw-run-mcp
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  path: /mcp
+  backendRefs:
+    # The backend's NAME is the tool prefix, and a Kubernetes name allows no
+    # underscore — hence `bench-hardware`, where LiteLLM says `bench_hardware`.
+    - name: bench-hardware
+      kind: Backend
+      group: gateway.envoyproxy.io
+      path: /mcp
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: bench-hardware
+  namespace: default
+spec:
+  endpoints:
+    # The test server binds 127.0.0.1 on the HOST. compose.yml maps
+    # host.docker.internal to the host gateway, as it does for the engines.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 26090

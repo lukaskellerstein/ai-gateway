@@ -3,7 +3,7 @@
 The smallest thing OpenCode can do. It proves the server starts, the custom
 provider resolves, the gateway answers, and the reply reaches Python.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

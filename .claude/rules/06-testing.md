@@ -83,7 +83,7 @@ cd envoy/tests   && uv run run_all.py    # 7 rows against 26000
 
 uv run run_all.py --model <the alias you touched>   # every folder, one alias
 uv run run_all.py --only 6_codex_sdk                # one folder
-cd 3_langchain_langgraph && uv run main.py          # one folder, directly
+cd 3_langchain_langgraph && uv run run.py           # one folder, directly
 ```
 
 | Folder | Calls the gateway with |
@@ -91,14 +91,20 @@ cd 3_langchain_langgraph && uv run main.py          # one folder, directly
 | `1_http_client` | `urllib`, **no dependencies at all** |
 | `2_openai_client` | `openai` — the four scripts that used to BE `tests/` |
 | `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop built by hand |
-| `4_deepagents` | a deep agent. **Seven scenarios: query, todos, filesystem, tools, MCP, subagent, skill** |
-| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → the Anthropic Messages API. **Seven scenarios**: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
-| `6_codex_sdk` | a `model_providers` override → the Responses API. **Four scenarios: query, session, structured output, MCP wiring** |
-| `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider. **Five scenarios: query, session, agent, MCP, structured output** |
+| `4_deepagents` | a deep agent. **Eight scenarios: query, todos, filesystem, tools, MCP, subagent, skill, gateway MCP** |
+| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → the Anthropic Messages API. **Eight scenarios**: query, session, in-process MCP, stdio MCP, subagent, skill, thinking, gateway MCP |
+| `6_codex_sdk` | a `model_providers` override → the Responses API. **Five scenarios: query, session, structured output, MCP wiring, gateway MCP wiring** |
+| `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider. **Six scenarios: query, session, agent, MCP, structured output, gateway MCP** |
 
-**`tests/gateway.py` holds the base URL, the key and the alias once per project.** Every
-folder imports it, and it imports nothing outside the standard library — it has to load inside
-`1_http_client`'s empty venv. Change an alias default there, never in seven places.
+**Each folder's `settings.py` holds its URL, key, default alias and thinking level** — the
+one file that differs between the two projects, and the one someone edits after copying the
+folder (since 2026-09-30; `tests/gateway.py` is gone). A default changes in fourteen places,
+and that is the price of a folder that can be copied alone.
+
+**Each folder's `run_benchmark.py` measures that client on several models** and writes its
+`RESULTS.md`: first token, decode speed and cached tokens per request, for the same task in
+all fourteen folders. It is not in `run_all.py`, and its `openrouter-*` rows bill a real
+account. `--aliases <alias> --no-write` measures one free alias and writes nothing.
 
 **All seven folders run on both gateways.** A folder that could not run used to carry a
 script that PROVED the gap and passed while it lasted; both such folders went with `mlflow/`
@@ -115,7 +121,7 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   check that stopping one leaves the other serving. **Then put them both back the way you found
   them**, including each project's `GATEWAY_ENGINE`.
 - **You touched either `config/all.yaml`** — prove BOTH modes on that gateway. Bring it up on
-  `all` and confirm the full alias list on `/v1/models` (**17** on 24000, **28** on 26000),
+  `all` and confirm the full alias list on `/v1/models` (**21** on 24000, **35** on 26000),
   then bring it up on ONE engine and confirm the short list. A default config that serves
   everything hides a broken per-engine file, and the other way round.
 - **You added an alias to `envoy/config/<engine>.yaml`** — confirm it answers under BOTH
@@ -135,10 +141,11 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   `AIServiceBackend`**, or `tests/5_claude_agent_sdk` exits on that engine — by design, and
   the message names the file.
 - **You touched the prompt path** — an alias's provider, a callback, a Claude Code setting,
-  anything that can change what an engine sees — run `uv run run_cache.py --aliases <alias>`
-  in BOTH `tests/`. The "last turn" column must not fall, and `cache_report.py`'s rewrite list
-  names the text that broke it. LMStudio only shows what the engine reused; for the other
-  engines only the reported figure exists.
+  anything that can change what an engine sees — run `uv run run_benchmark.py --aliases <alias>
+  --no-write` in that client's folder, in BOTH `tests/`. The later requests' first token must
+  stay short and their cached count must not fall. LMStudio's chat route reports no count
+  (lmstudio-ai/lmstudio-bug-tracker#778); `lms log stream` shows the engine's own prompt, so
+  diff two consecutive ones to find the text that changed.
 - **Tool calling or `/v1/messages`** — a plain completion is not enough. Send a request
   carrying a tool schema and confirm a structured `tool_calls` reply, not raw-text tool
   syntax. That distinction is the entire reason the provider pin exists.

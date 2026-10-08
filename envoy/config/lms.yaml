@@ -1,6 +1,7 @@
-# LMStudio, on this machine — 4 aliases, free.
+# LMStudio, on this machine — 5 aliases, free.
 #
 #   lms-gemma4-e4b    google/gemma-4-e4b                     chat, tools + vision
+#   lms-gemma4-12b    google/gemma-4-12b-qat                 chat, 12B dense, Q4_0
 #   lms-gemma4-26b    google/gemma-4-26b-a4b-qat             chat, 26B MoE ~4B active
 #   lms-qwen38-27b    qwen/qwen3.8-27b                       chat, 27B dense, MLX 4-bit
 #   lms-nomic-embed   text-embedding-nomic-embed-text-v1.5   embeddings, 768 dims
@@ -26,6 +27,7 @@
 # load comes back at 8192 context with a 1 h TTL, ignoring these numbers:
 #
 #   lms load google/gemma-4-e4b            --context-length 131072 --parallel 1 --gpu max
+#   lms load google/gemma-4-12b-qat        --context-length 262144 --parallel 1 --gpu max
 #   lms load google/gemma-4-26b-a4b-qat    --context-length 262144 --parallel 1 --gpu max
 #   lms load qwen/qwen3.8-27b              --context-length 262144 --parallel 1 --gpu max
 #   lms load text-embedding-nomic-embed-text-v1.5
@@ -145,6 +147,18 @@ spec:
         # 5-15 minutes before its first token. This is the same fact that puts
         # `timeout: 3600` on every local route in ../../litellm/config/.
         request: 60m
+    # A DENSE 12B: half the 26B's memory, but slower per token. ../../litellm/config/lms.yaml
+    # has the measurement.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-gemma4-12b
+      backendRefs:
+        - name: lms
+          modelNameOverride: google/gemma-4-12b-qat
+      timeouts:
+        request: 60m
     - matches:
         - headers:
             - type: Exact
@@ -207,6 +221,16 @@ spec:
       backendRefs:
         - name: lms-anthropic
           modelNameOverride: google/gemma-4-e4b
+      timeouts:
+        request: 60m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: lms-gemma4-12b-anthropic
+      backendRefs:
+        - name: lms-anthropic
+          modelNameOverride: google/gemma-4-12b-qat
       timeouts:
         request: 60m
     - matches:
@@ -351,3 +375,70 @@ spec:
   apiKey:
     secretRef:
       name: lms-apikey
+---
+# =============================================================================
+# THE MCP SERVERS BEHIND THIS GATEWAY — /mcp on 26000. A TOOL SERVER IS NOT AN
+# ENGINE, so this same block closes EVERY file in this directory: the six engine
+# files, all.yaml and the personal lukas.yaml. `aigw run` reads one file and
+# Envoy has no `include:`, so a copy in each is the only way /mcp answers
+# whatever GATEWAY_ENGINE says. Keep the copies identical — `tail` two files
+# and compare.
+#
+# A caller connects to ONE endpoint and gets the tools of every backend below,
+# each renamed `<backend>__<tool>`. It never learns where a server runs, so
+# moving one changes nothing that calls the gateway.
+#
+# NOTHING CHECKS THE CALLER, the same as on the LLM routes: anything that
+# reaches 26000 can list and call these tools. `securityPolicy.apiKeyAuth` on
+# the MCPRoute is the lever when a server with real side effects goes here. It
+# is not set, because the test server's two tools return fixed strings.
+#
+# `bench-hardware` IS THE TEST SERVER, AND IT RUNS ONLY WHILE A TEST RUNS: each
+# agent folder in ../tests starts its own `mcp_server.py --http 26090` for one
+# scenario and stops it after. 26090 and not LiteLLM's 24090, so both suites
+# can run at the same time.
+#
+# SO /mcp ANSWERS 500 BETWEEN TEST RUNS, and that is correct. With no backend
+# up, `initialize` gets `failed to create MCP session to any backend` (measured
+# 2026-10-07). LiteLLM answers at the same moment with an empty tool list.
+#
+# NOT `--mcp-config`. aigw reads that flag ONLY when no config file is given
+# (cmd/aigw/config.go, `readConfig`), and compose always passes one, so the flag
+# would be ignored without an error. An MCPRoute in this file is read by the
+# same code path as the AIGatewayRoutes above (cmd/aigw/translate.go,
+# `case "MCPRoute"`).
+#
+# GUARDED BY: ../tests/4_deepagents/08_gateway_mcp.py and the same scenario in
+# folders 3, 5, 6 and 7. Delete this block and every one of them goes red.
+# =============================================================================
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: aigw-run-mcp
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  path: /mcp
+  backendRefs:
+    # The backend's NAME is the tool prefix, and a Kubernetes name allows no
+    # underscore — hence `bench-hardware`, where LiteLLM says `bench_hardware`.
+    - name: bench-hardware
+      kind: Backend
+      group: gateway.envoyproxy.io
+      path: /mcp
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: bench-hardware
+  namespace: default
+spec:
+  endpoints:
+    # The test server binds 127.0.0.1 on the HOST. compose.yml maps
+    # host.docker.internal to the host gateway, as it does for the engines.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 26090

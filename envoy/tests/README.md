@@ -7,12 +7,12 @@ client, then five agent frameworks.
 | Folder | Reaches the gateway through | Proves |
 |:--|:--|:--|
 | [`1_http_client`](1_http_client/README.md) | `urllib` — **no dependencies at all** | the request every other folder wraps, plain and streaming |
-| [`2_openai_client`](2_openai_client/README.md) | `openai` | four scenarios: chat, tools, an image, and this gateway's calling contract |
-| [`3_langchain_langgraph`](3_langchain_langgraph/README.md) | `ChatOpenAI(base_url=…)` | LangChain's prebuilt agent, and the same ReAct loop built by hand in LangGraph |
-| [`4_deepagents`](4_deepagents/README.md) | the same `ChatOpenAI` | a deep agent — seven scenarios: query, todos, filesystem, tools, mcp, subagent, skill |
-| [`5_claude_agent_sdk`](5_claude_agent_sdk/README.md) | `ANTHROPIC_BASE_URL` → `/anthropic/v1/messages` | **the Anthropic surface**, and the worked agent: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
-| [`6_codex_sdk`](6_codex_sdk/README.md) | a `model_providers` override → `/v1/responses` | **the Responses surface** — the only protocol Codex speaks |
-| [`7_opencode_sdk`](7_opencode_sdk/README.md) | an `@ai-sdk/openai-compatible` provider | OpenCode over its HTTP server API — query, session, agent, MCP, structured output |
+| [`2_openai_client`](2_openai_client/README.md) | `openai` | six scenarios: chat, tools, an image, this gateway's calling contract, the thinking level, and thinking off |
+| [`3_langchain_langgraph`](3_langchain_langgraph/README.md) | `ChatOpenAI(base_url=…)` | LangChain's prebuilt agent, the same ReAct loop built by hand in LangGraph, and a tool behind the gateway's `/mcp` |
+| [`4_deepagents`](4_deepagents/README.md) | the same `ChatOpenAI` | a deep agent — eight scenarios: query, todos, filesystem, tools, mcp, subagent, skill, gateway mcp |
+| [`5_claude_agent_sdk`](5_claude_agent_sdk/README.md) | `ANTHROPIC_BASE_URL` → `/anthropic/v1/messages` | **the Anthropic surface**, and the worked agent: query, session, in-process MCP, stdio MCP, subagent, skill, thinking, gateway MCP |
+| [`6_codex_sdk`](6_codex_sdk/README.md) | a `model_providers` override → `/v1/responses` | **the Responses surface** — the only protocol Codex speaks. Its gateway MCP scenario is wired, not called (codex#19871) |
+| [`7_opencode_sdk`](7_opencode_sdk/README.md) | an `@ai-sdk/openai-compatible` provider | OpenCode over its HTTP server API — query, session, agent, MCP, structured output, gateway MCP |
 
 **All seven run here**, and all seven run on `../../litellm` too.
 
@@ -28,11 +28,13 @@ uv run run_all.py --model lms-gemma4-26b      # a different alias everywhere
 uv run run_all.py --verbose            # stream each folder instead of capturing it
 ```
 
+`uv run run_benchmark.py` in a folder measures that client instead — see below.
+
 Or one folder on its own — this is the normal way to read them:
 
 ```bash
 cd 3_langchain_langgraph
-uv run main.py
+uv run run.py
 ```
 
 `run_all.py` probes **`26000/v1/models`, not `26064/health`**. The admin server
@@ -40,22 +42,23 @@ answers `OK` several seconds before Envoy's listener accepts a connection, so
 probing it races the thing being tested and the first folder then fails with a
 connection reset (measured 2026-09-04).
 
-## Seven folders, seven projects
+## Seven folders, seven projects — copy one
 
-Each folder carries its **own** `pyproject.toml` and its own `.venv`. That is
-deliberate: the dependency sets have nothing in common — `1_http_client` has none
-at all, and DeepAgents, the Codex runtime and the Claude Agent SDK have no reason
-to share a resolver. `uv run --directory` builds whichever venv is missing, so a
-fresh clone needs no `uv sync` first.
+Each folder carries its **own** `pyproject.toml`, its own `.venv` and its own
+`settings.py`. The folders are examples to copy: take one into another project, edit
+its `settings.py`, and it calls this gateway the way this repo measured to be right —
+the thinking level set, and nothing in the request that breaks the engine's prompt
+cache.
 
-**What they share is [`gateway.py`](gateway.py)**, one level up: the base URL, the
-key and the alias. Three facts written down seven times would be six places to
-forget when `GATEWAY_ENGINE` changes. It imports **nothing but the standard
-library**, which is what lets it import inside `1_http_client`'s empty venv, and it
-reads only this project's own files — nothing here looks at `../../litellm`.
+**`settings.py` is the one file that differs from the same folder in `../../litellm/tests`.**
+Everything else in a folder is byte-identical between the two projects and names no
+port, key or model. Nothing is shared between folders: `tests/gateway.py` held the
+URL, the key and the alias for all seven until 2026-09-30, and it went because a
+folder that imports `../gateway.py` cannot be copied alone.
 
-Adding a folder is two edits: write it, and add its name to `FOLDERS` in
-`run_all.py`.
+`uv run --directory` builds whichever venv is missing, so a fresh clone needs no
+`uv sync` first. Adding a folder is two edits: write it, and add its name to
+`FOLDERS` in `run_all.py`.
 
 ## This gateway is not a copy of the other one
 
@@ -112,36 +115,26 @@ from the request body's `model` field either way.
 > the repo, verifies that an alias answering on 26000 also answers on 24000.** Call
 > the other port by hand when it matters.
 
-## Which alias gets called — and the one thing to check first
+## Which alias gets called
 
-`gateway.py` reads `GATEWAY_ENGINE` from `../.env` and picks that engine's small
-chat route: `lms-gemma4-e4b`, `unsloth-gemma4-e4b`, `ollama-gemma4-e4b` or `openrouter-gemma4-26b`.
-
-> **Check `../.env` matches the running container.** Compose reads the **shell**
-> before the file, so a gateway started from a shell carrying `GATEWAY_ENGINE`
-> serves that engine while this suite, run from a different shell, reads the file.
-> When the two disagree every folder 404s from a perfectly healthy gateway, and
-> the `claude` CLI reports it as `unrecognized_model` rather than as a 404 — which
-> is how it was found on 2026-09-04, when this project had no `.env` at all.
-> `curl localhost:26000/v1/models` says which aliases are really being served.
-> Override without editing anything:
->
-> ```bash
-> AI_GATEWAY_TEST_MODEL=unsloth-gemma4-e4b uv run run_all.py
-> ```
-
-**One engine runs at a time**, so a fixed default would 404 on a healthy gateway
-serving another engine. An unrecognised engine is an **error, not a fallback**.
+Each folder's `settings.py` names `lms-gemma4-e4b` — the small Gemma on LMStudio,
+served by the `lms`, `all` and `lukas` configs, and both vision- and tool-capable,
+which is what every scenario here needs from one loaded model.
 
 | Override | Scope |
 |:--|:--|
-| `--model <alias>` | one run |
-| `AI_GATEWAY_TEST_MODEL` | permanently, for this shell |
+| `--model <alias>` | one run — every folder through `run_all.py`, or one folder |
+| `AI_GATEWAY_MODEL` | this shell |
+| `MODEL` in `settings.py` | that folder, for good — the edit to make when you copy it |
+
+Until 2026-09-30 the default followed `GATEWAY_ENGINE` in `../.env`. It no longer
+does, because a copied folder has no `../.env` to read. When this project serves one
+other engine, name one of its aliases. `curl localhost:26000/v1/models` says which are served.
 
 ## `max_tokens` is not optional here
 
-`BODY_EXTRAS` in `gateway.py` carries `{"max_tokens": 2048}`, and every folder
-sends it. An `AIGatewayRoute` rule carries a request **timeout** but no token
+`body_extras()` in each folder's `settings.py` carries `max_tokens: 8192` — or
+`max_completion_tokens` for `openai-*` — and every request sends it. An `AIGatewayRoute` rule carries a request **timeout** but no token
 ceiling. Measured 2026-09-04, one "count from 1 to 3000" prompt with **no**
 `max_tokens`:
 
@@ -161,65 +154,75 @@ Both scripts check PATH first and print the install line rather than failing ins
 a library. `6_codex_sdk` needs nothing extra: `openai-codex` ships its own pinned
 runtime.
 
-## `run_cache.py` — the prompt cache and the speed, per agent
+## `run_benchmark.py` — what each way of calling costs, per model
 
-`run_all.py` asks "does it work". `run_cache.py` asks **"does the prompt cache work, and how
-fast is it"**, for every way of calling the gateway, on the aliases you name:
+`run_all.py` asks "does it work". Each folder's `run_benchmark.py` asks **"how fast, and
+does the prompt cache hold"**, with that folder's own client, on several models:
 
 ```bash
-uv run run_cache.py --aliases lms-gemma4-26b,lms-qwen38-27b
-uv run run_cache.py --aliases unsloth-qwen38-27b --agents claude,claude-tuned
+cd 5_claude_agent_sdk
+uv run run_benchmark.py                                     # the default models, writes RESULTS.md
+uv run run_benchmark.py --aliases lms-gemma4-26b --no-write
 ```
 
-It runs **one multi-turn scenario per folder** — the one where a second request can reuse
-the first one's prompt — live, one after another, at thinking level `medium`. Nothing is
-replayed. Claude runs twice: `claude` as shipped, and `claude-tuned` with the two
-variables that stop it rewriting the prompt on every request.
+Every folder runs the SAME task, from the shared part at the bottom of its
+`run_benchmark.py` — byte-identical in all fourteen folders: a ~1500-token policy, a file to read (`order.json`), a follow-up, and
+a customer message, as three turns of one conversation. Every request streams, so each
+one's first token, decode speed and cached count are measured on that request. The
+agents (folders 4 to 7) read the file with their own file tool.
 
-| Number | Read from |
+The numbers are in each folder's `RESULTS.md`. **Its setup list is the part to copy**:
+every setting of that client that changes the cache, the thinking level or the speed.
+A `not reported` in the cached column is LMStudio's chat completions route, which never
+sends the count (lmstudio-ai/lmstudio-bug-tracker#778) — the first-token times still
+show the hit. The `openrouter-*` rows bill a real account.
+
+The medians over all fourteen folders, both gateways, and what each client adds to the
+prompt are in [`../../COMPARISON.md`](../../COMPARISON.md) § Per client and per model.
+
+## MCP servers behind the gateway
+
+Each agent folder, 3 to 7, has ONE scenario that reaches an MCP server **only through
+this gateway's `/mcp`**: demo `mcp` in folder 3, `08_gateway_mcp.py` in 4 and 5,
+`05_gateway_mcp.py` in 6 and `06_gateway_mcp.py` in 7. The scenario starts the folder's
+own `mcp_server.py` over HTTP on the port the gateway's config names — `MCP_SERVER_PORT`
+in `settings.py`, 26090 here — and gives the agent nothing but `MCP_URL`. The tools
+arrive renamed `bench-hardware__bench_serial`, and that name is what the scenarios assert.
+
+| Folder | The tool is called through `/mcp` |
 |:--|:--|
-| what the engine REALLY reused, TTFT, decode tok/s, the level in the prompt | `lms log stream` — **LMStudio only** |
-| per request: tokens, duration, status | [`gateway_records.py`](gateway_records.py) → the access log, via `podman logs` |
-| per session: cached tokens the client was TOLD about | `gateway_records.py` → `gen_ai_client_token_usage` on `26064/metrics` |
+| `3_langchain_langgraph`, `4_deepagents`, `5_claude_agent_sdk`, `7_opencode_sdk` | **yes**, asserted |
+| `6_codex_sdk` | **no, on any model.** Codex lists the tools and drops them: this gateway's list carries `cacheScope: ""` — `../../TESTING.md` §5.7 |
 
-**The access log needs `AIGW_DEBUG=true`.** Without it Envoy writes no per-request line
-at all, and every session reports zero requests. It also carries no time to first token
-and no cost — `cache_report.py` prices the tokens itself.
-
-One JSON line per session goes to `cache-results/` (gitignored). The table comes from
-`../../benchmark/cache_report.py`, which reads the files of both gateways at once:
-
-```bash
-cd ../../benchmark && uv run cache_report.py ../litellm/tests/cache-results/*.jsonl ../envoy/tests/cache-results/*.jsonl
-```
+A port that is already taken fails the scenario loudly. The other suite uses 24090, so
+both suites can run at the same time.
 
 ## What is NOT tested here
 
 - **Embeddings.** The `*-embed` aliases route fine, but the chat client these
   folders share does not drive `/v1/embeddings`.
-- **`/mcp`.** The MCP gateway needs `--mcp-config`, which `../compose.yml` does not
-  pass. Nothing is wired up, so there is nothing to test yet.
-- **`/metrics` on 26064**, beyond the one histogram `run_cache.py` reads —
-  `gen_ai_client_token_usage`.
+- **`/metrics` on 26064.**
 - **`openai.yaml`.** It parses and registers its aliases, but no call has been made
-  through it — that would bill a real account. OpenRouter has: `run_cache.py` ran
-  every agent on both OpenRouter aliases on 2026-09-30.
+  through it — that would bill a real account. OpenRouter has: every folder's
+  `run_benchmark.py` runs both OpenRouter aliases.
 - **`openrouter-gemma4-26b-free`.** Absent here by design: no `extra_body`, so no provider pin.
 - **That the same alias answers on 24000.** See the note above.
 
 ## Verified
 
-2026-09-04, `unsloth-gemma4-e4b`, all seven folders passing. Timings on this machine:
+2026-09-30, `lms-gemma4-26b`: all seven folders passing, every scenario in them too, after
+the move to per-folder `settings.py`. The timings below are older — 2026-09-04,
+`unsloth-gemma4-e4b`:
 
 | Folder | Seconds, warm |
 |:--|--:|
 | `1_http_client` | 0.2 |
 | `2_openai_client` | 6 |
 | `3_langchain_langgraph` | 1.5 |
-| `4_deepagents` | 15-60 — SEVEN scenarios |
-| `5_claude_agent_sdk` | 40-120 — SEVEN scenarios, each spawning the `claude` CLI |
-| `6_codex_sdk` | 20-50 — FOUR scenarios, Codex sends a large harness per turn |
-| `7_opencode_sdk` | 15-60 — FIVE scenarios, each spawns an `opencode` server |
+| `4_deepagents` | 15-60 — EIGHT scenarios |
+| `5_claude_agent_sdk` | 40-120 — EIGHT scenarios, each spawning the `claude` CLI |
+| `6_codex_sdk` | 20-50 — FIVE scenarios, Codex sends a large harness per turn |
+| `7_opencode_sdk` | 15-60 — SIX scenarios, each spawns an `opencode` server |
 
 > **These are wall-clock seconds for the whole folder, warm** — one process, its
 > imports, and every model call it makes. **They are not a gateway benchmark, and
@@ -234,13 +237,13 @@ cd ../../benchmark && uv run cache_report.py ../litellm/tests/cache-results/*.js
 > after the engine loads a model pays for the load. Both add tens of seconds and
 > neither repeats. Compare a folder against itself, warm — not against a sibling.
 
-Run with `AI_GATEWAY_TEST_MODEL=unsloth-gemma4-e4b`, because this project carries no `.env`
-— see the call-out above.
+Run with `AI_GATEWAY_MODEL=unsloth-gemma4-e4b`.
 
 Two extra requirements when the engine is `unsloth`, and both fail quietly:
 
 1. **`UNSLOTH_API_KEY` must be in the shell** that ran `podman compose up -d`, or
    `${UNSLOTH_API_KEY}` substitutes empty and every `unsloth-*` call 401s.
 2. **`Settings → API → Model auto-switch` must be on**, or the first call returns
-   `400 No model loaded`. Unsloth holds **one model at a time**, so more than one
-   gateway on `unsloth` will thrash it — run one suite at a time.
+   `400 No model loaded`. A gateway call swaps Unsloth's **one active model**, so more
+   than one gateway on `unsloth` will thrash it — run one suite at a time, or pre-load the
+   models in Studio with `Keep other models loaded` so they stay side by side.

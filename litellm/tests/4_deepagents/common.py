@@ -1,9 +1,9 @@
-"""Where this gateway is, and the machinery every deep-agent scenario shares.
+"""The machinery every deep-agent scenario shares, and `run_benchmark.py` with them.
 
-THE SEVEN NUMBERED SCRIPTS BESIDE THIS ONE ARE BYTE-IDENTICAL TO LITELLM'S. Every
-difference between the two gateways lives here, the same rule
-`../5_claude_agent_sdk/common.py` follows for the Anthropic surface. Porting these
-scenarios to a third gateway is a copy plus one new `common.py`.
+THIS FILE IS BYTE-IDENTICAL IN BOTH PROJECTS, like the seven numbered scripts beside
+it. Everything specific to a gateway — URL, key, alias, level, ceiling, health probe
+— is in settings.py, so porting these scenarios to a third gateway is a copy plus
+one new `settings.py`.
 
 WHAT A DEEP AGENT IS, in one paragraph. DeepAgents is LangGraph with a harness
 bolted on: your tools PLUS a suite the agent gets for free. In 0.7.13 that suite
@@ -32,42 +32,35 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
+import socket
+import subprocess
 import sys
-from collections.abc import Callable
+import tempfile
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-HERE = Path(__file__).resolve().parent
+from langchain_core.messages import ToolMessage
+from langchain_openai import ChatOpenAI
 
-# The shared facts — base URL, key, alias, ceilings.
-sys.path.insert(0, str(HERE.parent))
-
-from gateway import (  # noqa: E402
-    ALIAS,
+from settings import (
     API_KEY,
     BASE_URL,
-    BODY_EXTRAS,
+    MAX_TOKENS,
+    MCP_SERVER_PORT,
+    MODEL,
     NAME,
     REASONING_EFFORT,
     REQUEST_TIMEOUT_SECONDS,
-    ROOT_URL,
 )
 
-from langchain_core.messages import ToolMessage  # noqa: E402
-from langchain_openai import ChatOpenAI  # noqa: E402
-
-DEFAULT_MODEL = ALIAS
-
-# WHAT `run_all.py` PROBES BEFORE IT STARTS. Liveliness and not readiness on
-# purpose: these scenarios need the proxy to answer, not the database to be
-# attached, and a suite that refused to run over a missing database would hide
-# the fact that completions keep working without one.
-HEALTH_URL = f"{ROOT_URL}/health/liveliness"
-START_HINT = "cd ../.. && podman compose up -d"
+HERE = Path(__file__).resolve().parent
 
 # Scenario 05 spawns this file as a SEPARATE PROCESS and talks to it over stdio.
+# Scenario 08 runs the SAME file over HTTP, behind the gateway — `gateway_mcp_server`.
 STDIO_SERVER = HERE / "mcp_server.py"
 
 # Scenario 07 reads its skill from here, THROUGH THE BACKEND rather than off the
@@ -82,22 +75,25 @@ SKILLS_ROOT = "/skills/"
 RECURSION_LIMIT = 50
 
 
-def build_model(alias: str) -> ChatOpenAI:
-    """The one place the gateway is named. Identical to folder 3's.
+def build_model(alias: str, **options: Any) -> ChatOpenAI:
+    """The one place settings.py becomes a chat model. Identical to folder 3's.
 
     `temperature=0` because an agent that writes a different plan on Tuesday is a
     bug, and `max_retries=0` because a test that silently retries hides the
-    failure it exists to find.
+    failure it exists to find. `options` are further ChatOpenAI fields:
+    `run_benchmark.py` adds streaming, usage in the stream and the callback that
+    times each request.
     """
     return ChatOpenAI(
         model=alias,
         base_url=BASE_URL,
         api_key=API_KEY,
-        max_tokens=BODY_EXTRAS.get("max_tokens"),
-        reasoning_effort=REASONING_EFFORT,  # None sends nothing — see ../gateway.py
+        max_tokens=MAX_TOKENS,  # None sends nothing — see settings.py
+        reasoning_effort=REASONING_EFFORT,  # likewise
         timeout=REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
         temperature=0,
+        **options,
     )
 
 
@@ -195,6 +191,43 @@ async def adrive(agent: Any, prompt: str) -> Transcript:
     return transcript
 
 
+@contextmanager
+def gateway_mcp_server() -> Iterator[None]:
+    """Run `mcp_server.py` over HTTP, on the port the GATEWAY expects, for one scenario.
+
+    THE AGENT IS NEVER TOLD THIS PORT. The gateway's own config points at it — an
+    `mcp_servers` entry on LiteLLM, an `MCPRoute` on Envoy — and the agent gets only
+    `MCP_URL`, so a scenario that passes made its calls THROUGH the gateway.
+
+    A PORT THAT IS ALREADY TAKEN FAILS LOUDLY, rather than testing a server some
+    other run left behind.
+    """
+    if _listening(MCP_SERVER_PORT):
+        raise RuntimeError(f"port {MCP_SERVER_PORT} is already in use: another run, or a server left behind")
+    with tempfile.TemporaryFile() as log:
+        server = subprocess.Popen(
+            [sys.executable, str(STDIO_SERVER), "--http", str(MCP_SERVER_PORT)], stdout=log, stderr=log
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not _listening(MCP_SERVER_PORT):
+                if server.poll() is not None or time.monotonic() > deadline:
+                    log.seek(0)
+                    output = log.read().decode(errors="replace")
+                    raise RuntimeError(f"mcp_server.py never listened on {MCP_SERVER_PORT}:\n{output}")
+                time.sleep(0.2)
+            yield
+        finally:
+            server.terminate()
+            server.wait(timeout=10)
+
+
+def _listening(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
 def report(transcript: Transcript) -> None:
     """The one-line summary every scenario prints after its run."""
     print(
@@ -215,7 +248,7 @@ def run(scenario: Scenario, description: str, is_async: bool = False) -> int:
     else is a bug or a gateway error and is reported the same way.
     """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     args = parser.parse_args()
 
     title = description.strip().splitlines()[0]

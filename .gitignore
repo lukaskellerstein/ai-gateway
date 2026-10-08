@@ -31,9 +31,6 @@ __pycache__/
 # The benchmark's raw per-call timings. A measurement of THIS machine on one day,
 # so it is a local fact; the numbers worth keeping are summarised in README.md.
 benchmark/results.json
-# The same for tests/run_cache.py: one JSON line per agent session, prompts' sizes and
-# timings included. The table worth keeping goes to COMPARISON.md.
-cache-results/
 
 # Claude Code worktree sessions: claude -w <name>
 .worktrees/

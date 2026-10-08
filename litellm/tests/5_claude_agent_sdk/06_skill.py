@@ -16,7 +16,7 @@ THE CODE IS ONLY IN THE SKILL FILE. No model can know it, and it is not in any
 prompt here, so it can reach the answer only by the agent reading
 `bench_plugin/skills/gateway-facts/SKILL.md` off the disk.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

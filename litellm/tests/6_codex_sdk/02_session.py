@@ -7,7 +7,7 @@ the history on the way through.
 THE FOLLOW-UP NEVER REPEATS THE NUMBER, which is the point: the only way to
 answer it is for turn one to come back inside turn two's request.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

@@ -1,8 +1,9 @@
 # LiteLLM gateway — THE SETTINGS, and the notes that are true of every alias.
 #
-# NO ALIAS LIVES HERE. This file carries the three settings blocks and nothing else, and each
-# engine config includes it exactly once. The aliases live one file per engine, and an engine
-# is an engine whether its GPU is yours or someone else's:
+# NO ALIAS LIVES HERE. This file carries the three settings blocks and the MCP servers behind
+# the gateway, and nothing else, and each engine config includes it exactly once. The aliases
+# live one file per engine, and an engine is an engine whether its GPU is yours or someone
+# else's:
 #
 #   lms.yaml   unsloth.yaml   ollama.yaml            this machine, free
 #   openrouter.yaml   openai.yaml                    the cloud, PAID
@@ -172,6 +173,53 @@ general_settings:
   store_prompts_in_spend_logs: true
 
 # ---------------------------------------------------------------------------------
+# THE MCP SERVERS BEHIND THIS GATEWAY. A caller connects to ONE endpoint, /mcp on 24000, and
+# gets the tools of every server below that its key may use, each renamed `<server>-<tool>`.
+# The caller never learns where a server runs, so moving one changes nothing that calls the
+# gateway. The key is sent as `x-litellm-api-key` — the header LiteLLM always reads as its
+# own credential on /mcp (auth/user_api_key_auth_mcp.py:416).
+#
+# HERE AND NOT IN AN ENGINE FILE, because a tool server is not an engine. Every config
+# includes this file, `all` and `lukas` too, so /mcp answers whatever GATEWAY_ENGINE says.
+#
+# A SERVER THAT IS DOWN COSTS NOTHING. LiteLLM 1.99.1 lists each server's tools at startup
+# and on every client request, and a failure is a WARNING that skips that server and keeps
+# the rest (mcp_server_manager.py:3261 and :5856). So /mcp works while `bench_hardware` is
+# down, which is most of the time: `tools: []`, with `_meta` naming it `unreachable`
+# (measured 2026-10-07). Envoy answers the same moment with a 500.
+#
+# WHY:            proves the MCP gateway end to end: an agent is given /mcp on 24000 and no
+#                 other address, and still calls a tool on a server it never saw
+# SCOPE:          route=/mcp  client=tests/3..7, each folder's gateway-MCP scenario
+# PROVEN:         2026-10-07, litellm 1.99.1, `lms-gemma4-e4b`: folders 3, 4, 5 and 7 called
+#                 `bench_hardware-bench_serial` through /mcp and answered SN-4417-QX, in
+#                 3-12 s. Folder 6 listed the tools and did not call them
+#                 (openai/codex#19871, `unsloth-gemma4-26b`). With no client, 60 s brought
+#                 no listing to the server; two client listings both reached it
+# GUARDED BY:     tests/4_deepagents/08_gateway_mcp.py, and the same scenario in folders
+#                 3, 5, 6 and 7. Delete this block and every one of them goes red
+#
+# `bench_hardware` IS THE TEST SERVER, AND IT RUNS ONLY WHILE A TEST RUNS. Each agent folder
+# starts its own `mcp_server.py --http 24090` for that one scenario and stops it after. Its
+# two tools return fixed strings.
+#
+# host.containers.internal, NOT localhost: the server binds 127.0.0.1 on the HOST and this
+# proxy runs in a container — the same way it reaches the three engines.
+#
+# allow_all_keys: true BECAUSE A CONFIG SERVER IS OTHERWISE INVISIBLE to every key but the
+# master key and the keys granted it (get_allowed_mcp_servers, mcp_server_manager.py:2937),
+# and the tests call with a virtual key. A REAL server with side effects must not carry it:
+# grant that one per key or per team.
+#
+# THE NAME HAS NO HYPHEN, AND CANNOT: `-` is the separator LiteLLM puts between server and
+# tool (MCP_TOOL_PREFIX_SEPARATOR, utils.py:53), and a name containing it is rejected.
+mcp_servers:
+  bench_hardware:
+    url: http://host.containers.internal:24090/mcp
+    transport: http
+    allow_all_keys: true
+
+# ---------------------------------------------------------------------------------
 # THE HOSTED TIERS USED TO BE COMMENTED OUT HERE. They became real engine configs on
 # 2026-08-31 — openrouter.yaml and openai.yaml, beside this file.
 #
@@ -187,6 +235,7 @@ general_settings:
 # entirely: HuggingFace only ever existed as a fallback target, and nothing has a
 # fallback now.
 #
-# WHAT STILL LIVES IN THIS FILE: the three settings blocks above, and nothing else. Every
-# alias — local or hosted, free or billed — is in `<engine>.yaml` beside this file.
+# WHAT STILL LIVES IN THIS FILE: the three settings blocks and the MCP servers above, and
+# nothing else. Every alias — local or hosted, free or billed — is in `<engine>.yaml` beside
+# this file.
 # ---------------------------------------------------------------------------------

@@ -50,13 +50,13 @@ FOLDERS = (
 
 
 def entry_point(folder: Path) -> str:
-    """`run_all.py` if the folder has its own suite, else `main.py`.
+    """`run_all.py` if the folder has its own suite, else `run.py`.
 
-    Only `2_openai_client` has one — four numbered scripts and a runner of its
-    own. Everything else is a single `main.py`, so a new folder needs no edit here
-    beyond its name in FOLDERS above.
+    Folders 2, 4, 5, 6 and 7 have numbered scenarios and a runner of their own; 1 and 3
+    are a single `run.py`. `run_benchmark.py` in each folder is never run from here: it is
+    slow, and it calls paid models.
     """
-    return "run_all.py" if (folder / "run_all.py").is_file() else "main.py"
+    return "run_all.py" if (folder / "run_all.py").is_file() else "run.py"
 
 
 def is_up() -> bool:
@@ -79,14 +79,12 @@ def run_one(name: str, model: str | None, verbose: bool) -> tuple[bool, float, s
     # mismatch before doing the right thing anyway.
     environment = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
 
-    # `--model` MUST ALSO REACH THE CHILD AS AN ENVIRONMENT VARIABLE, not only on argv.
-    # gateway.py resolves the alias at IMPORT time, before any scenario's argparse runs, so
-    # on an engine whose default alias is None — `openai` — it raised there and every folder
-    # died in 0.0 s with "no alias that passes every scenario here", while the message told
-    # you to pass the `--model` that had just been ignored. Measured 2026-09-05, all four
-    # paid folders. `AI_GATEWAY_TEST_MODEL` is the one hook gateway.py reads FIRST.
+    # `--model` ALSO REACHES THE CHILD AS AN ENVIRONMENT VARIABLE, not only on argv.
+    # Each folder's settings.py reads AI_GATEWAY_MODEL at IMPORT time, before a scenario's
+    # argparse runs, and a folder's own runner passes argv to its scenarios but a module
+    # imported by all of them sees only the environment.
     if model:
-        environment["AI_GATEWAY_TEST_MODEL"] = model
+        environment["AI_GATEWAY_MODEL"] = model
 
     started = time.perf_counter()
     finished = subprocess.run(
@@ -99,7 +97,7 @@ def run_one(name: str, model: str | None, verbose: bool) -> tuple[bool, float, s
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", help="alias to call in every folder (default: follows GATEWAY_ENGINE)")
+    parser.add_argument("--model", help="alias to call in every folder (default: each folder's settings.py)")
     parser.add_argument("--only", choices=FOLDERS, help="run one folder instead of all seven")
     parser.add_argument("--verbose", action="store_true", help="stream each folder's output instead of capturing it")
     args = parser.parse_args()
@@ -113,7 +111,7 @@ def main() -> int:
         return 1
 
     chosen = [args.only] if args.only else list(FOLDERS)
-    print(f"gateway=envoy  model={args.model or 'from GATEWAY_ENGINE'}  folders={len(chosen)}\n")
+    print(f"gateway=envoy  model={args.model or 'from settings.py'}  folders={len(chosen)}\n")
 
     rows: list[tuple[str, bool, float]] = []
     failures: list[tuple[str, str]] = []

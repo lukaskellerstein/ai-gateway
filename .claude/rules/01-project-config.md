@@ -2,7 +2,8 @@
 
 **ai-gateway**: the machine-wide LLM gateway. One OpenAI-compatible endpoint every project
 on this laptop calls, so switching model or provider is a change *here* rather than in
-each repo. Laptop-only — every gateway binds localhost, and nothing is deployed anywhere.
+each repo. Laptop-only — every port is published on `127.0.0.1` only (since 2026-10-07; a
+bare `24000:4000` answered on the Mac's network address), and nothing is deployed anywhere.
 
 ## Two compose projects, and nothing at the root
 
@@ -20,9 +21,7 @@ The one root folder is `benchmark/` (2026-09-04). It is **not a project**: it st
 reads no project's files, and times one HTTP request against both ports with the engine,
 model, body and `max_tokens` held identical — see
 [`../../benchmark/README.md`](../../benchmark/README.md). Its results are in
-[`../../COMPARISON.md`](../../COMPARISON.md) § What they cost per request. Since 2026-09-30 it
-also holds `cache_report.py`, the table over both projects' `tests/run_cache.py` output; it
-reads only the result files named on its command line.
+[`../../COMPARISON.md`](../../COMPARISON.md) § What they cost per request.
 
 Both images are stock: **no Dockerfile and no build step**. A `litellm/Dockerfile` returns
 the day a callback needs a package the base image lacks.
@@ -69,7 +68,7 @@ failure avoided is not a loud bind error but the silent one: a probe against
 |:--|:--|
 | `~/Projects/Github/lukaskellerstein/mlflow-tutorial` | 3000, 4000, 5432, 5555, 6333/4, 7233, 8080, 9090 |
 | `~/Projects/Github/lukaskellerstein/ai-agent-platform` | 1xxxx |
-| `ai-gateway` | **2xxxx** — 24000, 26000, 26064. 25000 is free again since 2026-09-04 |
+| `ai-gateway` | **2xxxx** — 24000, 26000, 26064, and 24090 / 26090 for the test MCP server while a test runs. 25000 is free again since 2026-09-04 |
 
 ## The words, per project
 
@@ -82,7 +81,7 @@ reads its **own** `.env`:
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 **`all` IS THE DEFAULT AND IS A REAL FILE**, `config/all.yaml`, not a list you write. It
-serves every engine at once: 17 aliases on LiteLLM, 28 route rules on Envoy — the latter split
+serves every engine at once: 21 aliases on LiteLLM, 35 route rules on Envoy — the latter split
 across **six `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
 (`HTTPRoute.spec.rules` allows 16 and aigw uses one). The two files are
 built differently and the difference matters when you add an alias:
@@ -144,10 +143,11 @@ Callers name an **alias**, never a model — the model behind a name is expected
 |  | LMStudio :1234 | Unsloth :8888 | Ollama :11434 | OpenRouter | OpenAI | Cerebras |
 |:--|:--|:--|:--|:--|:--|:--|
 | Gemma 4 E4B | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — |
-| Gemma 4 26B | `lms-gemma4-26b` | `unsloth-gemma4-26b` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
+| Gemma 4 12B | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — |
+| Gemma 4 26B | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
 | Qwen 3.8 27B | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
 | other chat | — | — | — | — | `openai-gpt54-mini` | — |
-| embed | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
+| embed | `lms-nomic-embed` | `unsloth-nomic-embed` · `unsloth-nomic-embed-sidecar` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
 | costs | free | free | free | **paid** | **paid** | **paid** |
 
 **Names are `<engine>-<model>-<size>` since 2026-09-29**, and the suffix is the same on every
@@ -159,15 +159,15 @@ selects **one column**, and the rows are the point: the same weights sit across 
 changing the word and re-running that project's `tests/` measures the engine and nothing else.
 A comparison run still wants one column, because `all` leaves the caller free to pick.
 
-**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — TWELVE OF THEM, ONE PER CHAT
+**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — FIFTEEN OF THEM, ONE PER CHAT
 ALIAS** (`lms-gemma4-26b-anthropic`, `openrouter-qwen38-27b-anthropic`, …). They are the SAME
-model on the SAME engine. Ten of the twelve reach an `Anthropic`-schema `AIServiceBackend`, so
+model on the SAME engine. Thirteen of the fifteen reach an `Anthropic`-schema `AIServiceBackend`, so
 the body is NOT translated — the only way Claude Code can hold a conversation through Envoy.
 **`openai-gpt54-mini-anthropic` and `cerebras-qwen38-27b-anthropic` are the exceptions**:
 neither vendor serves `/v1/messages` (Cerebras answered 404, 2026-09-28), so those rules point
 at the plain `OpenAI`-schema backend and still translate. They are plumbing, not vocabulary:
 LiteLLM does not need them, and nothing but `envoy/tests/5_claude_agent_sdk` calls them.
-**16 model aliases + 12 `-anthropic` = the 28 rules in `envoy/config/all.yaml`.** Full note:
+**20 model aliases + 15 `-anthropic` = the 35 rules in `envoy/config/all.yaml`.** Full note:
 `envoy/README.md`.
 
 **`openrouter-gemma4-26b-free` is deliberately absent on 26000.** Envoy has no equivalent of
@@ -191,10 +191,18 @@ is incomplete" is the wrong diagnosis.
   still free until a caller names one, because nothing falls back, but present.
 - **Local routes are shadow-priced**: free to run, carrying a cloud twin's rate so a
   budget ceiling still trips. An unpriced route would log `$0` and make ceilings a no-op.
-- **Unsloth holds one model at a time**, and the limit spans chat and the embedder.
-  `unsloth-nomic-embed` evicts `unsloth-gemma4-26b` and the next chat call swaps it back — 14 s cold,
-  4.4 s warm. **More than one gateway on `unsloth` will thrash it.** LMStudio and Ollama
-  do not.
+- **A gateway call swaps Unsloth's ONE active model**, and the slot spans chat and the
+  embedder. `unsloth-nomic-embed` evicts `unsloth-gemma4-26b` and the next chat call swaps it
+  back — 13-17 s. **More than one gateway on `unsloth` will thrash it.** LMStudio and Ollama
+  do not. **A model pre-loaded in Studio stays beside it** (v0.1.903-beta, measured
+  2026-10-07): with `Settings -> Resources -> Keep multiple models loaded` on — ON here — a
+  model loaded with `Keep other models loaded`, or `"alongside": true` on
+  `POST /api/inference/load`, answers a gateway call with no reload. **No gateway call can
+  load one that way**: auto-switch replaces only the active model, never a held one, even the
+  least recently used. `GET /api/inference/loaded-models` lists them. **Studio's own
+  `Settings -> embedding model`** also runs beside the chat model:
+  `unsloth-nomic-embed-sidecar` evicts nothing while that setting names
+  `nomic-ai/nomic-embed-text-v1.5` (measured 2026-10-03: 0.04 s, the 26B stayed loaded).
 - **LMStudio JIT-loads at 8192 context with a 1 h TTL**, ignoring hand-load flags. A
   session that worked this morning fails this afternoon with nothing changed.
   `lms ps --json` is the truth, not the UI.
@@ -249,12 +257,13 @@ boots, which is why an auth failure usually means the shell that ran `up -d` had
   | `lists_models` | yes | **yes** |
   | `echoes_alias` | yes | no |
   | `exposes_route_limits` | yes | no |
+  | `loopback_only` | yes | **yes** |
   | caller must send `max_tokens` | no | yes |
   | `/v1/responses` — Codex needs it | **yes** | **yes** |
   | an Anthropic route — the Claude SDK needs it | `/v1/messages` | `/anthropic/v1/messages`, on a pass-through alias |
   | SSE streaming | yes | yes |
 
-  The first five rows are declared on each `tests/2_openai_client/common.py` § `Gateway` and
+  The first six rows are declared in each `tests/2_openai_client/settings.py` § `CONTRACT` and
   checked by `04_gateway_contract.py`; the last three are what folders 1, 5 and 6 exercise.
-  **Only one of the first five matches**, which is why neither project reads the other's
-  table.
+  **Only two of the first six match** — the listing and the loopback binding — which is why
+  neither project reads the other's table.

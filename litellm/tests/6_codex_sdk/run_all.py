@@ -6,13 +6,15 @@ names itself instead of hiding inside a combined result.
     uv run run_all.py
     uv run run_all.py --model unsloth-gemma4-26b
     uv run run_all.py --verbose
-    uv run 03_sdk_mcp.py                  one scenario, directly
+    uv run 04_mcp.py                      one scenario, directly
 
-THESE ARE SLOW, AND THAT IS THE MODEL AND NOT THE GATEWAY. Every scenario spawns
-the `claude` CLI, and the agentic ones spend several turns on a local model. The
+THESE ARE SLOW, AND THAT IS THE MODEL AND NOT THE GATEWAY. Every scenario starts
+the Codex runtime, and a turn can take several requests on a local model. The
 gateway's own share of it is 10-20 ms — see ../../../benchmark/.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+`run_benchmark.py` is not a scenario and is not run here: it has no number prefix.
+
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 
@@ -26,7 +28,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from common import DEFAULT_MODEL, HEALTH_URL, NAME, START_HINT
+from settings import HEALTH_URL, MODEL, NAME, START_HINT
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,8 +36,8 @@ HERE = Path(__file__).resolve().parent
 def scenarios() -> list[Path]:
     """Every `NN_*.py` here, in order. A new scenario needs no edit in this file.
 
-    `common.py` and `mcp_server.py` are deliberately outside the pattern: one is
-    the shared machinery and the other is a server 04 starts, not a test.
+    `common.py`, `mcp_server.py` and `run_benchmark.py` are deliberately outside the
+    pattern: the shared machinery, a server 04 starts, and a measurement.
     """
     return sorted(HERE.glob("[0-9][0-9]_*.py"))
 
@@ -59,7 +61,7 @@ def run_one(script: Path, model: str, verbose: bool) -> tuple[bool, float, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     parser.add_argument("--verbose", action="store_true", help="stream each scenario's output instead of capturing it")
     args = parser.parse_args()
 
