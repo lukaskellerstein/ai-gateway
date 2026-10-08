@@ -1,8 +1,8 @@
-"""The Responses surface of THIS gateway, and the machinery every scenario shares.
+"""How Codex reaches the gateway, and the machinery every scenario shares.
 
-THE NUMBERED SCRIPTS BESIDE THIS ONE ARE BYTE-IDENTICAL TO LITELLM'S. Every
-difference between the two gateways lives here — the same rule
-`../5_claude_agent_sdk/common.py` follows for the Anthropic surface.
+THIS FILE IS BYTE-IDENTICAL IN BOTH PROJECTS, like every file here but one:
+the gateway — its URLs, key, alias, thinking level and timeout — is in
+settings.py, the one file to edit when you copy this folder.
 
 CODEX SPEAKS THE RESPONSES API AND NOTHING ELSE. `WireApi` in the Codex source
 has exactly one variant, `Responses`; the `chat` variant older guides configure
@@ -33,21 +33,17 @@ folder 5, and without it the run depends on who is sitting at the keyboard.
 from __future__ import annotations
 
 import argparse
+import socket
+import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-HERE = Path(__file__).resolve().parent
-
-# The shared facts — the Responses base URL, the key, the alias.
-sys.path.insert(0, str(HERE.parent))
-
-from gateway import ALIAS, API_KEY, NAME, REASONING_EFFORT, RESPONSES_BASE_URL, ROOT_URL  # noqa: E402
-
-from openai_codex import (  # noqa: E402
+from openai_codex import (
     ApprovalMode,
     Codex,
     CodexConfig,
@@ -55,13 +51,18 @@ from openai_codex import (  # noqa: E402
     TurnResult,
 )
 
-DEFAULT_MODEL = ALIAS
+from settings import (
+    API_KEY,
+    CONTEXT_WINDOW,
+    MCP_SERVER_PORT,
+    MODEL,
+    NAME,
+    REASONING_EFFORT,
+    REQUEST_TIMEOUT_SECONDS,
+    RESPONSES_BASE_URL,
+)
 
-# WHAT `run_all.py` PROBES BEFORE IT STARTS, and on Envoy it is the DATA PLANE.
-# aigw's admin server on 26064 answers /health several seconds BEFORE the
-# listener on 26000 accepts a connection.
-HEALTH_URL = f"{ROOT_URL}/v1/models"
-START_HINT = "cd ../.. && podman compose up -d"
+HERE = Path(__file__).resolve().parent
 
 # Codex reads the key from an ENVIRONMENT VARIABLE THAT IT NAMES, never from the
 # config value itself — `experimental_bearer_token` exists but the docs
@@ -80,13 +81,15 @@ RUNTIME_ENV = {CODEX_KEY_ENV: API_KEY, "CODEX_HOME": CODEX_HOME.name}
 
 PROVIDER = "ai_gateway"
 
-# THE THINKING LEVEL a run asks for (../gateway.py), in Codex's own config key.
+# THE THINKING LEVEL (settings.py), in Codex's own config key. Codex sends it as
+# `reasoning: {effort, summary: "auto"}` in every request.
 EFFORT_OVERRIDES: tuple[str, ...] = (
     (f'model_reasoning_effort="{REASONING_EFFORT}"',) if REASONING_EFFORT else ()
 )
 
 # Scenario 04 spawns this file as a SEPARATE PROCESS and Codex talks to it over
-# stdio. It writes a marker when it starts, which is what 04 asserts on.
+# stdio. It writes a marker when it starts, which is what 04 asserts on. Scenario 05
+# runs the SAME file over HTTP, behind the gateway — `gateway_mcp_server`.
 STDIO_SERVER = HERE / "mcp_server.py"
 START_MARKER = HERE / ".mcp_server_started"
 
@@ -95,9 +98,12 @@ def codex_config(alias: str) -> CodexConfig:
     """Every `--config` line the runtime needs to reach this gateway.
 
     `model_context_window` is set because Codex uses it to decide when to
-    compact a conversation. Left unset for an unknown model it assumes a small
-    default and compacts far too early, which on a local model looks like an
-    agent that forgets things mid-task for no visible reason.
+    compact a conversation — see CONTEXT_WINDOW in settings.py.
+
+    RETRIES ARE OFF, as everywhere in these tests: a retried request hides the
+    failure a test exists to find, and in the benchmark a retry would hide inside
+    one request's time. Codex retries a failed request and a dropped stream by
+    default.
     """
     return CodexConfig(
         env=RUNTIME_ENV,
@@ -106,9 +112,12 @@ def codex_config(alias: str) -> CodexConfig:
             f'model_providers.{PROVIDER}.base_url="{RESPONSES_BASE_URL}"',
             f'model_providers.{PROVIDER}.wire_api="responses"',
             f'model_providers.{PROVIDER}.env_key="{CODEX_KEY_ENV}"',
+            f"model_providers.{PROVIDER}.stream_idle_timeout_ms={int(REQUEST_TIMEOUT_SECONDS * 1000)}",
+            f"model_providers.{PROVIDER}.request_max_retries=0",
+            f"model_providers.{PROVIDER}.stream_max_retries=0",
             f'model_provider="{PROVIDER}"',
             f'model="{alias}"',
-            "model_context_window=122880",
+            f"model_context_window={CONTEXT_WINDOW}",
             # An EMPTY home is not a QUIET one: on first start Codex clones the
             # curated plugin marketplace into `$CODEX_HOME/.tmp/plugins-clone-*`
             # in the background, and that clone outlives the runtime — the temp
@@ -136,6 +145,43 @@ def start_thread(codex: Codex, alias: str, **overrides: Any) -> Any:
     return codex.thread_start(**settings)
 
 
+@contextmanager
+def gateway_mcp_server() -> Iterator[None]:
+    """Run `mcp_server.py` over HTTP, on the port the GATEWAY expects, for one scenario.
+
+    THE AGENT IS NEVER TOLD THIS PORT. The gateway's own config points at it — an
+    `mcp_servers` entry on LiteLLM, an `MCPRoute` on Envoy — and the agent gets only
+    `MCP_URL`, so a scenario that passes made its calls THROUGH the gateway.
+
+    A PORT THAT IS ALREADY TAKEN FAILS LOUDLY, rather than testing a server some
+    other run left behind.
+    """
+    if _listening(MCP_SERVER_PORT):
+        raise RuntimeError(f"port {MCP_SERVER_PORT} is already in use: another run, or a server left behind")
+    with tempfile.TemporaryFile() as log:
+        server = subprocess.Popen(
+            [sys.executable, str(STDIO_SERVER), "--http", str(MCP_SERVER_PORT)], stdout=log, stderr=log
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not _listening(MCP_SERVER_PORT):
+                if server.poll() is not None or time.monotonic() > deadline:
+                    log.seek(0)
+                    output = log.read().decode(errors="replace")
+                    raise RuntimeError(f"mcp_server.py never listened on {MCP_SERVER_PORT}:\n{output}")
+                time.sleep(0.2)
+            yield
+        finally:
+            server.terminate()
+            server.wait(timeout=10)
+
+
+def _listening(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
 def items_of(result: TurnResult) -> list[str]:
     """The kind of every item in a turn — `agentMessage`, `mcpToolCall`, …"""
     return [item.root.type for item in (result.items or [])]
@@ -159,7 +205,7 @@ Scenario = Callable[[str], str]
 def run(scenario: Scenario, description: str) -> int:
     """Parse `--model`, drive one scenario, print one PASS/FAIL row."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     args = parser.parse_args()
 
     title = description.strip().splitlines()[0]

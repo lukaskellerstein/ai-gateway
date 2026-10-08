@@ -4,7 +4,7 @@ A session id IS the conversation. The second prompt carries the first exchange,
 so "double that" is answerable — and unanswerable if the gateway lost the
 history on the way through. The follow-up never repeats the number.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

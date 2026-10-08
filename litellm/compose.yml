@@ -13,7 +13,7 @@
 #   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai | cerebras
 #                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 14 aliases, one gateway.
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 20 aliases, one gateway.
 # Name a single engine instead and only that engine's aliases exist, which is how
 # you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -95,11 +95,11 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one file per engine, plus one that joins them:
     #
-    #   config/all.yaml         14 aliases: everything below         THE DEFAULT
-    #   config/lms.yaml          3 aliases: 2 chat, 1 embedder      free
-    #   config/unsloth.yaml      3 aliases: 2 chat, 1 embedder      free
+    #   config/all.yaml         20 aliases: everything below         THE DEFAULT
+    #   config/lms.yaml          5 aliases: 4 chat, 1 embedder      free
+    #   config/unsloth.yaml      6 aliases: 4 chat, 2 embedders     free
     #   config/ollama.yaml       3 aliases: 2 chat, 1 embedder      free
-    #   config/openrouter.yaml   2 aliases: 2 chat                  PAID
+    #   config/openrouter.yaml   3 aliases: 3 chat                  PAID
     #   config/openai.yaml       2 aliases: 1 chat, 1 embedder      PAID
     #   config/cerebras.yaml     1 alias:  1 chat                   PAID
     #
@@ -116,8 +116,17 @@ services:
     # then crash-looped on `IsADirectoryError` while `compose ps` still said Up.
     # Mounting the directory is what removed that trap.)
     command: ["--config", "/app/config/${GATEWAY_ENGINE:-all}.yaml", "--port", "4000", "--num_workers", "1"]
+    # WHY:            a bare "24000:4000" publishes on EVERY interface, so the Mac's network
+    #                 address answered too: 10.188.101.177:24000/health/readiness -> 200, and
+    #                 anyone on the same network could spend the provider keys behind it
+    # SCOPE:          every caller. Containers are unaffected — they reach this port as
+    #                 host.containers.internal:24000, which lands on the host's 127.0.0.1,
+    #                 the same way they reach the three engines
+    # PROVEN:         2026-10-07, Podman 5 + gvproxy: the network address refused, localhost
+    #                 and host.containers.internal from a container both answered
+    # GUARDED BY:     tests/2_openai_client/04_gateway_contract.py, `loopback_only`
     ports:
-      - "24000:4000"
+      - "127.0.0.1:24000:4000"
     volumes:
       # The whole directory, because every engine config carries
       # `include: [settings.yaml]` and that relative path must resolve next to it.

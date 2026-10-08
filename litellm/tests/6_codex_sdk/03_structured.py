@@ -22,7 +22,7 @@ before the object on different runs of the same prompt (measured on LMStudio,
 rather than parsed whole. A fence-only strip was tried first and was
 intermittent — it passed six runs out of six and still failed in the matrix.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

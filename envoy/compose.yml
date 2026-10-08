@@ -65,13 +65,15 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one self-contained file per engine:
     #
-    #   config/all.yaml         22 rules: everything below       THE DEFAULT
-    #   config/lms.yaml         3 aliases: 2 chat, 1 embedder      free
-    #   config/unsloth.yaml     3 aliases: 2 chat, 1 embedder      free
+    #   config/all.yaml         33 rules: everything below       THE DEFAULT
+    #   config/lms.yaml         5 aliases: 4 chat, 1 embedder      free
+    #   config/unsloth.yaml     6 aliases: 4 chat, 2 embedders     free
     #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
-    #   config/openrouter.yaml  1 alias:  1 chat                   PAID
+    #   config/openrouter.yaml  2 aliases: 2 chat                  PAID
     #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
     #   config/cerebras.yaml    1 alias:  1 chat                   PAID
+    #
+    # Plus an `-anthropic` rule for every chat alias — 14 in all.yaml.
     #
     # `aigw run` TAKES ONE FILE PATH — not a directory, not a repeated flag
     # (checked against `aigw run --help`, 2026-09-06) — and Envoy's config has no
@@ -85,9 +87,17 @@ services:
     # the Dockerfile copies the CLI to /app and sets it as the entrypoint — so
     # mounting a directory there replaces the program with a folder.
     command: ["run", "/etc/aigw/${GATEWAY_ENGINE:-all}.yaml"]
+    # WHY:            a bare "26000:1975" publishes on EVERY interface, and this gateway
+    #                 checks no caller — so on the Mac's network address anyone could call
+    #                 every model and every tool behind /mcp. 26064 carries /metrics
+    # SCOPE:          every caller. Containers are unaffected — they reach these ports as
+    #                 host.containers.internal, which lands on the host's 127.0.0.1
+    # PROVEN:         2026-10-07, Podman 5 + gvproxy: the network address refused, localhost
+    #                 and host.containers.internal from a container both answered
+    # GUARDED BY:     tests/2_openai_client/04_gateway_contract.py, `loopback_only`
     ports:
-      - "26000:1975"
-      - "26064:1064"
+      - "127.0.0.1:26000:1975"
+      - "127.0.0.1:26064:1064"
     volumes:
       - ./config:/etc/aigw:ro
     extra_hosts:

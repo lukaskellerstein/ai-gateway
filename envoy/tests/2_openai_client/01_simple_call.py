@@ -24,9 +24,9 @@ CONVERSATION = [
 
 def scenario(gateway: Gateway, model: str) -> str:
     # THE BODY IS IDENTICAL ON BOTH PORTS except for `body_extras`, which is the
-    # gateway's own calling contract from common.py — empty for LiteLLM, whose
-    # route stores a `max_tokens`, and `max_tokens` for Envoy, which stores none.
-    # This scenario does not know or care which it got.
+    # gateway's own calling contract from settings.py — the thinking level on both,
+    # plus `max_tokens` on Envoy, which stores none on its routes. This scenario
+    # does not know or care which it got.
     response = client_for(gateway).chat.completions.create(
         model=model,
         messages=CONVERSATION,

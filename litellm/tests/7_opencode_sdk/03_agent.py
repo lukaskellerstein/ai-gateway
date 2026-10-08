@@ -12,7 +12,7 @@ A model answering from its own knowledge cannot produce it.
 `"tools": {"*": False}` KEEPS THE AGENT TOOL-FREE. It has one fact and needs
 nothing else, and a small model with tools available will reach for them.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

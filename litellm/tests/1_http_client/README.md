@@ -4,8 +4,8 @@ The gateway with **no client library at all**: `urllib` from the standard librar
 `pyproject.toml` lists no dependencies, and that is the point of the folder.
 
 ```bash
-uv run main.py
-uv run main.py --model lms-gemma4-26b
+uv run run.py
+uv run run.py --model lms-gemma4-26b
 ```
 
 | What it does | Why it is here |
@@ -21,7 +21,7 @@ know is to send the bytes yourself. A mistyped `api_base` in `../../config/` par
 perfectly and fails on the first call; this folder is where that shows up as an
 HTTP status instead of a library traceback.
 
-`main.py` deliberately does **not** catch `HTTPError` before printing the body — a
+`run.py` deliberately does **not** catch `HTTPError` before printing the body — a
 401 or a 404 with the gateway's own explanation is the answer you came for.
 
 ## The whole request
@@ -31,7 +31,7 @@ POST http://localhost:24000/v1/chat/completions
 Authorization: Bearer sk-litellm-master
 Content-Type: application/json
 
-{"model": "unsloth-gemma4-e4b", "messages": [{"role": "user", "content": "..."}]}
+{"model": "unsloth-gemma4-e4b", "messages": [{"role": "user", "content": "..."}], "reasoning_effort": "medium"}
 ```
 
 Two headers. `Authorization` is enforced here — a bogus token gets **401**, which
@@ -39,10 +39,10 @@ is not true of the two sibling gateways.
 
 ## `max_tokens` is absent on purpose
 
-The body spreads `**BODY_EXTRAS` from [`../gateway.py`](../gateway.py), which is
-**empty** on this gateway. LiteLLM stores a `max_tokens` on the route and every
+The body spreads `body_extras()` from [`settings.py`](settings.py), which carries only
+the thinking level on this gateway. LiteLLM stores a `max_tokens` on the route and every
 local route in `../../config/` carries one, so a caller who sends none still gets a
-bounded reply. The Envoy copy of this folder sends `max_tokens: 2048` instead,
+bounded reply. The Envoy copy of this folder sends `max_tokens: 8192` instead,
 because that gateway stores no default — the same script, one honest difference.
 
 ## Streaming, without a library
@@ -71,10 +71,34 @@ every gateway this repo has had:
 
 Streaming works here and on Envoy, with the identical script.
 
+## Copy this folder
+
+`settings.py` is **the one file to edit** when you take this folder into another
+project: the URL, the key, the default model, the thinking level, and what every
+request body must carry on this gateway. Every other file is byte-identical to the
+same folder in the other project and names no port, key or model.
+
+**The thinking level is sent on every request** — `reasoning_effort: medium`. Qwen 3.8
+defaults to `xhigh`, where one agent step took 693 s and answered nothing (2026-09-30).
+
+## What it costs, per model — `run_benchmark.py`
+
+```bash
+uv run run_benchmark.py                                  # every default model, writes RESULTS.md
+uv run run_benchmark.py --aliases lms-gemma4-26b --no-write
+```
+
+The same three-turn task as every other folder — a ~1500-token policy, `read_file` on
+`order.json`, a follow-up, a customer message — streamed, so each request's first
+token, decode speed and cache count are read off the wire. The numbers are in
+[`RESULTS.md`](RESULTS.md); the task and the table are the shared part at the
+bottom of `run_benchmark.py`, byte-identical in all fourteen folders. OpenRouter rows cost money.
+
 ## One file, two gateways
 
-`main.py` is **byte-identical** in both projects. It names no port and no
-gateway; everything specific comes from `../gateway.py`.
+`run.py` and `run_benchmark.py` are **byte-identical** in both projects, and the shared
+part of `run_benchmark.py` is the same in every folder. Everything specific comes from
+`settings.py`.
 
 ## Verified
 

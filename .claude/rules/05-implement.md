@@ -23,6 +23,7 @@ every number carries a comment saying where it came from.
 | a model the user just downloaded, for their own use | `litellm/config/lukas.yaml` **and** `envoy/config/lukas.yaml` — two files, both **gitignored**. Never commit them |
 | a LiteLLM settings block (`router_settings`, `general_settings`, …) | `litellm/config/settings.yaml` — once; every engine file includes it |
 | how an engine is chosen | the `--config` path in `litellm/compose.yml`, and `AIGW_CONFIG` in `envoy/compose.yml` |
+| an MCP server behind the gateway | `litellm/config/settings.yaml` § `mcp_servers`, **and** the `MCPRoute` + `Backend` that close EVERY `envoy/config/*.yaml` — eight files, `lukas.yaml` included, all identical |
 | an Envoy route, backend, timeout or buffer limit | `envoy/config/<engine>.yaml` **and** `envoy/config/all.yaml` — Kubernetes custom resources, self-contained per engine |
 | services, ports, healthchecks, env | that project's `compose.yml` — never several in one edit unless the change is genuinely several |
 | anything a caller reads | the README of the gateway it concerns, or `README.md` if it is shared |
@@ -196,43 +197,52 @@ gateway only**; there is no `--gateway` flag, because the folder is the answer.
 
 ```text
 tests/
-├── gateway.py              base URL · key · alias — ONCE per project, stdlib only
 ├── pyproject.toml          empty deps; exists so `uv run run_all.py` works here
 ├── run_all.py              runs every folder listed in FOLDERS
+│                        EVERY FOLDER: settings.py (the ONE file that differs
+│                        between the projects), run_benchmark.py, RESULTS.md
 ├── 1_http_client/          urllib. pyproject lists NO dependencies, deliberately
 ├── 2_openai_client/        openai — 01..04 plus its own run_all.py
-├── 3_langchain_langgraph/  langchain + langgraph
-├── 4_deepagents/           deepagents. SEVEN scenarios + its own run_all.py.
-│                        query, todos, filesystem, tools, MCP, subagent, skill
-├── 5_claude_agent_sdk/     claude-agent-sdk. SEVEN scenarios + its own run_all.py.
+├── 3_langchain_langgraph/  langchain + langgraph. Three demos in run.py, the
+│                        third a tool behind the gateway's /mcp
+├── 4_deepagents/           deepagents. EIGHT scenarios + its own run_all.py.
+│                        query, todos, filesystem, tools, MCP, subagent, skill,
+│                        gateway MCP
+├── 5_claude_agent_sdk/     claude-agent-sdk. EIGHT scenarios + its own run_all.py.
 │                        query, session, in-process MCP, stdio MCP, subagent,
-│                        skill, thinking. Needs the `claude` CLI from npm
-├── 6_codex_sdk/            openai-codex. FOUR scenarios + its own run_all.py.
-│                        query, session, structured output, MCP wiring.
-│                        Ships its own runtime; no npm
-└── 7_opencode_sdk/         httpx. FIVE scenarios + its own run_all.py.
-                         query, session, agent, MCP, structured output.
-                         Needs the `opencode` binary
+│                        skill, thinking, gateway MCP. Needs the `claude` CLI
+├── 6_codex_sdk/            openai-codex. FIVE scenarios + its own run_all.py.
+│                        query, session, structured output, MCP wiring,
+│                        gateway MCP wiring. Ships its own runtime; no npm
+└── 7_opencode_sdk/         httpx. SIX scenarios + its own run_all.py.
+                         query, session, agent, MCP, structured output,
+                         gateway MCP. Needs the `opencode` binary
 ```
 
-- **`gateway.py` IS THE ONLY PLACE THE GATEWAY IS NAMED.** Base URL, Anthropic base URL,
-  Responses base URL, key, alias map, `MAX_TOKENS`, `BODY_EXTRAS`. Seven folders import it, so
-  changing an engine default is one edit. **It must import with NO dependencies installed** —
-  `1_http_client`'s venv is empty — which is why it parses `../.env` by hand instead of using
-  `python-dotenv`. Do not add an import to it.
+- **EACH FOLDER'S `settings.py` IS THE ONLY PLACE ITS GATEWAY IS NAMED** (since
+  2026-09-30). URL, key, default alias, thinking level, the body every request must carry,
+  and every client setting that matters for cache and speed. It is the one file that differs
+  between `litellm/` and `envoy/`, and the one a project edits after copying the folder.
+  Standard library only, and it reads no `.env`. **Never bring back a shared
+  `tests/gateway.py`**: a folder that imports `../gateway.py` cannot be copied alone, which
+  is why it went.
+- **`run_benchmark.py` IS ONE FILE WITH TWO PARTS.** The top is this client's own code; the
+  bottom, between two banners, is the task, the record and the table, BYTE-IDENTICAL in all
+  fourteen copies. Change the shared part in one folder and copy it to the other thirteen, or
+  the `RESULTS.md` files stop being comparable. It is one file and not two by the user's
+  choice (2026-09-30): a folder should hold the scripts you run, and little else.
+- **EVERY SCRIPT YOU RUN STARTS WITH `run`** (2026-09-30): `run.py` in the one-script folders
+  (1 and 3), `run_all.py` in the rest, and `run_benchmark.py` in all seven. A file without
+  the prefix is imported, never run.
 - **A new folder is two edits**: write it, and add its name to `FOLDERS` in `run_all.py`. Give
-  it a `main.py`; every folder except `1_http_client` and `3_langchain_langgraph` now carries
-  its own `run_all.py`, and the
-  runner picks whichever exists.
+  it a `run.py` or a `run_all.py`; the runner picks whichever exists.
 - **EACH FOLDER IS ITS OWN uv PROJECT.** The dependency sets have nothing in common, and a
   folder has to be readable and copyable on its own. Never merge them into one manifest.
-- **`main.py` in folders 1, 3, 4, 6 and 7 is BYTE-IDENTICAL across both projects.** They name
-  no port and no gateway — everything specific comes from `gateway.py`. Keep it that way; a
-  demo that branches on `NAME` has stopped being portable. **Folder 5 keeps the same rule with
-  a `common.py`**: its six
-  numbered scenarios, `run_all.py` and `mcp_server.py` are byte-identical between `litellm/`
-  and `envoy/`, and the one difference — Envoy resolves an `<alias>-anthropic` pass-through
-  alias, LiteLLM calls the alias as given — lives in that file alone.
+- **EVERY FILE BUT `settings.py` IS BYTE-IDENTICAL ACROSS BOTH PROJECTS** (and `README.md`
+  where the gateways genuinely differ). They name no port and no gateway. Keep it that way; a
+  demo that branches on `NAME` has stopped being portable. Folder 5's one real difference —
+  Envoy resolves an `<alias>-anthropic` pass-through alias, LiteLLM calls the alias as given
+  — lives in its `settings.py`. `diff -r litellm/tests/<f> envoy/tests/<f>` is the check.
 - **A folder that CANNOT work gets a script that proves it, not an empty folder.** Nothing
   needs one today — all seven run on both gateways. The rule was written for `mlflow/`, whose
   folders 5 and 6 probed for a missing route and PASSED while it was still missing, and it
@@ -245,17 +255,18 @@ tests/
   can serve one, and the intermittent `400 messages.N.content.str` went away with the
   pass-through alias. **A skip is for what the gateway cannot do, never for what is merely
   flaky** — fix the flake instead.
-- **The differences go in `Gateway`, as data — never in a scenario.** The vocabulary is
-  shared between the projects; the calling contract is not. Four things differ (the API key,
-  the model listing, what `response.model` echoes, and whether a route stores a
-  `max_tokens`), and all four are declared once on that project's
-  `2_openai_client/common.Gateway`. A scenario applies the contract by spreading
-  `**gateway.body_extras` into its request and reads nothing else.
-- **`01`–`03` are byte-identical across both projects on purpose.** They never name a
-  gateway, so a scenario written for one can be copied to the other unchanged. Keep it that
-  way — a scenario that reads `gateway.name` has stopped being portable.
-- **The two contracts are genuinely different, and only ONE of the four lines matches.** Envoy
-  lists its models like LiteLLM, and then checks no caller key and echoes the upstream model
+- **The differences go in `settings.py`, as data — never in a scenario.** The vocabulary is
+  shared between the projects; the calling contract is not. Five things differ (the API key,
+  the model listing, what `response.model` echoes, whether a route stores a `max_tokens`, and
+  whether a Qwen route stores a thinking level), and all five are declared once in that
+  project's `2_openai_client/settings.py` § `CONTRACT`. A scenario applies the contract by
+  spreading `**gateway.body_extras` into its request and reads nothing else.
+- **Every script in `2_openai_client` is byte-identical across both projects**, `04` and `05`
+  included. They never name a gateway, so a scenario written for one can be copied to the
+  other unchanged. Keep it that way — a scenario that reads `gateway.name` has stopped being
+  portable.
+- **The two contracts are genuinely different, and only TWO of the five lines match** — the
+  listing and the loopback binding. Envoy lists its models like LiteLLM, and then checks no caller key and echoes the upstream model
   id rather than the alias. Anything written as "LiteLLM or not-LiteLLM" is wrong about it.
 - **`04_gateway_contract.py` is the ONE script that is about its gateway**, and even it does
   not branch on the name: it checks the DECLARED table against observed behaviour, so a
@@ -302,8 +313,7 @@ ai-gateway/
 │                            pick which. THE BENCHMARK RESULTS LIVE HERE
 ├── TESTING.md              the testing handover: versions, coverage, open bugs
 ├── benchmark/              what the gateway itself costs. Calls both ports;
-│                            reads no project's files. No dependencies.
-│                            cache_report.py: the table over tests/run_cache.py
+│                            reads no project's files. No dependencies
 ├── litellm/                compose project `ai-gateway`         PORT 24000
 │   ├── compose.yml             postgres · litellm. name: DO NOT RENAME
 │   ├── .env.example            tracked; the key lines are blank BY DESIGN

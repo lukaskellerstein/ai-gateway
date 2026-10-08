@@ -17,7 +17,7 @@ TWO THINGS DIFFER FROM 04 AND BOTH MATTER:
 `sys.executable` IS THIS VENV'S INTERPRETER, so the child gets the same
 dependencies without a PATH lookup.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

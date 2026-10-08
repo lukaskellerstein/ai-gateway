@@ -15,7 +15,7 @@ the name can only reach the final answer by travelling out and back. That is the
 assertion, and `subagents=` records WHICH helper ran, because every delegation
 looks like `task(...)` from the outside.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

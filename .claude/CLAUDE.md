@@ -50,10 +50,6 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   stay as independent as before. It times ONE HTTP request against both ports with the engine,
   model, body and `max_tokens` held identical, and it is the closest thing here to the
   cross-gateway check that went away at the split. Results live in `COMPARISON.md`.
-  **`benchmark/cache_report.py` (2026-09-30) is its second script**: it turns both projects'
-  `tests/run_cache.py` output into one table, and reads only the files named on its command
-  line — so the folder still reads nothing a project owns. `benchmark/README.md` opens with
-  the map of both measurements.
 - **`name: ai-gateway` IN `litellm/compose.yml` IS LOAD-BEARING.** The volume resolves to
   `<project>_postgres_data`, so that word is what keeps it attached to
   `ai-gateway_postgres_data` — every virtual key, spend log and budget ceiling ever issued.
@@ -85,20 +81,25 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   names ONE FILE — `<project>/config/<word>.yaml` — and `all.yaml` is a real file, not a list
   you write. LiteLLM's is **seven `include:` lines that copy nothing**; Envoy's **COPIES the six
   engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
-  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 17 aliases on `all`, Envoy 28
-  route rules (Cerebras added 2026-09-28, Qwen 3.8 on three more engines 2026-09-29).
+  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 21 aliases on `all`, Envoy 35
+  route rules (Cerebras added 2026-09-28, Qwen 3.8 on three more engines 2026-09-29, Gemma 4
+  12B on `lms` and `unsloth` 2026-10-03, `unsloth-gemma4-26b-fast` 2026-10-04).
 - **`GATEWAY_ENGINE` NAMES ANY FILE IN `config/`, AND TWO OF THEM ARE GITIGNORED.**
   `<project>/config/lukas.yaml` is the user's PERSONAL config — every chat and embedding model
-  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **44 aliases on
-  LiteLLM, 50 route rules on Envoy** (four `AIGatewayRoute`s, 15-alias cap; both `-1` routes
-  are full). No Ollama, no
+  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **48 aliases on
+  LiteLLM, 60 route rules on Envoy** (five `AIGatewayRoute`s, 15-alias cap; `lms-1`,
+  `unsloth-1` and `unsloth-2` are full). No Ollama, no
   hosted engine, and none of Unsloth's four image models — so **it cannot spend money**, and a
   chat route that could not work was never written. **YOU WILL BE ASKED TO ADD MODELS TO IT**
   ("I downloaded a new model in unsloth"): that is TWO edits, `litellm/config/lukas.yaml` and
   `envoy/config/lukas.yaml`, and on Envoy the new rule must go in a route with room. Both files
   are in `.gitignore` and **must never be committed** — they describe one disk. LiteLLM's
   includes `settings.yaml`, `lms.yaml` and `unsloth.yaml`, so the short names keep answering;
-  Envoy's copies those rules, as `all.yaml` does.
+  Envoy's copies those rules, as `all.yaml` does. **A SECOND QUANT OF A REPO UNSLOTH ALREADY
+  SERVES CHANGES WHAT A BARE NAME LOADS** (2026-10-02): Unsloth picks the first quant on disk in
+  its `GGUF_QUANT_PREFERENCE`, which starts at `UD-Q4_K_XL`, so downloading that file moved
+  `unsloth-qwen38-27b` from Q8 to Q4 for every caller. Pin a quant with `repo:QUANT` in the
+  alias — `unsloth-qwen38-27b` carries `:UD-Q8_K_XL` since, the Q8 being the faster of the two.
 - **NAMING ONE ENGINE IS STILL SUPPORTED AND IS THE MONEY GUARD.** Set `GATEWAY_ENGINE=lms` and
   every other alias is ABSENT from the running config — not disabled, absent — and a 404 on one
   is correct. That is the only way to get a gateway that cannot reach a paid provider. On `all`
@@ -155,13 +156,17 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   to be `tests/` itself), `3_langchain_langgraph`, `4_deepagents`, `5_claude_agent_sdk`,
   `6_codex_sdk`, `7_opencode_sdk`. **Each folder is its own uv project** with its own
   `pyproject.toml` and `.venv`; `uv run --directory` builds whichever is missing, so there is
-  no `uv sync` step. `tests/run_all.py` runs all seven; `tests/gateway.py` holds the base URL,
-  the key and the alias **once per project** and imports nothing outside the standard library,
-  because it must import inside `1_http_client`'s empty venv. **Beside `run_all.py` sits
-  `run_cache.py`** (2026-09-30): one live session per agent on the aliases you name, recording
-  the prompt cache and the speed. It is byte-identical in both projects; `gateway_records.py`
-  beside it is the one file that differs, because each gateway records a request its own way.
-  `benchmark/cache_report.py` turns both projects' `cache-results/` into one table.
+  no `uv sync` step. `tests/run_all.py` runs all seven. **EACH FOLDER IS A COPY-THIS EXAMPLE
+  SINCE 2026-09-30**: its own `settings.py` holds the URL, the key, the default alias, the
+  thinking level and every client setting that matters for cache and speed, and it is the ONE
+  file that differs between `litellm/` and `envoy/`. Nothing is shared between folders —
+  `tests/gateway.py` went because a folder importing `../gateway.py` cannot be copied alone.
+  **Each folder also has a `run_benchmark.py`**: the same three-turn task in all fourteen
+  (its shared part, below a banner, is byte-identical everywhere), one session per model,
+  first token, decode speed and cached tokens per request, written to that folder's
+  `RESULTS.md`. Its setup list is what another project copies. **Every script you run starts
+  with `run`** — `run.py` in folders 1 and 3, `run_all.py` in the rest. `run_cache.py`,
+  `gateway_records.py` and `benchmark/cache_report.py` were replaced by it the same day.
 - **ALL SEVEN FOLDERS RUN ON BOTH GATEWAYS.** That was not true of `mlflow/`, which had
   neither an Anthropic route nor `/v1/responses` (both 404, measured 2026-09-04) and carried
   two probe-only folders to prove it. Those went with the folder. **A gateway that cannot do
@@ -179,8 +184,8 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   `openrouter`: every one serves `POST /v1/messages` natively, so nothing is translated and
   nothing is mangled. `openai-gpt54-mini-anthropic` and `cerebras-qwen38-27b-anthropic` EXIST
   BUT ARE NOT THIS — neither vendor serves `/v1/messages`, so those rules point at the plain
-  `OpenAI`-schema backend and still translate. **Twelve `-anthropic` rules in all, one per chat
-  alias**, which is why `envoy/config/all.yaml` has 28 and not 16. `tests/5_claude_agent_sdk`
+  `OpenAI`-schema backend and still translate. **Fifteen `-anthropic` rules in all, one per chat
+  alias**, which is why `envoy/config/all.yaml` has 35 and not 20. `tests/5_claude_agent_sdk`
   RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
   **`MAX_THINKING_TOKENS=0` IS NO LONGER NEEDED** — it existed for `400 thinking.type` from
   the same translator, and the pass-through path accepts the field as sent.
@@ -207,18 +212,34 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   `lm_studio/`**: LiteLLM makes `/v1/responses` a chat call and passes Codex's
   `{effort, summary}` as a whole object, which LMStudio answers with a 400. So
   `lms-qwen38-27b` is the ONE `lms-*` alias on `openai/` — native `/v1/responses` — and must
-  stay there while it carries the line. The full route table is in `litellm/README.md`
-  § Provider × route.
+  stay there while it carries the line. **Both routes also store `reasoning_effort: medium`**
+  (2026-09-30): the level for a caller who sends none or whose level LiteLLM drops, which is
+  what stopped Claude Code's main turns running at `xhigh`. A caller's own level still wins.
+  Envoy's Qwen routes store none — `bodyMutation` could since the fast route proved it
+  (2026-10-04), but the level was never moved there — so a Qwen caller there who sends no
+  level gets `xhigh` —
+  `default_effort` in `2_openai_client/settings.py` declares it per project and
+  `05_reasoning_effort.py` checks it.
+  The full route table is in `litellm/README.md` § Provider × route.
+- **THE FAST ROUTE IS `unsloth-gemma4-26b-fast`, AND EACH UNSLOTH ROUTE OBEYS A DIFFERENT
+  THINKING FIELD** (measured 2026-10-04). The same file as `unsloth-gemma4-26b` with thinking
+  stored OFF: a session of `run_benchmark.py` in 1.6–1.7 s against 4.8–9.7 s. Chat and
+  `/v1/messages` obey `enable_thinking: false`; `/v1/responses` obeys only
+  `chat_template_kwargs`, and that one loses to a caller's `reasoning_effort` on chat. So the
+  route stores BOTH — `extra_body` on LiteLLM, `bodyMutation.set` on Envoy, which overwrites
+  even a caller's `enable_thinking: true` where LiteLLM lets it win.
+  `2_openai_client/06_thinking_off.py` goes red without either field. No `lms-` twin:
+  LMStudio never turns Gemma's thinking on.
 - **A LOCAL ENGINE'S CACHE IS A PREFIX CACHE, SO NEVER REWRITE AN EARLIER PART OF A PROMPT**
-  (measured 2026-09-30, `tests/run_cache.py`, both gateways). The engine reuses only what the
+  (measured 2026-09-30, both gateways). The engine reuses only what the
   new prompt shares with the last one FROM THE FIRST TOKEN; one changed character before the
   end recomputes everything after it. **The gateway does not change the reuse** — same agent,
   same model, same share through either port. **Claude Code is the client that breaks it**: a
   new `<total_tokens>` line in its system prompt after every tool result held the last turn to
   22% (Gemma) and 0% (Qwen) on LMStudio. `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` plus
   `CLAUDE_CODE_ATTRIBUTION_HEADER=0` gave 76–93%. So: **no hook, callback or setting that
-  inserts, moves or rewrites earlier messages on a local route.** `run_cache.py` records the
-  engine's own prompt text where a prompt parts from the last one — read that before guessing.
+  inserts, moves or rewrites earlier messages on a local route.** `lms log stream` shows the
+  engine's own prompt text — diff two consecutive prompts before guessing.
   **LiteLLM reports 0 cached tokens on every LMStudio route but native `/v1/responses`, even on
   a 98% hit**; Envoy reports them on `/v1/messages` and `/v1/responses`.
 - **UNSLOTH SOMETIMES 500s ON A VISION CALL, AND IT IS THE ENGINE** (seen 2026-09-04):
@@ -263,7 +284,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   understands that shape. **THE CAUSE IS MEASURED, NOT INFERRED**: one `/v1/responses` call
   per shape, no Codex in the path, `unsloth-gemma4-26b`, the same on both ports — `namespace` gets a
   plain message, the same tool as a flat `function` gets a `function_call`. So neither gateway
-  is at fault. Nothing in Codex turns the shape off (no provider capability in 0.155.1 or
+  is at fault. **THE ONE EXCEPTION IS LITELLM ON AN `lm_studio/` ALIAS** (2026-09-30,
+  `lms-gemma4-26b`, 5 runs of 5, Envoy 0 of 2): LiteLLM rebuilds `/v1/responses` as a chat call
+  there and flattens the tools itself — at the price of no streamed tokens, ~2 300 extra prompt
+  tokens and no cache count. `TESTING.md` §5.1. Nothing in Codex turns the shape off (no provider capability in 0.155.1 or
   0.156.0-alpha.16; `features.non_prefixed_mcp_tool_names` only renames it), and the real fix,
   openai/codex#26234, has had both its PRs closed unmerged. **THE FIXES THAT "WORK" ARE
   PROXIES THAT FLATTEN THE TOOLS — shims. Do not build one.** `tests/6_codex_sdk/04_mcp.py`
@@ -294,8 +318,31 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   runtime. It is the Codex equivalent of `setting_sources=[]`; without it a run depends on
   who is at the keyboard. Codex must WRITE there, so these tests do not run inside a
   read-only sandbox.
+  **OpenCode leaks the same way, and folder 7 guards it twice** (2026-09-30): its provider id
+  is `ai-gateway-<NAME>-tests`, because OpenCode MERGES `~/.config/opencode` model by model
+  and that file declares `ai-gateway-litellm`/`ai-gateway-envoy` (requests inherited its
+  `max_tokens: 8192`), and `OPENCODE_DISABLE_CLAUDE_CODE=1` keeps `~/.claude/CLAUDE.md` and
+  every skill out of the system prompt (19048 characters with them, 9628 without).
+  **And `external_directory: deny`** (2026-10-02): its default is `ask`, so a model that reads
+  `/order.json` instead of `order.json` hangs a headless run on an approval nobody gives —
+  `TESTING.md` §6.13.
+- **BOTH GATEWAYS PUT MCP SERVERS BEHIND `/mcp`, AND THE TWO DIFFER** (since 2026-10-07).
+  A caller gets one URL; the gateway renames each tool by server and forwards the call. LiteLLM:
+  `litellm/config/settings.yaml` § `mcp_servers`, tools `<server>-<tool>`, the caller's key
+  checked in `x-litellm-api-key`. Envoy: an `MCPRoute` + `Backend` closing EVERY
+  `envoy/config/*.yaml` — **eight identical copies**, `lukas.yaml` included — tools
+  `<backend>__<tool>`, no caller check. **`--mcp-config` is IGNORED** when `aigw run` gets a
+  config path. **ENVOY SENDS `Host` WITH NO PORT**, so an MCP SDK server answers `421` unless
+  it allows the bare container name. The one server is the test `bench_hardware` /
+  `bench-hardware` on **24090 / 26090**, up only while a test runs — so between runs LiteLLM
+  lists `tools: []` and Envoy answers `500 failed to create MCP session to any backend`, both
+  correct. Each agent folder has ONE scenario that starts it and calls through `/mcp`; Codex
+  lists the tools and calls nothing on a local alias (openai/codex#19871), gateway or not.
+  **THROUGH ENVOY CODEX OFFERS NO GATEWAY TOOL AT ALL, ON ANY MODEL** (measured 2026-10-07):
+  Envoy's `tools/list` result carries `"cacheScope":""`, and Codex 0.155.1 drops any result
+  carrying `cacheScope`. Other clients ignore the field. `TESTING.md` §5.7.
 - **BOTH GATEWAYS STREAM CORRECTLY** with the byte-identical `1_http_client` script.
-  `main.py` still guards against an SSE frame carrying an `error` instead of a `delta` and
+  `run.py` still guards against an SSE frame carrying an `error` instead of a `delta` and
   reports SKIPPED — the deleted MLflow gateway failed exactly that way
   (`KeyError: 'finish_reason'`). Keep the guard; it costs two lines.
 - **THE GATEWAY ITSELF COSTS 10-20 ms, MEASURED, AND THE TWO ARE WITHIN 10 ms OF EACH
@@ -310,7 +357,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   control is the difference between a benchmark and a number.
 - **Ports 24000 / 26000 are deliberate.** The failure avoided is not a bind error but the
   silent one: a health probe against `localhost:4000` that another stack answers, going
-  green. 25000 is now free — it was the deleted MLflow gateway's.
+  green. 25000 is now free — it was the deleted MLflow gateway's. **EVERY PORT IS PUBLISHED ON
+  `127.0.0.1` ONLY** (since 2026-10-07): a bare `"24000:4000"` answered on the Mac's network
+  address, and Envoy checks no caller. Containers still reach both as
+  `host.containers.internal`. `2_openai_client/04_gateway_contract.py` goes red if a port opens.
 - **Health**: `curl -fsS http://localhost:24000/health/readiness` →
   `{"status":"healthy","db":"connected"}`. Use readiness, not liveliness — only readiness
   reports the database, and a proxy that booted without one still serves completions. First

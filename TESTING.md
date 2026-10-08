@@ -51,26 +51,32 @@ way of calling the gateway:
 
 | Folder | Scenarios | Drives the gateway with |
 |:--|--:|:--|
-| `1_http_client` | 1 (`main.py`) | `urllib` — no dependencies at all |
-| `2_openai_client` | 4 | the `openai` client |
-| `3_langchain_langgraph` | 1 (`main.py`) | `ChatOpenAI(base_url=…)`, then the same loop by hand |
-| `4_deepagents` | **7** | a DeepAgents deep agent |
-| `5_claude_agent_sdk` | **7** | the Anthropic Messages API |
-| `6_codex_sdk` | **4** | the OpenAI Responses API |
-| `7_opencode_sdk` | **5** | OpenCode's HTTP server API |
-| **total** | **29 per gateway · 58 across both** | |
+| `1_http_client` | 1 (`run.py`) | `urllib` — no dependencies at all |
+| `2_openai_client` | 6 | the `openai` client |
+| `3_langchain_langgraph` | 1 (`run.py`, three demos) | `ChatOpenAI(base_url=…)`, the same loop by hand, then a tool from `/mcp` |
+| `4_deepagents` | **8** | a DeepAgents deep agent |
+| `5_claude_agent_sdk` | **8** | the Anthropic Messages API |
+| `6_codex_sdk` | **5** | the OpenAI Responses API |
+| `7_opencode_sdk` | **6** | OpenCode's HTTP server API |
+| **total** | **35 per gateway · 70 across both** | |
 
 ```
-4_deepagents        01_query 02_todos 03_filesystem 04_tools 05_mcp 06_subagent 07_skill
-5_claude_agent_sdk  01_query 02_session 03_sdk_mcp 04_stdio_mcp 05_subagent 06_skill 07_thinking
-6_codex_sdk         01_query 02_session 03_structured 04_mcp
-7_opencode_sdk      01_query 02_session 03_agent 04_mcp 05_structured
+4_deepagents        01_query 02_todos 03_filesystem 04_tools 05_mcp 06_subagent 07_skill 08_gateway_mcp
+5_claude_agent_sdk  01_query 02_session 03_sdk_mcp 04_stdio_mcp 05_subagent 06_skill 07_thinking 08_gateway_mcp
+6_codex_sdk         01_query 02_session 03_structured 04_mcp 05_gateway_mcp
+7_opencode_sdk      01_query 02_session 03_agent 04_mcp 05_structured 06_gateway_mcp
 ```
 
-In every rebuilt folder the numbered scenarios, `run_all.py` and `mcp_server.py` are
-**byte-identical between `litellm/` and `envoy/`**. Only `common.py`, `gateway.py` and
-`04_gateway_contract.py` differ, and those three are the files allowed to know which gateway
-they are talking to.
+**The `gateway_mcp` scenarios, and folder 3's demo `mcp`, reach an MCP server only through
+the gateway's `/mcp`** (since 2026-10-07). Each starts its folder's `mcp_server.py` over HTTP
+on the port the gateway's config names — 24090 for LiteLLM, 26090 for Envoy — and gives the
+agent nothing else. §3 § The MCP gateway run has the results.
+
+In every folder each script is **byte-identical between `litellm/` and `envoy/`**. Since
+2026-09-30 the one Python file that differs is the folder's own `settings.py` — the file allowed
+to know which gateway it is talking to, and the one to edit when the folder is copied. Each
+folder also has a `run_benchmark.py` and a `RESULTS.md`: the same three-turn task per model, with
+the first token, decode speed and cached tokens of every request.
 
 ---
 
@@ -166,11 +172,32 @@ case §6.6 fixed. **That variable no longer exists** — auto-discovery was remo
 were a few hundred small `gpt-5.4-mini` requests. **Neither engine cost more than a few
 cents**, which is worth knowing before anyone avoids testing them again.
 
+### The MCP gateway run — every agent, 2026-10-07
+
+One scenario per agent folder, the tool behind `/mcp`, `lms-gemma4-e4b` unless named.
+
+| Folder | LiteLLM 24000 | Envoy 26000 |
+|:--|:--|:--|
+| `3_langchain_langgraph`, demo `mcp` | ✅ 3.1 s | ✅ (whole `run.py` 6.3 s) |
+| `4_deepagents/08_gateway_mcp` | ✅ 12.0 s | ✅ 3.4 s |
+| `5_claude_agent_sdk/08_gateway_mcp` | ✅ 8.0 s | ✅ 5.3 s |
+| `6_codex_sdk/05_gateway_mcp`, `unsloth-gemma4-26b` | ✅ listed, **not called** — §5.1 | ✅ listed, **not called** — §5.1 |
+| `6_codex_sdk/05_gateway_mcp`, `openrouter-gemma4-26b`, one paid run | **called** | listed, **not called** — §5.7 |
+| `7_opencode_sdk/06_gateway_mcp` | ✅ 4.4 s | ✅ 4.1 s |
+
+Every called tool carried the gateway's name — `bench_hardware-bench_serial` on LiteLLM,
+`bench-hardware__bench_serial` on Envoy — and every reply carried `SN-4417-QX`. **Folder 6 ran
+on `unsloth-gemma4-26b`** because `lms-gemma4-e4b` was JIT-loaded at 8192 context, and through
+LiteLLM every folder-6 scenario overflows it: `The number of tokens to keep from the initial
+prompt is greater than the context length`. Envoy ran the same folder on the same load, 5/5.
+LiteLLM's `lm_studio/` route rebuilds `/v1/responses` as a chat call, which adds ~2 300 prompt
+tokens (§5.1) — the likely difference, not measured.
+
 ### The cache run — every agent, 2026-09-30
 
-`tests/run_cache.py` in both projects: one live session per agent (8, Claude twice), at
-`medium`, both gateways on `all`. Results and the reading of them: `COMPARISON.md` § Does the
-prompt cache hold.
+`tests/run_cache.py` in both projects — replaced the same day by each folder's
+`run_benchmark.py` — one live session per agent (8, Claude twice), at `medium`, both gateways on
+`all`. Results and the reading of them: `COMPARISON.md` § Does the prompt cache hold.
 
 | Alias | LiteLLM | Envoy |
 |:--|:--|:--|
@@ -239,6 +266,15 @@ same on 24000 and 26000:
 So neither gateway nor the engine is at fault. The OpenRouter route understands the shape —
 §6.11 — and no local engine does.
 
+**One local route DOES call the tool: LiteLLM on an `lm_studio/` alias** (2026-09-30, codex
+0.155.1, `lms-gemma4-26b`): `tool really called: True` 5 runs of 5, against `False` 2 of 2 on
+the same alias through Envoy. LiteLLM has no native `/v1/responses` for that provider, so it
+rebuilds the call as a chat completion and writes each MCP tool as a flat `function` — the
+flattening #26234 asks for, done by the gateway's own translator, not by a shim here. The same
+translation costs that route its streamed tokens, about 2 300 extra prompt tokens and its cache
+count (`COMPARISON.md` § Per client and per model). `lms-qwen38-27b` is on `openai/` (§6.12)
+and does not get it.
+
 **Tried on 2026-09-21, and none of it helps:**
 
 | Tried | Result |
@@ -258,8 +294,14 @@ Envoy would accept its payload — but **PyPI has no 0.116.x**. `openai-codex` h
 releases: `0.1.0b1`, `0.1.0b2`, `0.1.0b3`, `0.144.4`, `0.147.0`, `0.154.0`, `0.155.1`. The
 Python SDK cannot drive that runtime.
 
+**THE GATEWAY DOES NOT CHANGE IT** (2026-10-07). `05_gateway_mcp.py` hands Codex the
+gateway's `/mcp` instead of a server of its own. The gateway renames the tools and does not
+flatten them, so Codex still builds one `namespace` tool, and a local model calls nothing —
+on both gateways, `unsloth-gemma4-26b`. The scenario asserts the listing instead: its server
+writes `.mcp_tools_listed`, and neither gateway lists in the background or caches the list.
+
 **WHAT A FUTURE AGENT SHOULD DO.** Open #19871 and #26234. If either is closed, upgrade
-folder 6 and run `uv run 04_mcp.py` on a **local** alias. When it prints
+folder 6 and run `uv run 04_mcp.py` and `uv run 05_gateway_mcp.py` on a **local** alias. When it prints
 `tool really called: True` there, turn that line into an assertion, delete the note in
 `04_mcp.py` and in the folder README, and move this entry to §6.
 
@@ -381,9 +423,9 @@ Fixes proposed upstream: detect reasoning models by id prefix (`gpt-5*`, `o1*`, 
 and switch the parameter, or expose a per-provider `max_tokens_param` config knob. **Neither
 has landed**, so there is nothing to configure in `7_opencode_sdk/common.py` today.
 
-**Not worked around, deliberately.** Our own scripts WERE adapted — §6.5 made
-`envoy/tests/gateway.py` send `max_completion_tokens` for `openai-*`, which is why folders 1
-and 2 pass. **OpenCode is a third-party client and there is nothing on our side to change**,
+**Not worked around, deliberately.** Our own scripts WERE adapted — §6.5 made Envoy's
+`body_extras()` send `max_completion_tokens` for `openai-*` (in each folder's `settings.py`
+since 2026-09-30), which is why folders 1 and 2 pass. **OpenCode is a third-party client and there is nothing on our side to change**,
 and adapting the test would hide a limitation that a real user hits the moment they point an
 agent at Envoy with a hosted OpenAI model. *Prove a gap, never shim it.*
 
@@ -407,17 +449,73 @@ agent at Envoy with a hosted OpenAI model. *Prove a gap, never shim it.*
 **did not reappear anywhere in the 2026-09-05 runs.** Re-run first; only investigate if it
 repeats.
 
-### 5.5 Claude Code's main turns reach Qwen at `xhigh` through LiteLLM
+### 5.5 Some of Claude Code's levels are lost through LiteLLM — the route default now catches them
 
-Found 2026-09-30 by `tests/run_cache.py`, whose engine log records the level each prompt
-carries. On `lms-qwen38-27b` through LiteLLM, Claude's side calls arrived at `medium` and its
+Found 2026-09-30 by a live session per agent, reading the level each prompt carries in
+`lms log stream`. On `lms-qwen38-27b` through LiteLLM, Claude's side calls arrived at `medium` and its
 conversation turns at `xhigh`, with `CLAUDE_CODE_EFFORT_LEVEL=medium` set. LiteLLM's
 `/v1/messages` delivers the level only when the body carries `thinking: {type: adaptive}` next
 to `output_config.effort`; `output_config.effort` alone is dropped, and a `thinking` budget is
 mapped to a level of its own (`litellm/README.md` § Provider × route). Envoy's `-anthropic`
 alias does not translate and does not have it. **Nothing fails** — the turn is only slower, so
-`run_all.py` stays green. Next step: record which form the SDK's CLI 2.1.259 sends, then decide
-between a per-alias setting and an upstream report.
+`run_all.py` stays green.
+
+**The `xhigh` is gone since the same day.** Both Qwen routes store `reasoning_effort: medium`,
+which LiteLLM applies when the caller's level is absent or dropped, and a level that does
+arrive still wins. Re-run with live Claude sessions: at `medium` all 6
+engine requests arrived at `medium`; at `--effort low`, 2 of 3 arrived at `low` and the first
+at the default. **Still open:** one of Claude's request forms loses its level, and now gets
+`medium` in place of what was asked. Next step: record that request's body, then decide on an
+upstream report.
+
+### 5.6 LMStudio puts Qwen 3.8's structured output in `reasoning_content` — engine side
+
+Measured 2026-09-29 against LMStudio on 1234, **no gateway in the path**:
+
+| Call to `qwen/qwen3.8-27b` | Result |
+|:--|:--|
+| `/v1/chat/completions` + `response_format: json_schema` | `content: ''`, the JSON in `reasoning_content` |
+| `/v1/responses` + `text.format: json_schema` | the JSON in the `message` item |
+| Unsloth's `unsloth/Qwen3.8-27B-GGUF`, chat + `json_schema` | the JSON in `content` — correct |
+
+**Any caller asking `lms-qwen38-27b` for a JSON schema over chat completions gets empty
+content, on either gateway** — the first row again through LiteLLM on `openai/`, 2026-09-30.
+Do not shim it: use `unsloth-qwen38-27b`, or read `reasoning_content`.
+
+Found through Codex: `6_codex_sdk/03_structured.py` failed 4 runs in 4 on LiteLLM
+(`the reply carries no JSON object`) while the alias was on `lm_studio/`, which turns
+`/v1/responses` into a chat call and so hits the first row. Envoy forwards `/v1/responses` as
+sent and hits the second. **Codex is no longer affected**: §6.12 moved the alias to `openai/`,
+whose `/v1/responses` is native, and the scenario passed 2 runs in 2 on LiteLLM (2026-09-30).
+
+### 5.7 Codex drops Envoy's MCP tool list — on every model
+
+**Symptom.** `6_codex_sdk/05_gateway_mcp.py --model openrouter-gemma4-26b`: through LiteLLM
+the model called the tool, through Envoy it answered *"I cannot call the `bench_serial`
+tool"* (one paid run each, 2026-10-07, $0.0015 for LiteLLM's). Folders 3, 4, 5 and 7 call
+the same tool through the same Envoy route.
+
+**Cause, measured without a paid call.** With `AIGW_DEBUG=true`, the request Codex sent
+after listing Envoy's tools held **no `mcp__gateway` namespace at all**. The listing itself
+worked — the server's marker was written. Envoy's `tools/list` result carries two fields
+LiteLLM's does not, `"ttlMs":0,"cacheScope":""`. A fake MCP server, Codex talking to it
+directly with no gateway in the path:
+
+| The fake server's `tools/list` result carries | Codex offers the tool |
+|:--|:--|
+| nothing extra | **yes** |
+| `ttlMs: 0` | **yes** |
+| `cacheScope: ""` | no |
+| `ttlMs: 0, cacheScope: ""` — what Envoy sends | no |
+| `ttlMs: 0, cacheScope: "thisServer"` | no |
+| `ttlMs: 0, cacheScope: "allServers"` | no |
+
+**Not the cause:** the tool name. `bench-hardware__bench_serial`, with a `__` inside Codex's
+own `mcp__<server>__` prefix, reached the model over stdio.
+
+**So:** `envoy/tests/6_codex_sdk/settings.py` asserts the call on no alias, and says why.
+The Python, TypeScript and Claude SDK clients read the same list without complaint. **Do
+not proxy the field away** — that is a shim. Re-check when Codex or the aigw image moves.
 
 ---
 
@@ -762,7 +860,7 @@ the level into its system prompt, so the prompt size shows it: 62 tokens at `xhi
 **Fix 1:** `allowed_openai_params: ["reasoning_effort"]` on both routes — `drop_params` had
 removed the field. Guarded by `2_openai_client/05_reasoning_effort.py`, red before, green after.
 
-**Fix 1 broke Codex on `lms-qwen38-27b`**, found by `tests/run_cache.py`: `400 'reasoning_effort'
+**Fix 1 broke Codex on `lms-qwen38-27b`**, found by a live Codex session: `400 'reasoning_effort'
 must be a string` in 0.5 s. Codex sends `reasoning: {effort, summary}`; `lm_studio/` has no
 native Responses config, so LiteLLM makes the call a chat call and, because `summary` is set,
 passes the whole object. `unsloth-qwen38-27b` was already on `openai/` and passed.
@@ -775,6 +873,20 @@ cached tokens (80% over a session, against 0 before).
 **Tried and rejected:** a second deployment for `/v1/responses` only. LiteLLM's router does not
 pick a deployment by `model_info.supported_endpoints`, so it would load-balance Codex onto the
 broken one at random.
+
+### 6.13 OpenCode waited forever for an approval nobody could give
+
+**Symptom, 2026-10-02.** `7_opencode_sdk/run_benchmark.py` on `lms-gemma-4-31b` through Envoy
+sat for 25 minutes after its second request. LMStudio had answered; OpenCode never sent the
+next one. Its own API said why: the session was `busy` on a `read` of **`/order.json`** — the
+disk root, not the working directory — and `GET /permission` held one pending
+`external_directory` request. Its default is `ask`, and a headless run has nobody to answer, so
+the run would have ended only at the 3600 s request timeout. The same model, the same client,
+through LiteLLM a minute earlier, used the relative path and passed.
+
+**Fix:** `"external_directory": "deny"` beside `bash` and `edit` in `common.py`'s `permission`,
+both projects. Denied, `read` returns an error the model can recover from; the re-run passed in
+77 s. The scenarios get it too, because they build the same config.
 
 ## 7. How config fixes are kept straight
 
@@ -805,11 +917,14 @@ on whose bill" is one table.
    embeddings.
 2. **Re-check openai/codex#19871 and #26234** whenever folder 6 comes up — §5.1. The
    approval bug, #24135, is worked around — §6.11.
-3. **Decide whether §5.2 and §5.3 matter to you.** Both are Envoy + hosted OpenAI, both are
+3. **Report §5.7 upstream** — to Envoy AI Gateway, whose `tools/list` result carries an
+   empty `cacheScope`, and to Codex, which drops even a non-empty one. The fake-server
+   test in §5.7 is the whole reproduction.
+4. **Decide whether §5.2 and §5.3 matter to you.** Both are Envoy + hosted OpenAI, both are
    upstream, and both have a clear next action written into their entries. If Envoy plus a
    hosted OpenAI model is a real use case for you, §5.2 is worth filing upstream — it looks
    unreported.
-4. **File §5.2 upstream** if it is still unreported. The one-call reproduction and the #2099
+5. **File §5.2 upstream** if it is still unreported. The one-call reproduction and the #2099
    quote are the whole bug report.
 
 ---
@@ -821,7 +936,8 @@ cd <gateway>/tests && uv run run_all.py          # all seven folders
 uv run run_all.py --only 5_claude_agent_sdk      # one folder
 uv run run_all.py --model openai-gpt54-mini            # every folder, one alias — now works
 cd <gateway>/tests/<folder> && uv run run_all.py # the folder's own scenarios
-AI_GATEWAY_TEST_MODEL=openai-gpt54-mini uv run 01_simple_call.py   # ONE scenario, non-default alias
+AI_GATEWAY_MODEL=openai-gpt54-mini uv run 01_simple_call.py        # ONE scenario, non-default alias
+cd <gateway>/tests/<folder> && uv run run_benchmark.py --aliases lms-gemma4-26b --no-write  # cache + speed
 ```
 
 - **Podman, not Docker.** Each runtime keeps its own volumes and containers. Docker's daemon

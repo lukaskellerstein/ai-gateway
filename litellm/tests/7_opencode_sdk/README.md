@@ -12,12 +12,29 @@ a dict handed to the server through `OPENCODE_CONFIG_CONTENT`, so nothing is
 written to your `~/.config/opencode` and a run cannot disturb your own setup.
 
 ```bash
-uv run run_all.py                     # all five
-uv run run_all.py --model unsloth-gemma4-26b # the same five on another alias
-uv run 04_mcp.py                      # one scenario, directly
+uv run run_all.py                            # all six
+uv run run_all.py --model unsloth-gemma4-26b # the same six on another alias
+uv run 04_mcp.py                             # one scenario, directly
+uv run run_benchmark.py --aliases lms-gemma4-26b # the benchmark task, into RESULTS.md
 ```
 
-## The five scenarios
+## Copying this folder
+
+**`settings.py` is the one file to edit.** Every other file is byte-identical
+between the LiteLLM and Envoy copies of this folder and names no port, key or
+model. It also carries the two settings that keep YOUR machine out of the run:
+
+- **a provider id no other OpenCode config declares.** OpenCode merges its config
+  over `~/.config/opencode` model by model; under an id that file also uses, every
+  request inherited its `limit.output` as `max_tokens`.
+- **`OPENCODE_DISABLE_CLAUDE_CODE=1`**, or `~/.claude/CLAUDE.md` and every skill in
+  `~/.claude/skills` land in the system prompt — double its size here.
+
+`uv run run_benchmark.py` runs the task every folder runs — a long policy, a file to
+read, two follow-ups, one session — and times each model request off OpenCode's
+own event stream. `RESULTS.md` holds the numbers and the setup that produced them.
+
+## The six scenarios
 
 | File | Feature | What a red row means |
 |:--|:--|:--|
@@ -26,11 +43,19 @@ uv run 04_mcp.py                      # one scenario, directly
 | `03_agent.py` | a named agent from config | the `agent` config never reached the server, or its prompt did not apply |
 | `04_mcp.py` | an MCP server added at **runtime** | `POST /mcp` failed, or the model answered without the tool |
 | `05_structured.py` | `format` with a JSON schema | the gateway drops structured output |
+| `06_gateway_mcp.py` | an MCP server **behind the gateway**, added as `remote` | the tool was not called through `/mcp`, or arrived without the gateway's prefix |
 
 Each asserts on **an unguessable value** — `Rufus`, `SN-4417-QX` — or on parsed
 JSON, never on the model's wording.
 
-## Four things worth copying
+**`06` reaches its server only through the gateway.** It starts `mcp_server.py`
+over HTTP on the port the gateway's config names — `MCP_SERVER_PORT` in
+`settings.py` — and gives OpenCode nothing but `MCP_URL`. The tools arrive renamed,
+`bench_hardware-bench_serial` on LiteLLM and `bench-hardware__bench_serial` on
+Envoy, and `06` asserts the renamed name, so a tool that reached OpenCode any other
+way fails.
+
+## Five things worth copying
 
 - **`POST /mcp` adds a server to a LIVE OpenCode.** Nothing is written to a
   config file; the server is spawned as a child process and spoken to over
@@ -50,6 +75,10 @@ JSON, never on the model's wording.
   shell access can read the serial number out of the server's source and report
   it correctly without calling anything — measured 2026-09-04. An answer-only
   assertion would have passed.
+- **`GET /experimental/tool/ids` lists only OpenCode's built-in tools**, never an
+  MCP one (opencode 1.18.30, 2026-10-07). `06` reads the tools a session called
+  from `GET /session/{id}/message` instead — that is where the gateway's prefix
+  shows: `gateway_bench_hardware-bench_serial`.
 
 ## Requirements
 
@@ -60,11 +89,13 @@ rather than failing inside an HTTP call. Install it from <https://opencode.ai>.
 
 ```text
 7_opencode_sdk/
+├── settings.py        THE ONE FILE THAT DIFFERS: gateway, key, model, level, isolation
 ├── common.py          the server lifecycle, the config, the runner
 ├── run_all.py         globs NN_*.py
-├── 01_query.py … 05_structured.py
-└── mcp_server.py      the MCP server 04 spawns. NOT a test
+├── 01_query.py … 06_gateway_mcp.py
+├── mcp_server.py      the MCP server: 04 spawns it, 06 runs it behind the gateway. NOT a test
+├── run_benchmark.py   the benchmark task through OpenCode → RESULTS.md
 ```
 
-**`01`–`05`, `run_all.py` and `mcp_server.py` are byte-identical to
-`../../../envoy/tests/7_opencode_sdk/`.** Only `common.py` differs, in the health URL `run_all.py` probes.
+**Everything but `settings.py` is byte-identical to the same folder in the other
+gateway's `tests/`**, `pyproject.toml` apart, whose name says which project it is.

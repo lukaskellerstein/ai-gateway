@@ -44,6 +44,7 @@ print(r.choices[0].message.content)
 | `POST` | `/v1/chat/completions` | any key | the OpenAI route |
 | `POST` | `/v1/messages` | any key | the Anthropic route — what Claude Code drives |
 | `POST` | `/v1/embeddings` | any key | the running engine's `*-embed` alias |
+| `POST` | `/mcp` | any key, as `x-litellm-api-key` | the MCP servers behind the gateway ([below](#mcp-servers-behind-the-gateway)) |
 | `GET` | `/health/readiness` | none | `{"status":"healthy","db":"connected"}` — **the probe to use** |
 | `GET` | `/health/liveliness` | none | `"I'm alive!"` — the process is up, nothing more |
 | `GET` | `/health` | master key | live per-model check; costs one call to each provider |
@@ -134,7 +135,7 @@ Four traps, in the order people hit them:
    A local engine reuses only the PREFIX its last prompt shares with the new one. After every
    tool result Claude Code writes a new `<total_tokens>` line into its system prompt, which sits
    in front of the tool list and every message — so the whole conversation is recomputed on
-   every turn. Measured with `tests/run_cache.py` on LMStudio, both gateways, 2026-09-30: the
+   every turn. Measured with one live session per agent on LMStudio, both gateways, 2026-09-30: the
    last turn reused **22% on Gemma 4 26B and 0% on Qwen 3.8 27B as shipped, 76–93% with both
    variables set**. The billing header adds a suffix that changes per conversation
    (`cc_version=2.1.259.994`) at the very top, so without it no two sessions share even the
@@ -146,13 +147,38 @@ each returned a structured `tool_calls` reply — verified 2026-08-27, and re-ve
 from an agent. Those runs go through the OpenAI route; `tests/` cannot drive `/v1/messages`,
 so check a real Claude Code turn yourself before trusting an alias with agent work.
 
+## MCP servers behind the gateway
+
+`/mcp` is ONE MCP endpoint for every server in `config/settings.yaml` § `mcp_servers`. A
+caller is given one URL and one key. The gateway lists each server's tools, renames them
+`<server>-<tool>`, and forwards every call, so a server can move without a caller noticing.
+
+```python
+MultiServerMCPClient({"gateway": {
+    "transport": "streamable_http",
+    "url": "http://localhost:24000/mcp",
+    "headers": {"x-litellm-api-key": "Bearer sk-..."},
+}})
+```
+
+| Fact | Here |
+|:--|:--|
+| the one server today | `bench_hardware` on `host.containers.internal:24090` — the test server, up only while a test runs |
+| a server that is down | `/mcp` keeps working: `tools: []`, and `_meta` names the server `unreachable` |
+| `allow_all_keys: true` | without it, only the master key sees a config server |
+| a server name | no `-` in it, because `-` is the separator |
+| caching | none — every client listing reaches the server (2026-10-07) |
+
+Each agent folder in `tests/` calls a tool through it. Codex lists the tools and does not
+call them on a local alias — openai/codex#19871, the same as without a gateway.
+
 ## Configuration
 
 One word in `.env` decides what this gateway serves. Compose interpolates from the **shell
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 17 aliases
+GATEWAY_ENGINE=all        # the default: every engine at once, 21 aliases
 ```
 
 **There is no `COMPOSE_PROFILES` line.** It went with the split: the directory you stand in is
@@ -161,7 +187,7 @@ now the choice of gateway, and `up -d` here starts this one whether or not `.env
 **Which engine.** One word names one file, `config/<engine>.yaml`. A typo is a clean crash:
 the file does not exist and `litellm` exits saying so.
 
-**`all` is the default and serves every engine at once** — 17 aliases from one gateway.
+**`all` is the default and serves every engine at once** — 21 aliases from one gateway.
 `config/all.yaml` is seven `include:` lines and copies nothing, so the per-engine files stay the
 one place an alias is written. **The six engine words are for isolation**: name one and every
 other alias is absent from the running config, not disabled, and a 404 on it is correct.
@@ -225,6 +251,13 @@ streaming runs carried thinking, against 0/5 before.**
 | `model_info.supports_reasoning: true` | no effect — 0/3 |
 | Waiting on BerriAI/litellm#29518, #27946 | **both already closed** before this was measured, and neither fixes it; #29518's fix shipped in 1.95.0 where it still reproduced |
 
+**Qwen 3.8 on LMStudio returns empty content for a JSON schema over chat, and the engine does
+it.** LMStudio's chat route puts the structured reply in `reasoning_content`; its own
+`/v1/responses` does not. So a chat caller gets `content: ''` on either gateway — measured
+through this one on 2026-09-30. Codex is not hit since `lms-qwen38-27b` moved to `openai/`
+(§ The thinking level, below): its `/v1/responses` now goes native, and the structured scenario
+passed 2 in 2 here, against 0 in 4 on `lm_studio/` — [`../TESTING.md`](../TESTING.md) § 5.6.
+
 ### The thinking level — `reasoning_effort` is DROPPED unless the alias allows it
 
 Qwen 3.8 writes the level into the TOP of its system prompt, and defaults to `xhigh` —
@@ -239,9 +272,10 @@ ignores the field: 25 tokens at every level.
 | `lm_studio/`, `/v1/responses` | LiteLLM makes it a chat call, and passes Codex's `{effort, summary}` **as a whole object** | with the fix, LMStudio answers `400 'reasoning_effort' must be a string` — Codex fails in 0.5 s |
 | `openai/`, `/v1/responses` | **native** — the object arrives as sent | 54 / 12 on LMStudio direct; Codex 4/4 through the route |
 | `/v1/messages`, `thinking: {type: adaptive}` + `output_config.effort` | the level | 24 at `medium` |
-| `/v1/messages`, `output_config.effort` alone | **nothing** | 62 |
+| `/v1/messages`, `output_config.effort` alone | **nothing** — the route default applies | 62 before the default; 24 with it, whatever level was asked |
 | `/v1/messages`, `thinking` enabled with a budget | a level from the budget | 1024 → 50 (`low`); 4096 → 62 |
 | `openrouter/`, `/v1/chat/completions` | the level | 68 prompt tokens at `low`, 42 at `high` |
+| any route, **no level at all** | the route's stored `reasoning_effort: medium` | chat 24, `/v1/messages` 24, `/v1/responses` 23 — 62, 62 and 61 before it was stored |
 
 The fix is per alias, on the two Qwen routes in `config/lms.yaml` and
 `config/unsloth.yaml`, each with its four-field header. `tests/2_openai_client/05_reasoning_effort.py`
@@ -253,15 +287,18 @@ deployment by `model_info.supported_endpoints`, so it would send Codex to either
 so that row is the engine, not LiteLLM. Envoy passes the field through untouched on every
 route.
 
-**Claude Code's main turns still reach Qwen at `xhigh` through LiteLLM**
-(`tests/run_cache.py`, 2026-09-30): it sends the level in a form from the `/v1/messages` rows
-above that LiteLLM drops. Its side calls arrive at `medium`. Envoy's `-anthropic` alias does not
-have the problem.
+**Both Qwen routes also store `reasoning_effort: medium`**, the level for a caller who sends
+none or whose level is dropped. A level the caller sends still wins: `xhigh` and `low` give 62
+and 50 as before. It is what stopped Claude Code's main turns reaching Qwen at `xhigh`
+(live Claude sessions, 2026-09-30): at `medium` all 6 engine requests arrived at `medium`, and
+at `low` 2 of 3 arrived at `low` and 1 at this default. `05_reasoning_effort.py` checks it
+against `default_effort` in `tests/2_openai_client/settings.py`. **Envoy stores no default** — `../envoy/README.md` § Send
+`reasoning_effort` to a Qwen alias.
 
 ### What the client is told about the cache
 
 The engine's own log is the truth — `lms log stream -s runtime` prints `Prompt cache restore:
-cached_tokens=N`. What reaches the client depends on the route (`tests/run_cache.py`,
+cached_tokens=N`. What reaches the client depends on the route (measured
 2026-09-30):
 
 | Route, on LMStudio | Cached tokens the client sees |
@@ -326,7 +363,7 @@ GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 
 `config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it. It includes
 `settings.yaml`, `lms.yaml` and `unsloth.yaml` and then declares every other model downloaded
-in those two engines — **44 aliases**, with the short names (`lms-gemma4-e4b`,
+in those two engines — **48 aliases**, with the short names (`lms-gemma4-e4b`,
 `unsloth-qwen38-27b`, …) still answering because it *includes* those files rather than
 replacing them. It has no hosted
 route at all, so **it cannot spend money**.
@@ -377,8 +414,8 @@ uv run run_all.py --model ollama-gemma4-e4b     # any alias, everywhere
 | `1_http_client` | `urllib` — no dependencies at all |
 | `2_openai_client` | `openai` — 4 call kinds plus the contract test |
 | `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop built by hand |
-| `4_deepagents` | a deep agent. Seven scenarios: query, todos, filesystem, tools, MCP, subagent, skill |
-| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → **`/v1/messages`**, on the plain alias. Seven scenarios: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
+| `4_deepagents` | a deep agent. Eight scenarios: query, todos, filesystem, tools, MCP, subagent, skill, gateway MCP |
+| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → **`/v1/messages`**, on the plain alias. Eight scenarios: query, session, in-process MCP, stdio MCP, subagent, skill, thinking, gateway MCP |
 | `6_codex_sdk` | a `model_providers` override → **`/v1/responses`** |
 | `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider |
 
@@ -386,13 +423,15 @@ uv run run_all.py --model ollama-gemma4-e4b     # any alias, everywhere
 there needs an `<alias>-anthropic` pass-through route, because Envoy translates the Anthropic
 body and this gateway does not.
 
-It drives **this gateway only**. `2_openai_client/04_gateway_contract.py` asserts the four
+It drives **this gateway only**. `2_openai_client/04_gateway_contract.py` asserts the five
 claims `common.py` makes about how to call it — that a bad key gets 401, that `/models` lists
-the aliases, that `response.model` echoes the alias, and that `/model/info` exposes each
-route's stored ceiling. `../envoy/tests/` declares its own four, and only one of them matches.
+the aliases, that `response.model` echoes the alias, that `/model/info` exposes each route's
+stored ceiling, and that this Mac's network address refuses the port. `../envoy/tests/`
+declares its own five, and two of them match.
 
-The base URL, the key and the alias live once in `tests/gateway.py`, which every folder
-imports and which depends on nothing outside the standard library.
+Each folder's own `settings.py` holds its URL, key, default alias and thinking level — the
+one file that differs from `../envoy/tests/`, and the one to edit when you copy the folder.
+Each folder's `run_benchmark.py` measures that client per model and writes its `RESULTS.md`.
 
 What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 
@@ -408,7 +447,7 @@ response included. **Look there before changing configuration.**
 | **Every virtual key stopped working after an edit to `compose.yml`** | the `name:` line changed, so compose attached a new empty volume | put `name: ai-gateway` back and `up -d`; the old volume is untouched |
 | A local alias fails instantly with a context error | LMStudio JIT-loaded it at 8192 | hand-load it — [`../README.md`](../README.md) § Load a model first |
 | Empty content, `finish_reason: "length"` | a thinking model spent the whole `max_tokens` on reasoning | raise `max_tokens` on the call, or on the route in `config/` |
-| `400 No model loaded` from `unsloth-*` | Unsloth serves one model at a time and auto-switch is off | turn on `Settings → API → Model auto-switch` |
+| `400 No model loaded` from `unsloth-*` | the model is not loaded and auto-switch is off | turn on `Settings → API → Model auto-switch` |
 | `unsloth-*` 401s | `UNSLOTH_API_KEY` was blank when `up -d` ran | export it, run `up -d` again |
 | An `ollama-*` call that was fast a few minutes ago is slow again | Ollama evicted the idle model | expected — `ollama ps`, or raise `OLLAMA_KEEP_ALIVE` |
 | `ollama-*` says `model not found` | the tag is not pulled | `ollama pull <tag>` — the ids are in [`config/ollama.yaml`](config/ollama.yaml) |
@@ -432,14 +471,15 @@ litellm/
 │   │                            each includes settings.yaml and declares its aliases
 │   └── all.yaml                THE DEFAULT. Six include lines; copies nothing
 └── tests/                  SEVEN folders, one per way of calling this gateway
-    ├── gateway.py              base URL · key · alias, shared by all seven. stdlib only
     ├── run_all.py              runs every folder, one row each
+    │                            EVERY FOLDER: settings.py (edit it when you copy the
+    │                            folder), run_benchmark.py and RESULTS.md (cache and speed)
     ├── 1_http_client/          urllib, NO dependencies
     ├── 2_openai_client/        openai — 4 call kinds + the contract test
     ├── 3_langchain_langgraph/  LangChain's agent, and the same loop by hand
-    ├── 4_deepagents/           a deep agent. SEVEN scenarios + its own run_all.py
+    ├── 4_deepagents/           a deep agent. EIGHT scenarios + its own run_all.py
     ├── 5_claude_agent_sdk/     the ANTHROPIC surface, /v1/messages.
-    │                            SEVEN scenarios + its own run_all.py
+    │                            EIGHT scenarios + its own run_all.py
     ├── 6_codex_sdk/            the RESPONSES surface, /v1/responses
     └── 7_opencode_sdk/         an openai-compatible provider over the HTTP server API
 ```

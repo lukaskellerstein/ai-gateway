@@ -7,9 +7,8 @@ itself instead of hiding inside a combined result.
     uv run run_all.py --model lms-gemma4-26b
     uv run run_all.py --verbose
 
-IT DRIVES 24000 AND NOTHING ELSE. Before the split this looped over both gateways
-and printed 8 rows; each gateway is a standalone compose project now, so this is
-4 rows and the Envoy suite is `../../../../envoy/tests/`.
+IT DRIVES ONE GATEWAY: the one settings.py names. The other project's copy of this
+folder drives the other, and no suite compares the two.
 """
 
 from __future__ import annotations
@@ -22,14 +21,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from common import DEFAULT_MODEL, GATEWAY
+from settings import HEALTH_URL, MODEL, NAME
 
 HERE = Path(__file__).resolve().parent
-
-# Unauthenticated liveness route. LiteLLM's /health needs the master key;
-# /health/liveliness does not, and this check is only asking "is the port
-# answering at all" before four scripts fail the same way.
-HEALTH_URL = "http://localhost:24000/health/liveliness"
 
 
 def scripts() -> list[Path]:
@@ -62,19 +56,19 @@ def run_one(script: Path, model: str, verbose: bool) -> tuple[bool, float, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=MODEL)
     parser.add_argument("--verbose", action="store_true", help="stream each script's output instead of capturing it")
     args = parser.parse_args()
 
     if not is_up():
         print(
-            f"{GATEWAY.name} is not answering on {HEALTH_URL} — start it with "
+            f"{NAME} is not answering on {HEALTH_URL} — start it with "
             "`cd ../.. && podman compose up -d`",
             file=sys.stderr,
         )
         return 1
 
-    print(f"model={args.model}  gateway={GATEWAY.name}\n")
+    print(f"model={args.model}  gateway={NAME}\n")
     rows: list[tuple[str, bool, float]] = []
     failures: list[tuple[str, str]] = []
 

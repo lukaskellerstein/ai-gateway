@@ -34,8 +34,8 @@ that can tell you what a request cost, cap what a caller spends, and show you th
 the reply without installing anything else.
 
 **Reach for Envoy when you need what LiteLLM has no answer for**: a config that ships to
-Kubernetes unchanged, an MCP gateway, Prometheus metrics, or a proxy small enough that its
-footprint does not matter.
+Kubernetes unchanged, Prometheus metrics, or a proxy small enough that its footprint does
+not matter. Both serve an MCP gateway on `/mcp`.
 
 **Never choose on speed.** They are within 10 ms of each other, and both are within 20 ms of
 no gateway at all. The model is what you wait for.
@@ -71,6 +71,7 @@ about a gigabyte of Python. A data plane needs none of them.
 | The Anthropic route — Claude Code needs it | `/v1/messages`, on the plain alias | `/anthropic/v1/messages`, on an `<alias>-anthropic` alias |
 | SSE streaming | yes | yes |
 | Alias → model mapping | `model_list` entry | an `AIGatewayRoute` rule |
+| `/mcp` — MCP servers behind one endpoint, tools renamed by server | yes, `<server>-<tool>`; **checks the caller's key** | yes, `<backend>__<tool>`; checks no caller. **Codex drops its tool list** |
 | Test folders that pass | **7/7** on every engine | **7/7** on four engines, 5/7 on hosted OpenAI |
 
 **This is why the choice is safe.** Whichever you pick, all seven ways of calling a gateway
@@ -81,7 +82,7 @@ OpenCode. See [`TESTING.md`](TESTING.md) § 3 for the full matrix and the two re
 
 | | LiteLLM 24000 | Envoy 26000 |
 |:--|:--|:--|
-| Authenticates the **caller** | **yes** — a bad key is a `401`, measured 2026-09-05 | **no.** The same bad key returns `200`. Anything that reaches 26000 can call it |
+| Authenticates the **caller** | **yes** — a bad key is a `401`, measured 2026-09-05 | **no.** The same bad key returns `200`. Anything on this Mac that reaches 26000 can call it; both publish on `127.0.0.1` only |
 | Virtual keys, minted per project | **yes**, `/key/generate` | no |
 | Budget ceilings that actually stop a caller | **yes** | no |
 | Per-request cost, recorded | **yes** — 3550 rows here, each with model, spend and token counts | no |
@@ -102,7 +103,6 @@ spend $2". If you point a paid engine at Envoy, nothing in this repo will stop a
 | | LiteLLM 24000 | Envoy 26000 |
 |:--|:--|:--|
 | The config would run in a **Kubernetes cluster** | no — it is LiteLLM's own YAML | **yes**, unchanged. It is the cluster's API |
-| **MCP gateway** — several MCP servers behind one endpoint, tool names prefixed by server, tools filterable | nothing like it | **yes**, `/mcp` (the route needs `--mcp-config`; not wired up here) |
 | Prometheus metrics | `/metrics` returns **404** on this stock image | **yes**, `26064/metrics`, no auth |
 | OpenTelemetry tracing, OpenInference spans | through a callback you configure | **built in** — point it at a collector |
 | Runs with no database | no | **yes** |
@@ -258,12 +258,14 @@ Studio, MacBook with 128 GB. 10 rounds per scenario, round-robin, one warm-up ro
 
 ## Does the prompt cache hold
 
-**Each agent's own multi-turn scenario, live, on both gateways, three engines, two models, at
-thinking level `medium`.** Run it yourself: `uv run run_cache.py --aliases <alias>` in each
-project's `tests/`, then `uv run cache_report.py <files>` in `benchmark/`. Measured
-**2026-09-30**: 96 sessions, **95 passed first time**, and the one failure passes after the fix
-below. Claude runs twice — as shipped,
-and with the two settings that stop it rewriting its prompt.
+**Per client and per model, the numbers are in each test folder's `RESULTS.md`** — the same
+three-turn task through every client, seven models, both gateways, written by that folder's
+`uv run run_benchmark.py` (§ Per client, below). The tables before it come from a one-off run
+the same day that also read LMStudio's own log, which is how they know what the engine
+REALLY reused and not only what the client was told: each agent's own multi-turn scenario,
+live, on both gateways, three engines, two models, at thinking level `medium` — 96 sessions,
+**95 passed first time**, and the one failure passes after the fix below. Claude runs twice —
+as shipped, and with the two settings that stop it rewriting its prompt.
 
 ### What the engine reused — LMStudio, last turn of each session
 
@@ -311,23 +313,72 @@ with a perfect second hit reads **50%**. OpenRouter's Qwen figure depends on whi
 OpenRouter picks for the call, not on the gateway. Unsloth reported 0 on Claude through Envoy
 and on Codex through both — whether it hit is unknown, because it keeps no log to read.
 
-### Speed and cost
+### Per client and per model — the `RESULTS.md` files
 
-Medians over each alias's eight sessions. The decode speed is the engine's own on LMStudio and
-LiteLLM's streamed figure elsewhere; Envoy records no first token, so it has none of its own.
+Each test folder's `run_benchmark.py`: one three-turn task — a ~1500-token policy, a file to
+read with a tool, a follow-up, a customer message — through seven clients and both gateways.
+Medians over each alias's 14 runs (7 clients × 2 gateways). **140 sessions in the table, every
+one answered correctly.**
 
-| Alias | Decode tok/s | Time to first token | Cost of all 8 sessions |
-|:--|--:|--:|--:|
-| `lms-gemma4-26b` | 102–112 | 0.3–0.4 s | $0.006–0.008, shadow |
-| `lms-qwen38-27b` | 31 | 1.3 s | $0.009–0.010, shadow |
-| `unsloth-gemma4-26b` | 119 | 0.2 s | $0.005, shadow |
-| `unsloth-qwen38-27b` | 27 | 2.1 s | $0.008, shadow |
-| `openrouter-gemma4-26b` | 57 | 0.7 s | $0.004 |
-| `openrouter-qwen38-27b` | 39 | 0.5 s | $0.026–0.028 |
+The local rows were measured on **2026-10-02 with ONE model loaded at a time**, at 262144
+context, with `--no-write` — so they are not what the `RESULTS.md` files hold. Those are
+2026-09-30, with every model loaded at once and Unsloth's Qwen at Q8. The two OpenRouter rows
+are from that run; the laptop does not change them.
 
-The whole paid run cost about **$0.04** across both gateways. LiteLLM's half logged $0.0186
-on its key, three pre-check calls included — OpenRouter's own figure — against $0.030 at the
-table prices, because the Qwen route's price is the dearest provider's.
+| Alias | Build | Decode tok/s | First token, request 1 | First token, last request |
+|:--|:--|--:|--:|--:|
+| `lms-gemma4-26b` | MLX 4-bit QAT · 26B MoE | 105 (47–112) | 1.1 s | 0.32 s |
+| `lms-gemma-4-31b` ¹ | MLX 4-bit · 31B dense | 18 (14–25) | 7.8 s | 1.4 s |
+| `lms-qwen38-27b` | MLX 4-bit · 27B dense | 24 (17–26) | 7.1 s | 0.87 s |
+| `unsloth-gemma4-26b` | UD-Q4_K_XL QAT · 26B MoE | 142 (73–247) | 1.4 s | 0.31 s |
+| `unsloth-gemma-4-31b-qat` ¹ | UD-Q4_K_XL QAT · 31B dense | 27 (13–31) | 16.3 s | 1.3 s |
+| `unsloth-qwen38-27b` | UD-Q8_K_XL · 27B dense | 23 (13–34) | 9.4 s | 0.95 s |
+| *the same, UD-Q4_K_XL* | UD-Q4_K_XL · 27B dense | 21 (12–41) | 10.1 s | 0.93 s |
+| `ollama-gemma4-26b` | Q4_K_M · 26B MoE | 108 (89–164) | 1.6 s | 0.20 s |
+| `openrouter-gemma4-26b` | the provider's · 2026-09-30 | 85 (57–112) | 2.0 s | 2.2 s |
+| `openrouter-qwen38-27b` | the provider's · 2026-09-30 | 44 (29–55) | 0.7 s | 0.6 s |
+
+¹ In the personal `config/lukas.yaml` only, on both gateways — not in the shared vocabulary.
+
+- **Gemma 4 31B against Qwen 3.8 27B — both dense, both 4-bit, measured back to back — and
+  the engine decides which is faster.** On LMStudio Gemma is 25% slower (18 against 24 tok/s).
+  On Unsloth it is 29% faster than Qwen's Q4 (27 against 21), and 17% faster than its Q8 (23). Unsloth drafts tokens ahead for both — Gemma
+  from a separate MTP file, Qwen from the head inside its GGUF, both shown by `/v1/status` —
+  and no draft model was set in LMStudio. Why drafting helps Gemma more was not measured.
+- **Q4 is not faster than Q8 for Qwen on Unsloth**: 21 against 23 tok/s the same day, and the
+  Q8 was faster in 12 of 14 paired sessions. What the Q4 buys is memory, 17.6 GB against 31.5.
+  Why the speed does not follow the bytes was not measured. So `unsloth-qwen38-27b` is pinned
+  to `:UD-Q8_K_XL`.
+- **The dense rows ran about 20% slower than on 2026-09-30**: `lms-qwen38-27b` 24 against 31,
+  Unsloth's Q8 23 against 27. The three 26B MoE rows matched that day within 11% (105 / 100,
+  142 / 145, 108 / 121). A dense model reads all its weights for every token, a MoE about a
+  sixth, so memory bandwidth hits the dense ones hardest — and 10 GB of swap was in use. Another
+  caller also used the engines that day: Unsloth's logs show Gemma 26B reloaded between this
+  run's Gemma 31B sessions. Neither cause is proven. **Compare rows measured on the same day.**
+- **The last request's first token is the prompt cache at work.** On all three local engines it
+  falls to 0.2–1.4 s whatever the client, because the conversation so far is a prefix the
+  engine already holds. OpenRouter's does not fall: it spreads requests over providers, and a
+  hit needs the same one twice.
+- **Unsloth's range is wide for the same reason it is fast.** Drafting pays most on short,
+  predictable replies such as a tool call: 247 tok/s on Deep Agents' task, 73 on Claude's.
+- **A dense model waits 7–16 s for its first token on a local engine; a 26B MoE waits 1–2 s.**
+  Codex and OpenCode send 7 000–8 500 prompt tokens, and those rows set the upper end.
+
+What the client itself adds, and what bit:
+
+| Client | Prompt, request 1 | Watch out |
+|:--|--:|:--|
+| raw HTTP, `openai`, LangChain | 2 020 | nothing. LangChain reports no token counts without `stream_usage=True` |
+| Deep Agents | 4 350 | its harness adds about 2 300 tokens |
+| Claude Agent SDK | 2 530 | one session-title request of its own beside request 1. Through Envoy the engine wrote ~1 000 tokens for it, and request 1 waited 13–29 s |
+| Codex | 8 240 | through LiteLLM on an `lm_studio/` alias: 10 500 tokens, no streamed tokens, no cache count. The provider, not Codex — `lms-qwen38-27b` on `openai/` streams |
+| OpenCode | 7 200 | its provider id must not collide with `~/.config/opencode`, which it merges model by model |
+
+Codex's prompt reads 10 400–11 400 on Ollama and OpenRouter, which count the same request
+differently. The setup behind every row — thinking level, streaming, isolation, ceilings — is
+at the top of each `RESULTS.md`; that list is the part another project copies.
+
+The one-off cache run above cost about **$0.04** across both gateways, OpenRouter's own figure.
 
 **The one fix.** Codex failed on `lms-qwen38-27b` through LiteLLM after the thinking-level fix
 of the same day: LiteLLM turned Codex's `reasoning` object into a malformed field on the
@@ -345,7 +396,7 @@ of the same day: LiteLLM turned Codex's `reasoning` object into a malformed fiel
 | asking "what did this month cost?" | **LiteLLM** | `/spend/logs` records a cost per request; Envoy records nothing |
 | handing a project a scoped credential | **LiteLLM** | virtual keys with a budget and an expiry |
 | about to deploy this to Kubernetes | **Envoy** | its config *is* the cluster's config. LiteLLM's YAML is not |
-| aggregating MCP servers behind one endpoint | **Envoy** | `/mcp` has no LiteLLM equivalent |
+| putting MCP servers behind one endpoint | **LiteLLM** | both serve `/mcp`, and only LiteLLM checks who calls a tool |
 | feeding Prometheus or an OTel collector | **Envoy** | metrics and spans are built in; LiteLLM's `/metrics` is a 404 here |
 | running many gateways, or on a small machine | **Envoy** | 130 MB and a 1.3 s start, against 1 GB and a database |
 | comparing two engines' behaviour | **either** | they serve the same aliases; that is the point |
@@ -363,9 +414,10 @@ Two things to know if you do:
 - **They can be on different engines**, and nothing checks that they agree. An alias that
   answers on one port and 404s on the other is as likely to be two different `GATEWAY_ENGINE`
   words as a missing route.
-- **Unsloth Studio holds one model at a time**, across chat and embeddings alike. Two gateways
-  asking it for different aliases will swap the model back and forth. LMStudio and Ollama do
-  not have this problem.
+- **Unsloth Studio swaps one active model**, across chat and embeddings alike. Two gateways
+  asking it for different aliases will swap the model back and forth — unless both models were
+  loaded in Studio with `Keep other models loaded` first, which keeps them side by side
+  (v0.1.903-beta, verified 2026-10-07). LMStudio and Ollama do not have this problem.
 
 ---
 

@@ -1,39 +1,36 @@
 """Test 4 — THIS GATEWAY'S CALLING CONTRACT, checked against what it really does.
 
-Scripts 01-03 prove a kind of call works. This one proves the four claims
-`common.Gateway` makes about HOW to call it, because every one of them is a thing
-a caller has to get right and none of them is visible in a response body.
+Scripts 01-03 prove a kind of call works. This one proves the five claims `CONTRACT`
+in settings.py makes about HOW to call the gateway, because every one of them is a
+thing a caller has to get right and none of them is visible in a response body.
 
-    property               LiteLLM 24000, and what is asserted here
+    property               what is asserted
     ---------------------  --------------------------------------------------
-    checks_api_key   True  a bogus Bearer token gets 401, so the master key is
-                           actually enforced
-    lists_models     True  GET /models returns the alias list, so a caller can
-                           discover the vocabulary over the OpenAI surface
-    echoes_alias     True  response.model is the ALIAS that was sent, not the
-                           engine's own model id
-    exposes_route_limits
-                     True  /model/info answers, so each route's stored
-                           max_tokens and max_input_tokens can be read
+    checks_api_key         a bogus Bearer token gets 401 exactly when True
+    lists_models           GET /models answers 200 exactly when True
+    echoes_alias           response.model is the alias sent exactly when True
+    exposes_route_limits   /model/info answers 200 exactly when True
+    loopback_only          this machine's network address refuses the port
+                           exactly when True
 
-THE LAST ROW IS THE ONE THAT MATTERS MOST, and it is why `body_extras` is empty
-on this gateway. LiteLLM stores a `max_tokens` per route and every local route in
-../../config/ carries one, so a caller who sends none still gets a bounded reply.
-Measured 2026-09-03 with `lms-gemma4-e4b` and one "count to 3000" prompt carrying NO
-`max_tokens`: finish_reason "length" at 4095 completion tokens — the
-`max_tokens: 4096` on the route, doing its job.
+A `False` is checked as hard as a `True`: an absence nobody checks is an absence
+somebody eventually assumes away. The two gateways in this repo agree on TWO of the
+five — `lists_models` and `loopback_only` — and each project's settings.py says
+which, with the measurement behind it.
 
-(The Envoy gateway in ../../../envoy stores none, so its own copy of this test
-declares `False` on that line and checks it the same way. That is the point: each
-project declares and checks its own contract.)
+THE LAST ROW IS THE ONE THAT COSTS PEOPLE AN AFTERNOON. A gateway that stores a
+`max_tokens` per route bounds a caller who sends none; one that stores nothing lets
+the reply run. One "count to 3000" prompt with no ceiling stopped at 4095 completion
+tokens on LiteLLM's stored 4096 and ran to 13946 on Envoy (2026-09-04, `lms-gemma4-e4b`).
+Where nothing is stored, `body_extras` in settings.py carries the ceiling.
 
-AN EXPLICIT CEILING IS NOT THE DIFFERENCE. Sent by hand it is honoured normally —
-including the trap where a reasoning model spends the whole allowance thinking
-and returns EMPTY content with finish_reason "length" and no error at all.
-`check_low_ceiling_truncates` below asserts that.
+AN EXPLICIT CEILING IS HONOURED NORMALLY — including the trap where a reasoning
+model spends the whole allowance thinking and returns EMPTY content with
+finish_reason "length" and no error at all. `check_low_ceiling_truncates` below
+asserts that. Only the DEFAULT is a per-gateway matter.
 
 THIS SCRIPT NEVER BRANCHES ON A GATEWAY NAME. It reads the contract DECLARED in
-common.py and checks reality against it, so a failure always reads "the table
+settings.py and checks reality against it, so a failure always reads "the table
 says X and the gateway did Y", which is the sentence you want.
 
     uv run 04_gateway_contract.py
@@ -43,8 +40,10 @@ says X and the gateway did Y", which is the sentence you want.
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from common import Gateway, check, client_for, run
@@ -59,8 +58,8 @@ PROMPT = "Explain in detail why the sky is blue."
 def _root(base_url: str) -> str:
     """The gateway's own root, above the OpenAI-compatible surface.
 
-    Dropping the trailing `/v1` gives `http://localhost:24000`, which is where
-    `/model/info` lives — derived rather than written out a second time.
+    Dropping the trailing `/v1` gives the root, which is where `/model/info` lives
+    on a gateway that has one — derived rather than written out a second time.
     """
     return base_url.rstrip("/").removesuffix("/v1")
 
@@ -90,11 +89,11 @@ def ceiling(gateway: Gateway) -> dict:
     `body_extras` already carries the right key — `max_tokens` almost everywhere,
     `max_completion_tokens` for `openai-*`, whose newer models reject the old name
     with `400 unsupported_parameter` (measured 2026-09-05, `openai-gpt54-mini` on 26000).
-    LiteLLM renames it upstream and declares no extras at all, so the fallback here
-    is what that project uses.
+    A gateway that stores a ceiling per route sends none in `body_extras`, so the
+    fallback is the name it renames upstream for you.
     """
-    # BY NAME, not the first key: `body_extras` also carries `reasoning_effort` when
-    # a run sets a thinking level, and that must never become the ceiling's name.
+    # BY NAME, not the first key: `body_extras` also carries `reasoning_effort`, and
+    # that must never become the ceiling's name.
     names = ("max_completion_tokens", "max_tokens")
     return {next((name for name in names if name in gateway.body_extras), "max_tokens"): TINY_CEILING}
 
@@ -109,9 +108,9 @@ def check_api_key(gateway: Gateway, model: str) -> str:
     rejected = status == 401
     check(
         rejected == gateway.checks_api_key,
-        f"common.py declares checks_api_key={gateway.checks_api_key}, but a bogus key got "
-        f"HTTP {status}. Anything but 401 means the master key is NOT being enforced and "
-        "every caller is unauthenticated.",
+        f"settings.py declares checks_api_key={gateway.checks_api_key}, but a bogus key got "
+        f"HTTP {status}. 401 means the gateway enforces a key; anything else means it reads "
+        "none and every caller is unauthenticated.",
     )
     return f"bad key -> {status}"
 
@@ -122,7 +121,7 @@ def check_model_listing(gateway: Gateway, _model: str) -> str:
     lists = status == 200
     check(
         lists == gateway.lists_models,
-        f"common.py declares lists_models={gateway.lists_models}, but GET /models returned "
+        f"settings.py declares lists_models={gateway.lists_models}, but GET /models returned "
         f"HTTP {status}. This is how a caller discovers the vocabulary without reading "
         "../../config/<engine>.yaml.",
     )
@@ -139,9 +138,9 @@ def check_route_limits(gateway: Gateway, _model: str) -> str:
     exposes = status == 200
     check(
         exposes == gateway.exposes_route_limits,
-        f"common.py declares exposes_route_limits={gateway.exposes_route_limits}, but "
+        f"settings.py declares exposes_route_limits={gateway.exposes_route_limits}, but "
         f"/model/info returned HTTP {status}. This is what decides whether a caller who "
-        "sends no max_tokens is protected — see body_extras in common.py.",
+        "sends no max_tokens is protected — see body_extras in settings.py.",
     )
     return f"/model/info -> {status}"
 
@@ -160,18 +159,58 @@ def check_model_echo(gateway: Gateway, model: str) -> str:
     echoed = response.model
     check(
         (echoed == model) == gateway.echoes_alias,
-        f"common.py declares echoes_alias={gateway.echoes_alias}, but the caller sent "
+        f"settings.py declares echoes_alias={gateway.echoes_alias}, but the caller sent "
         f"model={model!r} and the reply carried model={echoed!r}.",
     )
     return f"sent {model!r}, got {echoed!r}"
 
 
+def _network_address() -> str | None:
+    """This machine's address on its network, or None when it has none.
+
+    A UDP `connect` sends nothing. It only asks the kernel which interface would
+    carry the packet, and that interface's address is the one another machine
+    calls. 192.0.2.1 is TEST-NET-1, reserved for documentation and never routed.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("192.0.2.1", 9))
+        except OSError:
+            return None
+        address = str(probe.getsockname()[0])
+    return None if address.startswith("127.") else address
+
+
+def check_loopback_only(gateway: Gateway, _model: str) -> str:
+    """Can another machine reach the gateway, or only this one?
+
+    The port is tried on this machine's NETWORK address, which is what another
+    machine would call. Compose decides it: `"24000:4000"` publishes on every
+    interface, `"127.0.0.1:24000:4000"` on this machine only. A machine with no
+    network address has nothing to reach from outside, and the row says so.
+    """
+    port = urllib.parse.urlsplit(gateway.base_url).port
+    address = _network_address()
+    if address is None or port is None:
+        return "not tried: this machine has no network address"
+    with socket.socket() as probe:
+        probe.settimeout(3)
+        reachable = probe.connect_ex((address, port)) == 0
+    check(
+        (not reachable) == gateway.loopback_only,
+        f"settings.py declares loopback_only={gateway.loopback_only}, but {address}:{port} "
+        f"{'ACCEPTED' if reachable else 'refused'} a connection. Another machine on this "
+        "network calls that address — see `ports:` in ../../compose.yml.",
+    )
+    return f"{address}:{port} -> {'open' if reachable else 'refused'}"
+
+
 def check_low_ceiling_truncates(gateway: Gateway, model: str) -> str:
-    """An explicit ceiling is honoured, whatever the route's stored default is.
+    """An explicit ceiling is honoured, whatever the gateway stores or does not.
 
     The gateway stops at `max_tokens` and returns finish_reason "length". On a
     model that reasons the content is EMPTY as well, with no error raised — which
-    is why the stored route default in ../../config/ is set generously.
+    is why a route's stored default, and the ceiling in `body_extras`, are generous.
     """
     response = client_for(gateway).chat.completions.create(
         model=model,
@@ -194,6 +233,7 @@ CHECKS = (
     ("route limits", check_route_limits),
     ("model echo", check_model_echo),
     ("explicit ceiling", check_low_ceiling_truncates),
+    ("loopback only", check_loopback_only),
 )
 
 

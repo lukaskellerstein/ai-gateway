@@ -1,39 +1,29 @@
-"""Shared plumbing for this project's test scripts. ENVOY ONLY.
+"""Shared plumbing for this folder's test scripts.
 
 Every script here answers one question: does this ONE kind of call work through
-the Envoy AI Gateway on 26000? So each script owns a single `scenario` function
-and nothing else — the argument parsing, the base URL, the timing and the
-pass/fail printing all live here, once.
+the gateway settings.py names? So each script owns a single `scenario` function and
+nothing else — the argument parsing, the client, the timing and the pass/fail
+printing all live here, once.
 
-THIS SUITE DRIVES ONE GATEWAY, AND THAT IS NEW. Before the split there was one
-`tests/` at the repo root that ran every script against both ports and proved the
-two gateways shared a vocabulary: same alias, same messages, two base URLs. Each
-gateway is a standalone compose project now, with its own `.env` and its own
-engine word, so that comparison has no single owner and is no longer made. Nothing
-here — and nothing anywhere in the repo — checks that `lms-gemma4-e4b` also answers on
-24000. If you want that, call the other port by hand.
+THIS SUITE DRIVES ONE GATEWAY. Before the split there was one `tests/` at the repo
+root that ran every script against both ports and proved the two gateways shared a
+vocabulary. Each gateway is a standalone compose project now, so that comparison has
+no single owner and is no longer made: nothing here checks that an alias answering on
+this gateway also answers on the other. Call both ports by hand when it matters.
 
-WHAT IS STILL WORTH DECLARING IS THIS GATEWAY'S OWN CALLING CONTRACT, and it is on
-`Gateway` below as data. `04_gateway_contract.py` is the test that proves every
-line of it is still true, so a failure reads "the table says X and the gateway did
-Y" rather than "something is wrong".
+WHAT IS WORTH DECLARING IS THE GATEWAY'S OWN CALLING CONTRACT, and it is data:
+`CONTRACT` in settings.py, carried on `Gateway` below. `04_gateway_contract.py` is
+the test that proves every line of it is still true, so a failure reads "the table
+says X and the gateway did Y" rather than "something is wrong".
 
-THIS GATEWAY IS NOT A COPY OF THE OTHER ONE. It lists its models like LiteLLM
-does, and then checks no caller key at all and echoes the upstream model id rather
-than the alias — so a test that assumed "LiteLLM or not-LiteLLM" would be wrong
-about it. That is why each project declares its own table.
-
-THE BASE URL, THE KEY AND THE ALIAS COME FROM `../gateway.py` and are not repeated
-here. Seven folders under ../ need those same three facts, and an alias written
-down seven times is six places to forget when `GATEWAY_ENGINE` changes. What stays
-here is only what is true of THIS folder: the contract table and the OpenAI client.
+THIS FILE IS BYTE-IDENTICAL IN BOTH PROJECTS. Everything specific — the URL, the
+key, the alias, the ceiling, the contract — is in settings.py.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -41,13 +31,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-# The three shared facts, one level up. `../gateway.py` reads ../../.env itself
-# with no dependency on `python-dotenv`, because it also has to import inside
-# `1_http_client`, whose venv is empty.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from gateway import ALIAS as DEFAULT_MODEL  # noqa: E402
-from gateway import API_KEY, BASE_URL, BODY_EXTRAS, EFFORT_EXTRAS, MAX_TOKENS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
+from settings import API_KEY, BASE_URL, CONTRACT, MAX_RETRIES, MODEL, NAME, REQUEST_TIMEOUT_SECONDS, body_extras
 
 IMAGE_PATH = Path(__file__).resolve().parent / "test_image.png"
 
@@ -61,33 +45,32 @@ class Gateway:
     """THE CONTRACT FOR CALLING THIS GATEWAY, declared as data.
 
     A scenario spreads `**gateway.body_extras` into its request and reads nothing
-    else, so it cannot grow gateway-specific behaviour by accident.
-
-    Fields, and the measurement behind each (all verified 2026-09-03, `lms-gemma4-e4b`):
+    else, so it cannot grow gateway-specific behaviour by accident. The values, and
+    the measurement behind each, are in settings.py; what each one MEANS is here.
 
     body_extras
-        What a caller MUST add. `max_tokens` here, and it is not optional — see
-        the block comment on GATEWAY below.
+        What every request body must carry for THIS alias: the thinking level, plus a
+        ceiling on a gateway that stores none. `settings.body_extras(model)`.
     checks_api_key
-        This gateway answers 200 to `Bearer sk-wrong`. `aigw run` has no caller
-        authentication of any kind — the key in `api_key` is a placeholder the
-        OpenAI client demands and nothing here reads. The key that DOES matter is
-        the one the gateway sends UPSTREAM, out of a Secret in
-        ../../config/<engine>.yaml, and a caller never sees it.
+        True: a wrong Bearer token gets 401. False: the gateway reads no caller key.
     lists_models
-        `GET {base_url}/models` returns the alias list, built from the
-        AIGatewayRoute rules — the one contract line where this gateway matches
-        LiteLLM.
+        `GET {base_url}/models` returns the alias list.
     echoes_alias
-        `response.model` is the ENGINE'S OWN id (`google/gemma-4-e4b`), not the
-        alias the caller sent — `modelNameOverride` rewrote it on the way out and
-        nothing rewrites it back. Anything keying metrics or logs off
+        True: `response.model` is the alias the caller sent. False: it is the
+        engine's own id, so anything keying a metric or a log line off
         `response.model` sees a different string from the one it asked for.
     exposes_route_limits
-        There is no `/model/info` route, and an AIGatewayRoute rule carries a
-        request TIMEOUT but no token ceiling, so there is nothing to read and
-        nothing to protect a caller who sends none. This is the fact
-        `body_extras` exists to work around.
+        True: `/model/info` reports each route's stored `max_tokens`, so a caller
+        who sends none still gets a bounded reply. False: nothing stores one, and
+        `body_extras` has to carry it.
+    loopback_only
+        True: the gateway answers on 127.0.0.1 only, and this machine's network
+        address refuses the port. False: any machine on the network can call it.
+    default_effort
+        The thinking level a Qwen 3.8 route runs at when the caller sends NONE, or
+        None when the gateway stores none and the template's own `xhigh` applies.
+        05_reasoning_effort.py checks it, not 04 — the default alias is a Gemma,
+        whose template ignores the level.
     """
 
     name: str
@@ -98,40 +81,18 @@ class Gateway:
     lists_models: bool
     echoes_alias: bool
     exposes_route_limits: bool
+    loopback_only: bool
+    default_effort: str | None
 
 
-# WHO OWNS `max_tokens` — the one difference a caller feels most, and the reason
-# `body_extras` carries one here.
-#
-# Measured 2026-09-03, `lms-gemma4-e4b`, one prompt ("count from 1 to 3000") sent with NO
-# `max_tokens` in the body:
-#
-#   Envoy   26000   finish_reason "stop"   at 13946 completion tokens — nothing
-#                   bounded it; the model simply ran out of things to say
-#   (LiteLLM, for contrast, stopped at 4095 on its stored route default on the
-#    same prompt. Measured here 2026-09-04.)
-#
-# Same prompt, same alias, same weights: 3.4x the output and 3.4x the wait.
-#
-# The parameter itself behaves normally when it IS sent: the gateway truncates at
-# `max_tokens: 16` and returns EMPTY content with finish_reason "length". What is
-# missing is the DEFAULT — an AIGatewayRoute rule carries a request timeout but
-# no token ceiling.
-#
-# SO ON 26000 YOU ALWAYS SEND `max_tokens` YOURSELF. Get it wrong downwards and a
-# reasoning model spends the whole allowance thinking and returns empty content
-# with no error at all — see `answer_of`.
-GATEWAY = Gateway(
-    name=NAME,
-    base_url=BASE_URL,
-    api_key=API_KEY,
-    # Plus the thinking level a run asks for, and nothing when it asks for none.
-    body_extras={**BODY_EXTRAS, **EFFORT_EXTRAS},
-    checks_api_key=False,
-    lists_models=True,
-    echoes_alias=False,
-    exposes_route_limits=False,
-)
+def gateway_for(model: str) -> Gateway:
+    """The contract for calling `model` on the gateway settings.py names.
+
+    Built per alias rather than once at import: on a gateway that passes the body
+    through untouched, the ceiling's NAME depends on the alias — see
+    `settings.body_extras`.
+    """
+    return Gateway(name=NAME, base_url=BASE_URL, api_key=API_KEY, body_extras=body_extras(model), **CONTRACT)
 
 
 def client_for(gateway: Gateway) -> OpenAI:
@@ -139,7 +100,7 @@ def client_for(gateway: Gateway) -> OpenAI:
         base_url=gateway.base_url,
         api_key=gateway.api_key,
         timeout=REQUEST_TIMEOUT_SECONDS,
-        max_retries=0,
+        max_retries=MAX_RETRIES,
     )
 
 
@@ -152,7 +113,7 @@ def check(condition: bool, message: str) -> None:
         raise CheckFailed(message)
 
 
-def _reasoning_of(message) -> str:
+def reasoning_of(message) -> str:
     """`reasoning_content` is not an OpenAI field, so the SDK keeps it as an extra."""
     extra = getattr(message, "model_extra", None) or {}
     return str(getattr(message, "reasoning_content", None) or extra.get("reasoning_content") or "")
@@ -170,12 +131,15 @@ def answer_of(response) -> str:
     if text:
         return text
 
-    thinking = _reasoning_of(choice.message)
+    thinking = reasoning_of(choice.message)
     if thinking:
+        # The allowance is the ceiling in `body_extras` where the gateway stores
+        # none, or the route's stored `max_tokens` where it does. This function
+        # cannot know which, so it names both places.
         raise CheckFailed(
             f"empty content, finish_reason={choice.finish_reason!r}: the model spent its whole "
-            f"token allowance ({MAX_TOKENS}) on a reasoning block ({len(thinking)} chars) and "
-            "never started the reply. Raise MAX_TOKENS in common.py."
+            f"token allowance on a reasoning block ({len(thinking)} chars) and never started the "
+            "reply. Raise the ceiling in settings.body_extras, or the route's stored `max_tokens`."
         )
     raise CheckFailed(f"the model returned empty content, finish_reason={choice.finish_reason!r}")
 
@@ -188,18 +152,19 @@ def show(title: str, response: object) -> None:
 
 def parse_args(description: str) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     return parser.parse_args()
 
 
 def run(scenario: Callable[[Gateway, str], str], description: str) -> int:
     """Drive one scenario against this gateway. Returns a process exit code."""
     args = parse_args(description)
+    gateway = gateway_for(args.model)
 
-    print(f"\n{'=' * 70}\n{description}\n{GATEWAY.name} -> {GATEWAY.base_url}  model={args.model}\n{'=' * 70}")
+    print(f"\n{'=' * 70}\n{description}\n{gateway.name} -> {gateway.base_url}  model={args.model}\n{'=' * 70}")
     started = time.perf_counter()
     try:
-        summary, passed = scenario(GATEWAY, args.model), True
+        summary, passed = scenario(gateway, args.model), True
     except Exception as error:  # noqa: BLE001 — a failing test reports, it does not crash
         # The class name matters: CheckFailed is a wrong answer, anything else is
         # a transport or gateway failure, and they are fixed in different places.
@@ -207,5 +172,5 @@ def run(scenario: Callable[[Gateway, str], str], description: str) -> int:
     seconds = time.perf_counter() - started
 
     print(f"\n{'-' * 70}")
-    print(f"{'PASS' if passed else 'FAIL'}  {GATEWAY.name:8s} {seconds:6.1f}s  {summary}")
+    print(f"{'PASS' if passed else 'FAIL'}  {gateway.name:8s} {seconds:6.1f}s  {summary}")
     return 0 if passed else 1

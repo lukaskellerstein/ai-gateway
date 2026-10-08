@@ -28,10 +28,11 @@ reports SKIPPED with the gateway's own message rather than pretending the reply 
 empty.
 
 THIS FILE IS BYTE-IDENTICAL IN BOTH PROJECTS. It names no port and no gateway;
-everything specific comes from ../gateway.py.
+everything specific comes from settings.py, the one file to edit when you copy
+this folder. `run_benchmark.py` beside it times the same calls on several models.
 
-    uv run main.py
-    uv run main.py --model lms-gemma4-26b
+    uv run run.py
+    uv run run.py --model lms-gemma4-26b
 """
 
 from __future__ import annotations
@@ -42,14 +43,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
-# The three facts every folder here shares — the base URL, the key and the alias.
-# See ../gateway.py; it imports nothing but the standard library, which is what
-# lets this dependency-free folder use it.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from gateway import ALIAS, API_KEY, BASE_URL, BODY_EXTRAS, EFFORT_EXTRAS, NAME, REQUEST_TIMEOUT_SECONDS  # noqa: E402
+from settings import API_KEY, BASE_URL, MODEL, NAME, REQUEST_TIMEOUT_SECONDS, body_extras
 
 QUESTION = "What is the capital of France? Answer in one short sentence."
 
@@ -91,11 +86,9 @@ def plain_call(model: str) -> str:
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": QUESTION},
         ],
-        # EMPTY on LiteLLM and `{"max_tokens": 2048}` on the two sibling gateways.
-        # LiteLLM stores a ceiling on the route; they store none. See ../gateway.py.
-        **BODY_EXTRAS,
-        # The thinking level a run asks for, and nothing when it asks for none.
-        **EFFORT_EXTRAS,
+        # The thinking level on both gateways, plus a `max_tokens` ceiling on Envoy,
+        # which stores none on its routes. See settings.py.
+        **body_extras(model),
     }
 
     print(f"--- Request body: ---\n{json.dumps(body, indent=2)}")
@@ -120,8 +113,7 @@ def streaming_call(model: str) -> str:
         "model": model,
         "messages": [{"role": "user", "content": "Count from 1 to 5, digits only."}],
         "stream": True,
-        **BODY_EXTRAS,
-        **EFFORT_EXTRAS,
+        **body_extras(model),
     }
 
     print("--- Streaming: ---")
@@ -158,7 +150,7 @@ def streaming_call(model: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=ALIAS, help=f"alias to call (default: {ALIAS})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     args = parser.parse_args()
 
     print(f"\n{'=' * 70}\nHTTP client — urllib, no dependencies")

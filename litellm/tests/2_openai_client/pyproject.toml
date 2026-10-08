@@ -4,8 +4,7 @@ version = "0.1.0"
 description = "The LiteLLM gateway driven through OpenAI's own Python client"
 readme = "README.md"
 requires-python = ">=3.12"
-# `python-dotenv` is gone: ../gateway.py reads ../../.env with the standard library,
-# because it must also import inside 1_http_client, whose venv is empty.
+# The client and nothing else: settings.py reads the environment, never a `.env`.
 dependencies = [
     "openai>=3.8.0",
 ]

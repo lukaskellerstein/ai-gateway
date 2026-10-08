@@ -4,7 +4,7 @@ The smallest thing Codex can do, and the first thing to check when anything else
 here fails. It proves the gateway's `/v1/responses` route answers and the reply
 reaches Python.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 

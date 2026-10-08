@@ -12,6 +12,10 @@ It is not a small loss. At `xhigh` one agent step took 693 s and answered nothin
 at `medium` 231 s. `max_tokens: 1` keeps this check to a few seconds: only the
 prompt is counted, nothing needs generating.
 
+A THIRD CALL SENDS NO LEVEL AT ALL, and must carry the same prompt as the level the
+gateway declares as `default_effort` in settings.py — or as `xhigh`, the template's
+own default, when the gateway stores none.
+
     uv run 05_reasoning_effort.py --model lms-qwen38-27b
 """
 
@@ -30,17 +34,20 @@ MESSAGES = [
     {"role": "user", "content": "Say OK."},
 ]
 
-# The ceiling and the level are set here, so neither may come from `body_extras`.
+# The ceiling and the level are set here, so neither may come from `body_extras` —
+# which sends a level by default, and would otherwise make every call the same one.
 OWN_FIELDS = ("max_tokens", "max_completion_tokens", "reasoning_effort")
 
 
-def prompt_tokens(gateway: Gateway, model: str, level: str) -> int:
+def prompt_tokens(gateway: Gateway, model: str, level: str | None) -> int:
     extras = {key: value for key, value in gateway.body_extras.items() if key not in OWN_FIELDS}
     ceiling = "max_completion_tokens" if "max_completion_tokens" in gateway.body_extras else "max_tokens"
+    # No level means the field is ABSENT. `reasoning_effort=None` would send a JSON null.
+    level_field = {"reasoning_effort": level} if level else {}
     response = client_for(gateway).chat.completions.create(
         model=model,
         messages=MESSAGES,
-        reasoning_effort=level,
+        **level_field,
         **{ceiling: 1},
         **extras,
     )
@@ -53,7 +60,10 @@ def scenario(gateway: Gateway, model: str) -> str:
 
     at_xhigh = prompt_tokens(gateway, model, "xhigh")
     at_medium = prompt_tokens(gateway, model, "medium")
-    print(f"--- prompt tokens: xhigh={at_xhigh} medium={at_medium} ---")
+    at_none = prompt_tokens(gateway, model, None)
+    fallback = gateway.default_effort or "xhigh"
+    at_fallback = {"xhigh": at_xhigh, "medium": at_medium}.get(fallback) or prompt_tokens(gateway, model, fallback)
+    print(f"--- prompt tokens: xhigh={at_xhigh} medium={at_medium} none={at_none} ---")
 
     check(
         at_medium < at_xhigh,
@@ -61,7 +71,13 @@ def scenario(gateway: Gateway, model: str) -> str:
         "On LiteLLM, the route needs `allowed_openai_params: [\"reasoning_effort\"]` in "
         "../../config/<engine>.yaml.",
     )
-    return f"the level arrives: xhigh={at_xhigh} medium={at_medium} prompt tokens"
+    check(
+        at_none == at_fallback,
+        f"with no level the prompt carries {at_none} tokens, but `{fallback}` carries {at_fallback}. "
+        f"settings.py declares default_effort={gateway.default_effort!r}. On LiteLLM, the route "
+        "stores it as `reasoning_effort` in ../../config/<engine>.yaml.",
+    )
+    return f"the level arrives: xhigh={at_xhigh} medium={at_medium}; none runs as `{fallback}`"
 
 
 if __name__ == "__main__":

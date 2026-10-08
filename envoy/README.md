@@ -28,7 +28,7 @@ in a cluster — what is proven on this laptop is what would ship.
 
 | It has | `../litellm` does not |
 |:--|:--|
-| **`/mcp`** — an MCP gateway that aggregates several MCP servers behind one endpoint, prefixes tool names by server, and can filter which tools are exposed | nothing like it |
+| **`/mcp`** — an MCP gateway that aggregates several MCP servers behind one endpoint, prefixes tool names by server, and can filter which tools are exposed | it has `/mcp` too, and checks the caller's key there |
 | **`/anthropic/v1/messages`** translated onto *any* OpenAI-compatible backend | it has `/v1/messages`, which is the same job done natively |
 | **`:26064/metrics`** — Prometheus | no |
 | **OpenTelemetry tracing** with OpenInference spans, into Arize Phoenix with one variable | no |
@@ -38,8 +38,9 @@ logs.** `QuotaPolicy` and token rate limiting need Redis plus an Envoy Gateway i
 configured for it — the Kubernetes path. `aigw run` writes an Envoy Gateway config with no
 rate-limit block at all. `../litellm` remains the only gateway here with spend controls.
 
-**And it authenticates no caller.** Anything that can reach 26000 can call it, which is why it
-binds localhost only. The keys in `config/` are what the gateway sends *upstream*.
+**And it authenticates no caller.** Anything that can reach 26000 can call it, which is why
+`compose.yml` publishes it on `127.0.0.1` only. Until 2026-10-07 it published on every
+interface, and the Mac's network address answered too. The keys in `config/` are what the gateway sends *upstream*.
 
 ## Call it
 
@@ -61,7 +62,7 @@ The OpenAI client needs *some* `api_key` string, and this gateway never reads it
 | 26000 | `/v1/models` | the alias list, built from the AIGatewayRoute rules |
 | 26000 | `/v1/completions` | the legacy completions route |
 | 26000 | `/anthropic/v1/messages` | the Anthropic API, translated onto the same backend |
-| 26000 | `/mcp` | the MCP gateway — **needs `--mcp-config`; not wired up here** |
+| 26000 | `/mcp` | the MCP servers behind the gateway ([below](#mcp-servers-behind-the-gateway)). No key |
 | 26064 | `/health` | `OK`. **See the race below** |
 | 26064 | `/metrics` | Prometheus |
 
@@ -85,6 +86,21 @@ carrying no `max_tokens`:
 Get it wrong downwards and it is worse than slow: a reasoning model spends the whole allowance
 thinking and returns **empty content** with `finish_reason: "length"` and no error at all.
 Keep the ceiling generous.
+
+### Send `reasoning_effort` to a Qwen alias
+
+The same gap, for the thinking level. Qwen 3.8's template defaults to `xhigh`, where one agent
+step took 693 s and answered nothing, and Envoy cannot add a field to a request body
+(envoyproxy/ai-gateway#1985). So a caller who sends no level gets `xhigh` here. Measured
+2026-09-30, prompt tokens with no level, one system + user message:
+
+| Gateway | `lms-qwen38-27b` and `unsloth-qwen38-27b` |
+|:--|:--|
+| LiteLLM 24000 | 24 — `medium`, which the route stores |
+| **Envoy 26000** | **62 — `xhigh`** |
+
+A level the caller sends arrives untouched, on every route. `tests/2_openai_client/05_reasoning_effort.py`
+checks the difference against `default_effort` in that folder's `settings.py`.
 
 ## Its config is Kubernetes custom resources
 
@@ -133,13 +149,37 @@ Three numbers differ from upstream's own example, and each has a reason in the f
   exceeds it before the request reaches the model.
 - **`logging.level: error`.** At `debug` Envoy dumps request headers.
 
+## MCP servers behind the gateway
+
+`/mcp` is ONE MCP endpoint for every backend of the `MCPRoute` named `aigw-run-mcp`. A caller
+is given one URL. The gateway lists each backend's tools, renames them `<backend>__<tool>`,
+and forwards every call, so a server can move without a caller noticing.
+
+| Fact | Here |
+|:--|:--|
+| where it is declared | the last two resources of **every** `config/*.yaml`: an `MCPRoute` and a `Backend` |
+| the one backend today | `bench-hardware` on `host.docker.internal:26090` — the test server, up only while a test runs |
+| `--mcp-config` | **ignored** when `aigw run` is given a config path, which `compose.yml` always does |
+| a backend name | a Kubernetes name, so `-` and never `_` |
+| the caller | not checked, as on the LLM routes |
+| Codex as the client | lists the tools, then **drops them**: the result carries `cacheScope: ""` — `../TESTING.md` §5.7 |
+| no backend up | `initialize` gets **500** `failed to create MCP session to any backend` — so between test runs, now |
+| caching | none — every client listing reaches the server (2026-10-07) |
+
+**THE HOST HEADER HAS NO PORT.** Envoy sends `Host: host.docker.internal`, and an MCP SDK
+server answers `421 Invalid Host header` unless it allows that bare name. The test server
+lists each container name with and without `:*` (measured 2026-10-07).
+
+**A SERVER IS EIGHT EDITS**: the same two resources in all seven tracked files and in
+`lukas.yaml`. Miss one and that engine word has no `/mcp`, with nothing in a log to say why.
+
 ## Configuration
 
 One word in `.env` decides what this gateway serves. Compose interpolates from the **shell
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 28 route rules
+GATEWAY_ENGINE=all        # the default: every engine at once, 35 route rules
 ```
 
 | Variable | Default | Used by |
@@ -182,7 +222,7 @@ is also the reason not to leave it on.
 **The access line carries no cached tokens. `26064/metrics` does**, whatever `AIGW_DEBUG` says:
 `gen_ai_client_token_usage_sum{gen_ai_token_type="cached_input", gen_ai_original_model="<alias>"}`
 is the running total per alias. What reaches it depends on the route, because Envoy forwards
-the Anthropic and Responses routes to LMStudio untranslated (`tests/run_cache.py`, 2026-09-30):
+the Anthropic and Responses routes to LMStudio untranslated (measured 2026-09-30):
 
 | Route, on LMStudio | Cached tokens reported |
 |:--|:--|
@@ -202,8 +242,9 @@ every one of them.
 
 | `GATEWAY_ENGINE` | Reads | Serves |
 |:--|:--|:--|
-| `all` *(default)* | `config/all.yaml` | **28 route rules** — 16 model aliases and 12 `-anthropic` aliases |
-| `lms` `unsloth` | that engine's file | 4 aliases plus its 3 `-anthropic` ones |
+| `all` *(default)* | `config/all.yaml` | **35 route rules** — 20 model aliases and 15 `-anthropic` aliases |
+| `lms` | that engine's file | 5 aliases plus its 4 `-anthropic` ones |
+| `unsloth` | that engine's file | 7 aliases plus its 5 `-anthropic` ones |
 | `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
 | `openrouter` `openai` `cerebras` | that engine's file | 1–2 aliases plus an `-anthropic` for each chat one, **paid** |
 
@@ -251,13 +292,13 @@ machine without committing it:
 GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 ```
 
-`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **50 route
-rules** over every model downloaded in LMStudio and Unsloth Studio, plus the eight short names
-and their six `-anthropic` twins. It has no hosted backend at all, so **it cannot spend
+`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **60 route
+rules** over every model downloaded in LMStudio and Unsloth Studio, plus the short names
+and twelve `-anthropic` twins. It has no hosted backend at all, so **it cannot spend
 money**.
 
-**It needs four `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 50 rules
-means four. When you add a model, add it to a route that has room — the ceiling is per route,
+**It needs five `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 60 rules
+means at least four, and the split by engine makes it five. When you add a model, add it to a route that has room — the ceiling is per route,
 not per file, and going over crash-loops aigw before it serves anything.
 
 **`../litellm/config/lukas.yaml` is the same vocabulary for the other gateway**, and neither
@@ -294,8 +335,8 @@ so a fresh clone needs no `uv sync`.
 | `1_http_client` | `urllib` — no dependencies at all |
 | `2_openai_client` | `openai` — 4 call kinds plus the contract test |
 | `3_langchain_langgraph` | `ChatOpenAI(base_url=…)`, then the same loop built by hand |
-| `4_deepagents` | a deep agent. Seven scenarios: query, todos, filesystem, tools, MCP, subagent, skill |
-| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → **`/anthropic/v1/messages`**, on `<alias>-anthropic`. Seven scenarios: query, session, in-process MCP, stdio MCP, subagent, skill, thinking |
+| `4_deepagents` | a deep agent. Eight scenarios: query, todos, filesystem, tools, MCP, subagent, skill, gateway MCP |
+| `5_claude_agent_sdk` | `ANTHROPIC_BASE_URL` → **`/anthropic/v1/messages`**, on `<alias>-anthropic`. Eight scenarios: query, session, in-process MCP, stdio MCP, subagent, skill, thinking, gateway MCP |
 | `6_codex_sdk` | a `model_providers` override → **`/v1/responses`** |
 | `7_opencode_sdk` | an `@ai-sdk/openai-compatible` provider |
 
@@ -317,7 +358,7 @@ three engines serve `POST /v1/messages` natively (verified 2026-09-04, 200 from 
 `MAX_THINKING_TOKENS=0` used to be required here and no longer is. Full note:
 `tests/5_claude_agent_sdk/README.md`.
 
-It drives **this gateway only**. `2_openai_client/04_gateway_contract.py` asserts the four
+It drives **this gateway only**. `2_openai_client/04_gateway_contract.py` asserts the five
 claims `common.py` makes about how to call it, and **this gateway is not a copy of the other
 one**: it lists its models like LiteLLM and checks no caller key at all.
 
@@ -327,6 +368,7 @@ one**: it lists its models like LiteLLM and checks no caller key at all.
 | `lists_models` | True | **True** |
 | `echoes_alias` | True | **False** |
 | `exposes_route_limits` | True | **False** |
+| `loopback_only` | True | **True** |
 
 What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 
@@ -357,14 +399,15 @@ envoy/
 │   │                            Kubernetes custom resources, ~300 lines each
 │   └── all.yaml                THE DEFAULT. All five merged — it COPIES them
 └── tests/                  SEVEN folders, one per way of calling this gateway
-    ├── gateway.py              base URL · key · alias, shared by all seven. stdlib only
     ├── run_all.py              runs every folder, one row each
+    │                            EVERY FOLDER: settings.py (edit it when you copy the
+    │                            folder), run_benchmark.py and RESULTS.md (cache and speed)
     ├── 1_http_client/          urllib, NO dependencies
     ├── 2_openai_client/        openai — 4 call kinds + the contract test
     ├── 3_langchain_langgraph/  LangChain's agent, and the same loop by hand
-    ├── 4_deepagents/           a deep agent. SEVEN scenarios + its own run_all.py
+    ├── 4_deepagents/           a deep agent. EIGHT scenarios + its own run_all.py
     ├── 5_claude_agent_sdk/     the ANTHROPIC surface, /anthropic/v1/messages.
-    │                            SEVEN scenarios + its own run_all.py
+    │                            EIGHT scenarios + its own run_all.py
     ├── 6_codex_sdk/            the RESPONSES surface, /v1/responses
     └── 7_opencode_sdk/         an openai-compatible provider over the HTTP server API
 ```

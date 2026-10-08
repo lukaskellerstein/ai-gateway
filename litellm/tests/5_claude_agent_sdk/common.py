@@ -1,26 +1,11 @@
-"""The Anthropic surface of THIS gateway, and the machinery every scenario shares.
+"""The machinery every scenario shares: options, a transcript, and the runner.
 
-THE SIX NUMBERED SCRIPTS BESIDE THIS ONE ARE BYTE-IDENTICAL TO ENVOY'S. Every
-difference between the two gateways lives here, as data — the same rule
-`../2_openai_client/common.py` follows for the OpenAI surface. A scenario that
-read the gateway's name would have stopped being portable, and porting these six
-files to a third gateway is then a copy plus one new `common.py`.
-
-WHAT IS DIFFERENT ABOUT LITELLM, and it is one function: `anthropic_alias()`
-below returns the alias unchanged, because there is nothing to work around.
-LiteLLM serves POST /v1/messages beside its OpenAI routes and carries an agent
-conversation on the ordinary alias.
-
-THE COMPARISON IS THE POINT OF HAVING BOTH FOLDERS. Envoy translates
-Anthropic -> OpenAI onto the engine's OpenAI schema, and that path cannot hold a
-conversation: it passes the reply's `thinking` blocks straight into the OpenAI
-body, where a `content` part may only be `text` or `image_url`, and the engine
-answers `400 messages.N.content.str`. Envoy needs a second, `Anthropic`-schema
-alias to get round it. LiteLLM needs none — verified 2026-09-04, a multi-turn
-request carrying a `thinking` block returned 200 on the plain `unsloth-gemma4-e4b`.
-
-That is a real difference between the two gateways and it belongs here, in the
-one file per project that is allowed to know which gateway it is talking to.
+THE NUMBERED SCRIPTS, `run_all.py` AND THIS FILE ARE BYTE-IDENTICAL IN BOTH
+PROJECTS. Every difference between the two gateways lives in settings.py, as data —
+the Anthropic base URL, the key, which alias carries the Anthropic protocol, and
+what the gateway does with reasoning. A scenario that read the gateway's name would
+have stopped being portable; porting this folder to a third gateway is a copy plus
+one new settings.py.
 """
 
 from __future__ import annotations
@@ -29,44 +14,41 @@ import argparse
 import json
 import os
 import shutil
+import socket
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-HERE = Path(__file__).resolve().parent
-
-# The shared facts — the Anthropic base URL, the key, the alias, the port.
-sys.path.insert(0, str(HERE.parent))
-
-from gateway import (  # noqa: E402
-    ALIAS,
+from settings import (
     ANTHROPIC_BASE_URL,
     API_KEY,
     BASE_URL,
-    BODY_EXTRAS,
+    CLI_ENVIRONMENT,
+    MCP_SERVER_PORT,
+    MODEL,
     NAME,
-    REASONING_EFFORT,
     REQUEST_TIMEOUT_SECONDS,
-    ROOT_URL,
+    anthropic_alias,
+    body_extras,
 )
+
+HERE = Path(__file__).resolve().parent
 
 # THE ENVIRONMENT MUST BE SET BEFORE THE SDK IS IMPORTED-AND-RUN, because the
 # values are read when it spawns the CLI, and the CLI inherits this process's
 # environment. Setting them after a scenario has started changes nothing.
-os.environ["ANTHROPIC_BASE_URL"] = ANTHROPIC_BASE_URL
-os.environ["ANTHROPIC_AUTH_TOKEN"] = API_KEY
+os.environ.update(CLI_ENVIRONMENT)
 # ANTHROPIC_API_KEY takes precedence over AUTH_TOKEN and points at Anthropic's own
 # servers. Left in the shell it silently sends the prompt to api.anthropic.com and
 # bills a real account, so it is removed rather than blanked.
 os.environ.pop("ANTHROPIC_API_KEY", None)
-# THE THINKING LEVEL a run asks for (../gateway.py). The CLI reads its own variable
-# and sends the level as `output_config.effort`; left unset it sends `xhigh`.
-if REASONING_EFFORT:
-    os.environ["CLAUDE_CODE_EFFORT_LEVEL"] = REASONING_EFFORT
 
 import anyio  # noqa: E402
 
@@ -81,42 +63,8 @@ from claude_agent_sdk import (  # noqa: E402
     query,
 )
 
-DEFAULT_MODEL = ALIAS
-
-# WHAT `run_all.py` PROBES BEFORE IT STARTS. Liveliness and not readiness on
-# purpose: these scenarios need the proxy to answer, not the database to be
-# attached, and a suite that refuses to run over a missing database would hide
-# the fact that completions keep working without one.
-HEALTH_URL = f"{ROOT_URL}/health/liveliness"
-START_HINT = "cd ../.. && podman compose up -d"
-
-# REASONING REACHES THE CALLER ON EVERY ENGINE, and it took a config line in
-# ../../config/settings.yaml to make that true. It was a PER-ENGINE table until
-# 2026-09-05 — unsloth False, lms and ollama True — and the table was a symptom,
-# not a fact about engines.
-#
-# WHAT IT ACTUALLY WAS: `/v1/messages` picks its upstream route by PROVIDER, and
-# `_RESPONSES_API_PROVIDERS = frozenset({"openai"})` sends anything on the
-# `openai/` provider through the RESPONSES API bridge, which does not carry
-# `reasoning_content`. Our engines split exactly on that line — `lms-*` is
-# `lm_studio/` and never went through the bridge, `ollama-*` and `unsloth-*` are
-# `openai/` and did. `use_chat_completions_url_for_anthropic_messages: true`
-# forces the chat-completions path, where the adapter already falls back to
-# `reasoning_content`. Measured on 1.99.1, unsloth-gemma4-e4b, after the flag:
-# 6 streaming runs out of 6 carried thinking, against 0 out of 5 before.
-#
-# IT WAS NOT THE TWO ISSUES THAT WERE CLOSED. BerriAI/litellm#29518 and #27946
-# had both closed BEFORE any of this was measured, and neither fixes it;
-# #29518's fix already shipped in 1.95.0. Do not read their closure as the cure.
-#
-# Envoy declares the same flat `True` for a different reason: its `-anthropic`
-# alias does not translate at all, so the engine's own block arrives whole.
-THINKING_REACHES_CLIENT = True
-
-# PRINTED BY 07_thinking.py ON EVERY RUN. Empty — nothing left to warn about.
-THINKING_NOTE = ""
-
 # Scenario 04 spawns this file as a SEPARATE PROCESS and talks to it over stdio.
+# Scenario 08 runs the SAME file over HTTP, behind the gateway — `gateway_mcp_server`.
 STDIO_SERVER = HERE / "mcp_server.py"
 
 # Scenario 06 loads its skill from here. A LOCAL PLUGIN RATHER THAN
@@ -125,21 +73,6 @@ STDIO_SERVER = HERE / "mcp_server.py"
 # above this folder, which makes the run depend on where the repo is checked out.
 # A plugin directory is self-contained and copies into another project as it is.
 PLUGIN_DIR = HERE / "bench_plugin"
-
-
-# ---------------------------------------------------------------------------
-# Which alias carries the Anthropic protocol
-# ---------------------------------------------------------------------------
-
-
-def anthropic_alias(alias: str) -> str:
-    """The alias itself. LiteLLM speaks Anthropic on every route it serves.
-
-    IT EXISTS SO THE SIX SCENARIOS DO NOT HAVE TO KNOW THAT. Envoy's copy of this
-    function resolves a second, pass-through alias and refuses to run without it;
-    the scenarios call the same name and never learn which gateway answered.
-    """
-    return alias
 
 
 # ---------------------------------------------------------------------------
@@ -157,17 +90,18 @@ def reasoning_baseline(model: str) -> int:
     flat declaration reported that as a gateway bug.
 
     `-anthropic` is stripped because Envoy's pass-through alias exists only on the
-    Anthropic surface; the OpenAI route serves the plain name. `**BODY_EXTRAS`
-    carries whatever ceiling this gateway needs, under whatever name the upstream
-    accepts.
+    Anthropic surface; the OpenAI route serves the plain name. `body_extras()`
+    carries whatever ceiling and level this gateway needs, under whatever name the
+    upstream accepts.
 
     Standard library only — folder 5's venv has no HTTP client of its own.
     """
+    plain = model.removesuffix("-anthropic")
     body = json.dumps(
         {
-            "model": model.removesuffix("-anthropic"),
+            "model": plain,
             "messages": [{"role": "user", "content": "What is 17 * 23? Think it through."}],
-            **BODY_EXTRAS,
+            **body_extras(plain),
         }
     ).encode()
     request = urllib.request.Request(
@@ -192,7 +126,7 @@ def agent_options(model: str, **overrides: Any) -> ClaudeAgentOptions:
     and a ceiling of 1 raises `Reached maximum number of turns` instead of
     returning the reply it was about to produce.
     """
-    settings: dict[str, Any] = {
+    options: dict[str, Any] = {
         "model": model,
         "system_prompt": "You are a helpful assistant. Answer in one short sentence.",
         "max_turns": 6,
@@ -210,8 +144,8 @@ def agent_options(model: str, **overrides: Any) -> ClaudeAgentOptions:
         # rather than printed, and printed only when a scenario fails.
         "stderr": _remember_stderr,
     }
-    settings.update(overrides)
-    return ClaudeAgentOptions(**settings)
+    options.update(overrides)
+    return ClaudeAgentOptions(**options)
 
 
 _STDERR: list[str] = []
@@ -288,6 +222,43 @@ async def turn(client: ClaudeSDKClient, prompt: str) -> Transcript:
     return await _collect(client.receive_response())
 
 
+@contextmanager
+def gateway_mcp_server() -> Iterator[None]:
+    """Run `mcp_server.py` over HTTP, on the port the GATEWAY expects, for one scenario.
+
+    THE AGENT IS NEVER TOLD THIS PORT. The gateway's own config points at it — an
+    `mcp_servers` entry on LiteLLM, an `MCPRoute` on Envoy — and the agent gets only
+    `MCP_URL`, so a scenario that passes made its calls THROUGH the gateway.
+
+    A PORT THAT IS ALREADY TAKEN FAILS LOUDLY, rather than testing a server some
+    other run left behind.
+    """
+    if _listening(MCP_SERVER_PORT):
+        raise RuntimeError(f"port {MCP_SERVER_PORT} is already in use: another run, or a server left behind")
+    with tempfile.TemporaryFile() as log:
+        server = subprocess.Popen(
+            [sys.executable, str(STDIO_SERVER), "--http", str(MCP_SERVER_PORT)], stdout=log, stderr=log
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while not _listening(MCP_SERVER_PORT):
+                if server.poll() is not None or time.monotonic() > deadline:
+                    log.seek(0)
+                    output = log.read().decode(errors="replace")
+                    raise RuntimeError(f"mcp_server.py never listened on {MCP_SERVER_PORT}:\n{output}")
+                time.sleep(0.2)
+            yield
+        finally:
+            server.terminate()
+            server.wait(timeout=10)
+
+
+def _listening(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
 def report(label: str, transcript: Transcript) -> None:
     """One line per exchange, in the same shape for every scenario."""
     tools = ",".join(transcript.tools) or "-"
@@ -313,7 +284,7 @@ def run(scenario: Scenario, description: str) -> int:
     captured stderr underneath so a real error is never swallowed.
     """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"alias to call (default: {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=MODEL, help=f"alias to call (default: {MODEL})")
     args = parser.parse_args()
 
     title = description.strip().splitlines()[0]

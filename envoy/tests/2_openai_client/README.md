@@ -1,9 +1,10 @@
 # 2 — OpenAI client
 
 The gateway driven through **OpenAI's own Python client** — the way most
-projects will call it. Four scripts against **26000**: three prove a kind of
-call works, and the fourth proves this gateway's calling contract is still what
-`common.py` says it is.
+projects will call it. Six scripts against **26000**: three prove a kind of
+call works, the fourth proves this gateway's calling contract is still what
+`settings.py` says it is, the fifth that the thinking level reaches the model, and
+the sixth that a `-fast` alias answers with thinking off.
 
 This is folder 2 of seven. The index, and the six other ways in, are in
 [`../README.md`](../README.md).
@@ -13,11 +14,26 @@ This is folder 2 of seven. The index, and the six other ways in, are in
 | `01_simple_call.py` | a plain chat completion, with a multi-turn conversation |
 | `02_tools_call.py` | tools: a structured `tool_calls` reply, then the second turn that uses the tool result |
 | `03_multimodal.py` | an image plus a question, sent as a base64 `data:` URL |
-| `04_gateway_contract.py` | **this gateway's contract**, and that `common.py`'s table still describes it |
-| `run_all.py` | runs all four and prints a pass/fail table |
+| `04_gateway_contract.py` | **this gateway's contract**, and that `settings.py`'s table still describes it |
+| `05_reasoning_effort.py` | `reasoning_effort` reaches a Qwen 3.8 template; "not applicable" on any other alias |
+| `06_thinking_off.py` | a `-fast` alias answers with no thinking where its base alias thinks, on chat and `/v1/responses` — **and is the example of calling one: only the name changes**. "Not applicable" on any other alias |
+| `run_all.py` | runs all six and prints a pass/fail table |
+| `run_benchmark.py` | times the shared three-turn task — never run by `run_all.py` |
 
 Every script prints the **full** response and then the extracted text, so it
 doubles as a sample to copy from.
+
+## Copying this folder
+
+**`settings.py` is the one file to edit.** It holds the URL, the key placeholder,
+the alias (`lms-gemma4-e4b`, or `AI_GATEWAY_MODEL`), the thinking level (`medium`,
+or `AI_GATEWAY_REASONING_EFFORT`; empty sends none), `body_extras(alias)` with its
+`max_tokens`, and this gateway's `CONTRACT`. Every other file is byte-identical to
+the LiteLLM copy in `../../../../litellm/tests/2_openai_client/`.
+
+`uv run run_benchmark.py --aliases <alias>` runs the task every folder shares — a
+~1500-token policy, a tool call, two follow-ups — and writes the numbers to
+`RESULTS.md` beside it. `--no-write` prints them and leaves the file alone.
 
 > **This suite drives one gateway.** Until 2026-09-03 there was one `tests/` at the
 > repo root that ran every script against two ports at once, and it was the thing
@@ -28,8 +44,8 @@ doubles as a sample to copy from.
 
 ## The calling contract
 
-`common.py` declares four things about how to call this gateway, and
-`04_gateway_contract.py` checks every one against reality. **Three are `False`**, and
+`CONTRACT` in `settings.py` declares five things about how to call this gateway,
+and `04_gateway_contract.py` checks every one against reality. **Three are `False`**, and
 checking a `False` is the point: an absence nobody checks is an absence somebody
 eventually assumes away.
 
@@ -39,6 +55,7 @@ eventually assumes away.
 | `lists_models` | **True** — `GET /models` returns the alias list, built from the AIGatewayRoute rules |
 | `echoes_alias` | **False** — `response.model` is `google/gemma-4-e4b`; `modelNameOverride` rewrote it and nothing undoes that |
 | `exposes_route_limits` | **False** — no `/model/info` route, and a route rule carries a timeout but no token ceiling |
+| `loopback_only` | **True** — this Mac's network address refuses 26000; `../../compose.yml` publishes on `127.0.0.1` |
 
 **THIS GATEWAY IS NOT A COPY OF THE OTHER ONE.** It lists its models like LiteLLM,
 and then checks no caller key at all and echoes the upstream model id rather than the
@@ -65,7 +82,7 @@ scenario spreads it:
 response = client_for(gateway).chat.completions.create(
     model=model,
     messages=CONVERSATION,
-    **gateway.body_extras,      # {"max_tokens": 2048} on this gateway
+    **gateway.body_extras,      # {"max_tokens": 8192, "reasoning_effort": "medium"} here
 )
 ```
 
@@ -81,7 +98,7 @@ reasoning model spends the whole allowance thinking and returns empty content wi
 The gateway must be up first — `podman compose up -d` two directories up.
 
 ```bash
-uv run run_all.py           # all four scripts in this folder
+uv run run_all.py           # all six scripts in this folder
 ```
 
 `uv run` builds this folder's own venv on first use, so there is no `uv sync` step.
@@ -97,9 +114,9 @@ uv run 03_multimodal.py --model ollama-gemma4-e4b
 
 Every script exits `0` on pass and `1` on fail, so they work in a shell chain.
 
-`run_all.py` refuses to start if 26000 is not answering, rather than letting four
-scripts fail the same way — and it probes **`26000/v1/models`, not `26064/health`**.
-The admin port answers `OK` several seconds before Envoy's listener accepts a
+`run_all.py` refuses to start if 26000 is not answering, rather than letting six
+scripts fail the same way — and `HEALTH_URL` in `settings.py` is
+**`26000/v1/models`, not `26064/health`**. The admin port answers `OK` several seconds before Envoy's listener accepts a
 connection, so probing it races the thing being tested and the first script then
 fails with a connection reset (measured 2026-09-04).
 
@@ -107,14 +124,14 @@ fails with a connection reset (measured 2026-09-04).
 
 | Flag | Default | Meaning |
 |:--|:--|:--|
-| `--model <alias>` | follows `GATEWAY_ENGINE` | the alias to call — see below. Also settable with `AI_GATEWAY_TEST_MODEL` |
+| `--model <alias>` | `lms-gemma4-e4b` | the alias to call — see below. Also settable with `AI_GATEWAY_MODEL` |
 | `--verbose` (`run_all.py` only) | off | stream each script's output instead of capturing it |
 
 There is no `--gateway` flag any more. The folder you are in is the gateway.
 
 ## Reasoning aliases and `MAX_TOKENS`
 
-`common.py` sends `max_tokens=2048`, and that number is load-bearing. Every
+`settings.py` sends `max_tokens=8192`, and that number is load-bearing. Every
 `unsloth-*` and `ollama-*` route, and `lms-gemma4-e4b` too, spends the same allowance on a
 reasoning block before writing a word. Run out mid-thought and the reply is
 **empty**, with `finish_reason: "length"` and no error at all.
@@ -123,31 +140,21 @@ reasoning block before writing a word. Run out mid-thought and the reply is
 
 ```
 CheckFailed: empty content, finish_reason='length': the model spent its whole token
-allowance (2048) on a reasoning block (612 chars) and never started the reply. Raise
-MAX_TOKENS in common.py.
+allowance on a reasoning block (612 chars) and never started the reply. Raise the
+ceiling in settings.body_extras, or the route's stored `max_tokens`.
 ```
 
 Raising the ceiling costs nothing when a model does not need it — generation stops
 at `stop`, not at the ceiling.
 
-## Why the default alias follows `GATEWAY_ENGINE`
+## The default alias
 
-**One engine runs at a time**, so the aliases of every other engine have no
-`AIGatewayRoute` rule at all. A fixed `lms-gemma4-e4b` default would therefore 404 on a
-perfectly healthy gateway serving Ollama.
+`settings.MODEL` is `lms-gemma4-e4b`, which the `lms`, `all` and `lukas` configs all
+serve. It is small, and both vision- and tool-capable, which `02` and `03` need from
+one loaded model. On a gateway naming another engine in `GATEWAY_ENGINE` it has no
+`AIGatewayRoute` rule at all and 404s — pass `--model`.
 
-`common.py` reads `GATEWAY_ENGINE` from `../../.env` — this project's own, not a
-repo-root one, and not the same file either sibling project reads — and picks that engine's
-small chat route: `lms-gemma4-e4b`, `unsloth-gemma4-e4b`, `ollama-gemma4-e4b` or `openrouter-gemma4-26b`. Each is
-the one alias on its engine that is both vision- and tool-capable, which all three
-scripts need from a single loaded model.
-
-**An unrecognised engine is an error, not a fallback.** Defaulting quietly produced a
-404 from a healthy gateway, which reads as a broken gateway rather than a stale
-`.env`. `openai` maps to nothing on purpose — `gpt-5.4-mini` has no vision, so
-`03_multimodal.py` cannot pass against it.
-
-`AI_GATEWAY_TEST_MODEL` overrides the choice permanently; `--model` for one run.
+`AI_GATEWAY_MODEL` overrides it permanently; `--model` for one run.
 
 **On LMStudio the model must be loaded first** — `lms ps --json` is the truth, not
 the LMStudio UI. A JIT load comes back at 8192 context with a 1 h TTL. Ollama loads
@@ -159,19 +166,13 @@ lms load google/gemma-4-e4b --context-length 131072 --parallel 1 --gpu max
 
 ## The same test on another engine
 
-The suite doubles as an engine comparison, but only one engine is served at a time —
-so it is a restart between runs, not a second `--model`:
+The suite doubles as an engine comparison. The default `all` config serves every
+engine at once, so it is a second `--model`, not a restart:
 
 ```bash
-# in ../../.env: GATEWAY_ENGINE=lms      then  (cd ../.. && podman compose up -d)
-uv run run_all.py
-# in ../../.env: GATEWAY_ENGINE=ollama   then  (cd ../.. && podman compose up -d)
-uv run run_all.py
+uv run run_all.py --model lms-gemma4-e4b
+uv run run_all.py --model ollama-gemma4-e4b
 ```
-
-Changing the engine here swaps the whole config file, so nothing from the previous
-engine is left answering. A gateway that keeps its endpoints in a database instead
-would need them pruned; this one has no database at all.
 
 Verified 2026-09-04: **4/4 on `ollama-gemma4-e4b`**. `02_tools_call.py` passing is the
 result worth noting: it means a structured `tool_calls` reply came back, not the
@@ -185,7 +186,7 @@ Two extra requirements for the Unsloth one, and both fail quietly:
    `400 No model loaded`. With it on, the first call unloads whatever was there and
    reads the new weights from disk, which shows up as one slow row and then nothing.
    Note that this covers the embedder too: `unsloth-nomic-embed` and `unsloth-gemma4-e4b` evict
-   each other — and so do the other two projects, if either is up on the same engine.
+   each other — and so does the LiteLLM project, if it is up on the same engine.
 
 ## `test_image.png`
 
@@ -195,14 +196,14 @@ without depending on how wordy the model is.
 
 ## Adding a test
 
-Name it `05_something.py`, write one `scenario(gateway, model)` function, and end
-it with `sys.exit(run(scenario, "Test 5 — ..."))`. `run_all.py` globs `NN_*.py`,
+Name it `06_something.py`, write one `scenario(gateway, model)` function, and end
+it with `sys.exit(run(scenario, "Test 6 — ..."))`. `run_all.py` globs `NN_*.py`,
 so it picks the new file up with no edit.
 
 **Send `**gateway.body_extras` in every request.** On this gateway it carries the
 `max_tokens` a scenario would otherwise have to remember, and it is what lets the
-same scenario file be copied to either sibling project unchanged — `01`–`03` are
-byte-identical across all three.
+same scenario file be copied to the LiteLLM project unchanged — every file but
+`settings.py` is byte-identical across both.
 
 ## What is NOT tested here
 
@@ -210,8 +211,8 @@ byte-identical across all three.
   these scripts share does not drive `/v1/embeddings`.
 - **`/anthropic/v1/messages`.** This gateway HAS it, translated onto the same
   backend, and the OpenAI client cannot speak it. Untested here.
-- **`/mcp`.** The MCP gateway needs `--mcp-config`, which `../../compose.yml` does not
-  pass. Nothing is wired up, so there is nothing to test yet.
+- **`/mcp`.** An agent's surface, not this client's: folders 3 to 7 each call a tool
+  through it — `../README.md` § MCP servers behind the gateway.
 - **`/metrics` on 26064.** Prometheus output, untested.
 - **The two PAID engines.** `config/openrouter.yaml` and `config/openai.yaml` parse
   and register their aliases (checked 2026-09-04), but no call has been made through

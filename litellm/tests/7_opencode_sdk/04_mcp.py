@@ -15,7 +15,7 @@ number out of the server's source and report it correctly without calling
 anything — measured on 2026-09-04 — so an answer-only assertion would pass while
 proving nothing.
 
-Everything specific to a gateway is in common.py. THIS FILE IS BYTE-IDENTICAL
+Everything specific to a gateway is in settings.py. THIS FILE IS BYTE-IDENTICAL
 ACROSS EVERY PROJECT THAT HAS IT.
 """
 
