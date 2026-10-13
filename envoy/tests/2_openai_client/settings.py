@@ -37,6 +37,15 @@ API_KEY = "no-key-needed"
 # from one small model.
 MODEL = os.environ.get("AI_GATEWAY_MODEL") or "lms-gemma4-e4b"
 
+# The aliases 07_embeddings.py and 08_rerank.py test instead of MODEL — a chat alias
+# can neither embed nor rerank. TEI serves both, but only the embedder is routed HERE.
+EMBED_MODEL = os.environ.get("AI_GATEWAY_EMBED_MODEL") or "tei-nomic-embed"
+RERANK_MODEL = os.environ.get("AI_GATEWAY_RERANK_MODEL") or "tei-bge-reranker-m3"
+
+# Envoy's one rerank route, at the root and not under /v1. No rule sends RERANK_MODEL
+# there — see `reranks` in CONTRACT — so 08_rerank.py expects a 404 from it.
+RERANK_URL = f"{ROOT_URL}/cohere/v2/rerank"
+
 # SEND THE THINKING LEVEL EVERY TIME. Qwen 3.8's template defaults to `xhigh`, where one
 # agent step took 693 s and answered nothing (2026-09-30), and Envoy cannot store a
 # default of its own (envoyproxy/ai-gateway#1985). Gemma ignores it. An empty
@@ -101,4 +110,11 @@ CONTRACT = {
     # a Qwen 3.8 route runs its template's own default, `xhigh`, for a caller who
     # sends no level. 05_reasoning_effort.py checks it.
     "default_effort": None,
+    # NO RERANK, AND `aigw run` CANNOT ROUTE ONE TO TEI (2026-10-08). The Cohere route
+    # reaches TEI's /rerank but dies decoding TEI's bare-array reply (500 `Mismatch type
+    # cohere.RerankV2Response with value array`), and a plain HTTPRoute is caught by the
+    # AI filter on every listener (404 `unsupported path`). ../../config/tei.yaml has the
+    # three attempts. So no rule sends RERANK_MODEL there, and 08_rerank.py checks that
+    # the alias is absent rather than broken.
+    "reranks": False,
 }

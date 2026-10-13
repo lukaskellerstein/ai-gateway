@@ -1,10 +1,11 @@
 # 2 — OpenAI client
 
 The gateway driven through **OpenAI's own Python client** — the way most
-projects will call it. Six scripts against **24000**: three prove a kind of
+projects will call it. Eight scripts against **24000**: three prove a kind of
 call works, the fourth proves this gateway's calling contract is still what
-`settings.py` says it is, the fifth that the thinking level reaches the model, and
-the sixth that a `-fast` alias answers with thinking off.
+`settings.py` says it is, the fifth that the thinking level reaches the model, the
+sixth that a `-fast` alias answers with thinking off, and the last two embed and
+rerank.
 
 This is folder 2 of seven. The index, and the six other ways in, are in
 [`../README.md`](../README.md).
@@ -17,7 +18,9 @@ This is folder 2 of seven. The index, and the six other ways in, are in
 | `04_gateway_contract.py` | **this gateway's contract**, and that `settings.py`'s table still describes it |
 | `05_reasoning_effort.py` | `reasoning_effort` reaches a Qwen 3.8 template; "not applicable" on any other alias |
 | `06_thinking_off.py` | a `-fast` alias answers with no thinking where its base alias thinks, on chat and `/v1/responses` — **and is the example of calling one: only the name changes**. "Not applicable" on any other alias |
-| `run_all.py` | runs all six and prints a pass/fail table |
+| `07_embeddings.py` | an embedding alias (`settings.EMBED_MODEL`) returns one vector per input, and the query lands nearer its answer than an unrelated passage |
+| `08_rerank.py` | a rerank alias (`settings.RERANK_MODEL`) ranks the passage that answers first, by 10× or more. Cohere-shaped, on `settings.RERANK_URL` |
+| `run_all.py` | runs all eight and prints a pass/fail table |
 | `run_benchmark.py` | times the shared three-turn task — never run by `run_all.py` |
 
 Every script prints the **full** response and then the extracted text, so it
@@ -54,6 +57,7 @@ and `04_gateway_contract.py` checks every one against reality:
 | `echoes_alias` | **True** — `response.model` is `lms-gemma4-e4b`, the alias that was sent |
 | `exposes_route_limits` | **True** — `/model/info` reports each route's stored `max_tokens` |
 | `loopback_only` | **True** — this Mac's network address refuses 24000; `../../compose.yml` publishes on `127.0.0.1` |
+| `reranks` | **True** — `/v1/rerank` takes Cohere's shape and TEI answers it; `top_n` is dropped. `08_rerank.py` checks it |
 
 The failure message is always "the table says X and the gateway did Y", which is
 the sentence you want. The Envoy copy of `settings.py` declares its own five, the
@@ -179,8 +183,10 @@ without depending on how wordy the model is.
 
 ## Adding a test
 
-Name it `06_something.py`, write one `scenario(gateway, model)` function, and end
-it with `sys.exit(run(scenario, "Test 6 — ..."))`. `run_all.py` globs `NN_*.py`,
+Name it `09_something.py`, write one `scenario(gateway, model)` function, and end
+it with `sys.exit(run(scenario, "Test 9 — ..."))`. A test of a fixed alias of
+another kind — an embedder, a reranker — passes it as `run(..., alias=...)`, because
+`run_all.py` hands every script a chat alias. `run_all.py` globs `NN_*.py`,
 so it picks the new file up with no edit.
 
 **Send `**gateway.body_extras` in every request.** It carries the thinking level
@@ -192,8 +198,6 @@ project unchanged.
 
 - **`/v1/messages`**, the Anthropic route. The OpenAI client cannot speak it.
   [`../../README.md`](../../README.md) covers driving it from Claude Code.
-- **Embeddings.** Every `*-embed` alias needs a different route from the chat one
-  these scripts share.
 - **Fallback chains.** No alias has one, so there is nothing to prove.
 - **Budgets and virtual keys.** [`../../README.md`](../../README.md) has the `curl`.
 - **That the same alias answers on 26000.** See the note at the top — no suite

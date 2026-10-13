@@ -42,11 +42,13 @@
 #   one after the other. When memory runs out Studio unloads the least recently used held
 #   model first (unslothai/unsloth#11591) — not measured here, 128 GB never ran out.
 #
-#   THE OTHER EXCEPTION IS STUDIO'S OWN EMBEDDER — the model in `Settings -> embedding model`.
-#   Studio runs it in a separate process BESIDE the chat model, so it evicts nothing. That is
-#   `unsloth-nomic-embed-sidecar` below. Measured 2026-10-03 with the 26B loaded: the sidecar
-#   answered in 0.04 s and the 26B stayed loaded; `unsloth-nomic-embed` replaced the 26B, and
-#   the next chat call took 13.4 s to load it back.
+#   THE OTHER EXCEPTION WAS STUDIO'S OWN EMBEDDER, and its alias is gone. `Settings -> embedding
+#   model` runs beside the chat model and evicts nothing (measured 2026-10-03: 0.04 s, the 26B
+#   stayed loaded), and `unsloth-nomic-embed-sidecar` served it until 2026-10-08. It was removed
+#   for `tei-nomic-embed`: the same nomic-ai weights, the same vectors (cosine 0.999998 on three
+#   inputs), an 8192-token window against Studio's 512, and no Studio setting to keep right.
+#   `unsloth-nomic-embed` replaced the 26B that day, and the next chat call took 13.4 s to load
+#   it back.
 #
 #   IT TURNS REASONING ON where LMStudio does not. Verified 2026-08-27: `unsloth-gemma4-26b`
 #   returns a reasoning block that `lms-gemma4-26b` — the identical gemma-4-26b-a4b-qat — does not.
@@ -203,7 +205,8 @@ model_list:
   # alias and queried with another returns quietly worse neighbours and never errors. See
   # lms.yaml.
   #
-  # REMEMBER THE ONE-MODEL LIMIT: calling this evicts whichever chat model is loaded.
+  # REMEMBER THE ONE-MODEL LIMIT: calling this evicts whichever chat model is loaded. For an
+  # embedder that evicts nothing, call `tei-nomic-embed` (tei.yaml).
   - model_name: unsloth-nomic-embed
     litellm_params:
       model: openai/second-state/Nomic-embed-text-v1.5-Embedding-GGUF
@@ -213,28 +216,3 @@ model_list:
       output_cost_per_token: 0
     model_info:
       max_input_tokens: 2048              # context_length from Unsloth's GET /v1/status
-
-  # STUDIO'S OWN EMBEDDER, run BESIDE the chat model — so, unlike every other alias in this
-  # file, calling it evicts nothing (measured 2026-10-03, see the note at the top). A RAG loop
-  # that embeds and then chats needs this one: with `unsloth-nomic-embed` it pays two model
-  # swaps per question.
-  #
-  # IT IS ONLY THE SIDECAR WHILE THIS EXACT ID IS STUDIO'S `Settings -> embedding model`. Set
-  # anything else there and this name goes through auto-switch like the alias above, and
-  # evicts the chat model again — with no error to say so.
-  #
-  # THE SAME nomic v1.5, A DIFFERENT BUILD from `unsloth-nomic-embed` (nomic-ai's own release,
-  # not second-state's GGUF), so vectors from the two are NOT interchangeable. ai-agent-rag's
-  # vector stores are built with this one.
-  #
-  # The model reads 2048 tokens, but Studio runs this embedder at 512 and answers 400 to an
-  # input over 510 (measured 2026-09-27, ai-agent-rag).
-  - model_name: unsloth-nomic-embed-sidecar
-    litellm_params:
-      model: openai/nomic-ai/nomic-embed-text-v1.5
-      api_base: os.environ/UNSLOTH_API_BASE
-      api_key: os.environ/UNSLOTH_API_KEY
-      input_cost_per_token: 0
-      output_cost_per_token: 0
-    model_info:
-      max_input_tokens: 512

@@ -36,6 +36,15 @@ API_KEY = os.environ.get("AI_GATEWAY_KEY") or os.environ.get("LITELLM_MASTER_KEY
 # from one small model.
 MODEL = os.environ.get("AI_GATEWAY_MODEL") or "lms-gemma4-e4b"
 
+# The aliases 07_embeddings.py and 08_rerank.py test instead of MODEL — a chat alias
+# can neither embed nor rerank. TEI serves both, from the `tei`, `all` and `lukas` configs.
+EMBED_MODEL = os.environ.get("AI_GATEWAY_EMBED_MODEL") or "tei-nomic-embed"
+RERANK_MODEL = os.environ.get("AI_GATEWAY_RERANK_MODEL") or "tei-bge-reranker-m3"
+
+# Cohere's shape, which LiteLLM also serves at /rerank and /v2/rerank, and translates to
+# TEI's own `texts` on the way upstream.
+RERANK_URL = f"{BASE_URL}/rerank"
+
 # SEND THE THINKING LEVEL EVERY TIME. Qwen 3.8's template defaults to `xhigh`, where one
 # agent step took 693 s and answered nothing (2026-09-30); LiteLLM stores `medium` on
 # its Qwen routes, Envoy stores nothing, so a caller that sends the level gets the same
@@ -87,4 +96,9 @@ CONTRACT = {
     # (2026-09-30, no level, `max_tokens` 1: 62 prompt tokens before, 24 after).
     # 05_reasoning_effort.py checks it.
     "default_effort": "medium",
+    # RERANK_URL takes a Cohere-shaped rerank: the `huggingface/` provider rewrites
+    # `documents` to TEI's `texts` and maps TEI's bare array back to `results`
+    # (2026-10-08). It drops `top_n` — every document comes back, ranked.
+    # 08_rerank.py checks it.
+    "reranks": True,
 }

@@ -44,6 +44,7 @@ print(r.choices[0].message.content)
 | `POST` | `/v1/chat/completions` | any key | the OpenAI route |
 | `POST` | `/v1/messages` | any key | the Anthropic route — what Claude Code drives |
 | `POST` | `/v1/embeddings` | any key | the running engine's `*-embed` alias |
+| `POST` | `/rerank` `/v1/rerank` `/v2/rerank` | any key | Cohere-shaped rerank on `tei-bge-reranker-m3`. **Envoy has no equivalent** — `../envoy/config/tei.yaml`. `top_n` is ignored |
 | `POST` | `/mcp` | any key, as `x-litellm-api-key` | the MCP servers behind the gateway ([below](#mcp-servers-behind-the-gateway)) |
 | `GET` | `/health/readiness` | none | `{"status":"healthy","db":"connected"}` — **the probe to use** |
 | `GET` | `/health/liveliness` | none | `"I'm alive!"` — the process is up, nothing more |
@@ -178,7 +179,7 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 21 aliases
+GATEWAY_ENGINE=all        # the default: every engine at once, 22 aliases
 ```
 
 **There is no `COMPOSE_PROFILES` line.** It went with the split: the directory you stand in is
@@ -187,9 +188,9 @@ now the choice of gateway, and `up -d` here starts this one whether or not `.env
 **Which engine.** One word names one file, `config/<engine>.yaml`. A typo is a clean crash:
 the file does not exist and `litellm` exits saying so.
 
-**`all` is the default and serves every engine at once** — 21 aliases from one gateway.
-`config/all.yaml` is seven `include:` lines and copies nothing, so the per-engine files stay the
-one place an alias is written. **The six engine words are for isolation**: name one and every
+**`all` is the default and serves every engine at once** — 22 aliases from one gateway.
+`config/all.yaml` is eight `include:` lines and copies nothing, so the per-engine files stay the
+one place an alias is written. **The seven engine words are for isolation**: name one and every
 other alias is absent from the running config, not disabled, and a 404 on it is correct.
 `GATEWAY_ENGINE=lms` is how you get a gateway that cannot reach a paid provider at all.
 
@@ -199,10 +200,11 @@ the alias prefix already says which is which. With `all`, the three paid engines
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../envoy` has its own, and nothing checks that they agree |
+| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../envoy` has its own, and nothing checks that they agree |
 | `LITELLM_MASTER_KEY` | `sk-litellm-master` | the admin credential. **Change it for anything but a laptop** |
 | `LM_STUDIO_API_BASE` | `http://host.containers.internal:1234/v1` | every `lms-*` alias |
 | `UNSLOTH_API_BASE` | `http://host.containers.internal:8888/v1` | every `unsloth-*` alias |
+| `TEI_EMBED_API_BASE` `TEI_RERANK_API_BASE` | `http://host.containers.internal:27000/v1` · `…:27001` | `tei-nomic-embed` · `tei-bge-reranker-m3` — two TEI processes, one model each ([`../tei/`](../tei/README.md)) |
 | `UNSLOTH_API_KEY` | *(blank)* | **required** by every `unsloth-*` alias — Unsloth 401s every route without it. Blank keeps the alias and fails at call time |
 | `OLLAMA_API_BASE` | `http://host.containers.internal:11434/v1` | every `ollama-*` alias. **There is no `OLLAMA_API_KEY`**: Ollama ignores the header. The config still sets a literal `sk-ollama`, because LiteLLM's `openai/` provider needs some key string |
 | `OPENROUTER_API_KEY` | *(blank)* | every `openrouter-*` alias. **Real spend.** Without it the alias stays and 401s at call time |
@@ -233,6 +235,13 @@ The provider for each alias is in the root [`README.md`](../README.md) § The al
 | `lm_studio/` | works | works — never used the Responses bridge | works |
 | `openai/` | works | **needs `use_chat_completions_url_for_anthropic_messages: true`** | works |
 | `openrouter/` | works | works — not in the bridge set | works |
+
+**`huggingface/` is a fourth provider with one route of its own: `/rerank`.** It serves only
+`tei-bge-reranker-m3`, and it is the reason LiteLLM can rerank where Envoy cannot. It takes
+Cohere's `documents` from the caller, sends TEI's `texts` to `<TEI_RERANK_API_BASE>/rerank`,
+and maps TEI's bare `[{index, score}]` back to Cohere's `results`. **It drops `top_n`**: a
+caller asking for 2 of 3 got all 3, ranked. `/rerank`, `/v1/rerank` and `/v2/rerank` answered
+the same. Measured 2026-10-08, `ghcr.io/berriai/litellm:main-stable`, TEI 1.9.4.
 
 **The one quirk, in full.** `/v1/messages` picks its upstream path from
 `_RESPONSES_API_PROVIDERS = frozenset({"openai"})`. Anything on the `openai/` provider is
@@ -319,13 +328,13 @@ for one client.
 
 ## Every alias is hand-written
 
-`config/` is the whole vocabulary of this gateway. Six files:
+`config/` is the whole vocabulary of this gateway. Nine tracked files:
 
 | File | Holds |
 |:--|:--|
 | `settings.yaml` | the three settings blocks, and the facts true of every alias. **No alias lives here** |
-| `lms.yaml` `unsloth.yaml` `ollama.yaml` `openrouter.yaml` `openai.yaml` `cerebras.yaml` | one engine each: `include: [settings.yaml]` and then its own `model_list` |
-| `all.yaml` | seven `include:` lines and nothing else. **It copies no aliases** |
+| `lms.yaml` `unsloth.yaml` `ollama.yaml` `tei.yaml` `openrouter.yaml` `openai.yaml` `cerebras.yaml` | one engine each: `include: [settings.yaml]` and then its own `model_list` |
+| `all.yaml` | eight `include:` lines and nothing else. **It copies no aliases** |
 
 `all.yaml` works because LiteLLM merges an included file key by key and **extends a list**, so
 the six `model_list`s join into one while the settings arrive from `settings.yaml`. Add an
@@ -345,7 +354,7 @@ tool call with 315 of 316 prompt tokens cached logged $0.00011640, against $0.00
 configured rates (2026-09-29). Budget ceilings on local traffic under-count warm agent loops.
 
 `settings.yaml` is listed **first** on purpose. LiteLLM *replaces* a non-list key, so the last
-file to set one wins; the six engine files set none today, but one added below them that did
+file to set one wins; the seven engine files set none today, but one added below them that did
 would silently win.
 
 **Nothing included may itself carry an `include:` that matters.** LiteLLM does not recurse: the
@@ -362,8 +371,8 @@ GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 ```
 
 `config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it. It includes
-`settings.yaml`, `lms.yaml` and `unsloth.yaml` and then declares every other model downloaded
-in those two engines — **48 aliases**, with the short names (`lms-gemma4-e4b`,
+`settings.yaml`, `lms.yaml`, `unsloth.yaml` and `tei.yaml` and then declares every other model
+downloaded in LMStudio and Unsloth — **49 aliases**, with the short names (`lms-gemma4-e4b`,
 `unsloth-qwen38-27b`, …) still answering because it *includes* those files rather than
 replacing them. It has no hosted
 route at all, so **it cannot spend money**.
@@ -463,19 +472,21 @@ response included. **Look there before changing configuration.**
 
 ```text
 litellm/
-├── compose.yml             postgres · litellm. name: ai-gateway — DO NOT RENAME
+├── compose.yml             postgres · litellm · tei. name: ai-gateway — DO NOT RENAME
+│                            tei is a provider: it runs ../tei/tei.sh on the host
 ├── .env.example            tracked; the key lines are blank BY DESIGN
 ├── config/                 mounted at /app/config, read-only. NO GENERATED FILES
 │   ├── settings.yaml           the three settings blocks; NO aliases
-│   ├── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
+│   ├── <engine>.yaml           lms · unsloth · ollama · tei · openrouter · openai · cerebras
 │   │                            each includes settings.yaml and declares its aliases
-│   └── all.yaml                THE DEFAULT. Six include lines; copies nothing
+│   └── all.yaml                THE DEFAULT. Eight include lines; copies nothing
 └── tests/                  SEVEN folders, one per way of calling this gateway
     ├── run_all.py              runs every folder, one row each
     │                            EVERY FOLDER: settings.py (edit it when you copy the
     │                            folder), run_benchmark.py and RESULTS.md (cache and speed)
     ├── 1_http_client/          urllib, NO dependencies
-    ├── 2_openai_client/        openai — 4 call kinds + the contract test
+    ├── 2_openai_client/        openai — chat, tools, vision, thinking, embed, rerank
+    │                            + the contract test
     ├── 3_langchain_langgraph/  LangChain's agent, and the same loop by hand
     ├── 4_deepagents/           a deep agent. EIGHT scenarios + its own run_all.py
     ├── 5_claude_agent_sdk/     the ANTHROPIC surface, /v1/messages.

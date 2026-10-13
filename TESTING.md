@@ -52,15 +52,17 @@ way of calling the gateway:
 | Folder | Scenarios | Drives the gateway with |
 |:--|--:|:--|
 | `1_http_client` | 1 (`run.py`) | `urllib` — no dependencies at all |
-| `2_openai_client` | 6 | the `openai` client |
+| `2_openai_client` | **8** | the `openai` client — chat, tools, vision, the contract, thinking, embeddings, rerank |
 | `3_langchain_langgraph` | 1 (`run.py`, three demos) | `ChatOpenAI(base_url=…)`, the same loop by hand, then a tool from `/mcp` |
 | `4_deepagents` | **8** | a DeepAgents deep agent |
 | `5_claude_agent_sdk` | **8** | the Anthropic Messages API |
 | `6_codex_sdk` | **5** | the OpenAI Responses API |
 | `7_opencode_sdk` | **6** | OpenCode's HTTP server API |
-| **total** | **35 per gateway · 70 across both** | |
+| **total** | **37 per gateway · 74 across both** | |
 
 ```
+2_openai_client     01_simple_call 02_tools_call 03_multimodal 04_gateway_contract 05_reasoning_effort
+                    06_thinking_off 07_embeddings 08_rerank
 4_deepagents        01_query 02_todos 03_filesystem 04_tools 05_mcp 06_subagent 07_skill 08_gateway_mcp
 5_claude_agent_sdk  01_query 02_session 03_sdk_mcp 04_stdio_mcp 05_subagent 06_skill 07_thinking 08_gateway_mcp
 6_codex_sdk         01_query 02_session 03_structured 04_mcp 05_gateway_mcp
@@ -93,6 +95,7 @@ newer build", and none of it can be answered without them.**
 | **Envoy AI Gateway** | **`dev`** — see below | image `docker.io/envoyproxy/ai-gateway-cli:latest`, built **2026-08-28**, digest `sha256:f5702fe9dc7ce75ba79cfc2de64d61943e0994d7d071e4e33ca00dff48952c86` |
 | Nearest aigw release | **v1.1.0**, 2026-08-21 | the last tagged release before that image was built |
 | `claude` CLI | whatever npm has | `npm install -g @anthropic-ai/claude-code` |
+| **TEI** | **1.9.4** | Homebrew `text-embeddings-inference`, native on the host for Metal, started by each gateway's `tei` provider service — `tei/README.md`. Installed **2026-10-08** on an M5 Max |
 | `openai-codex` | **0.155.1** | upgraded from 0.147.0 on 2026-09-21, with `mcp` 2.1.1 → 2.2.0; folder 6 is 4/4 on both gateways. PyPI has 7 releases and **no 0.116.x** — see §5.1 |
 
 > **`aigw version` PRINTS `dev`, NOT A SEMVER.** The `:latest` tag is built from `main`, so
@@ -125,6 +128,8 @@ unchanged**.
 | `ollama-gemma4-e4b` | `gemma4:e4b` | `openai/` | Ollama, host :11434 |
 | `ollama-gemma4-26b` | `gemma4:26b` | `openai/` | Ollama |
 | `ollama-nomic-embed` | `nomic-embed-text` | `openai/` | Ollama |
+| `tei-nomic-embed` | `nomic-ai/nomic-embed-text-v1.5` | `openai/` | TEI, host :27000 |
+| `tei-bge-reranker-m3` | `BAAI/bge-reranker-v2-m3` | `huggingface/` | TEI, host :27001 — **LiteLLM only**, §5.8 |
 | `openrouter-gemma4-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | OpenRouter — **paid** |
 | `openai-gpt54-mini` | `gpt-5.4-mini` | `openai/` | OpenAI — **paid**, **HAS VISION** |
 | `openai-embed3-small` | `text-embedding-3-small` | `openai/` | OpenAI — **paid** |
@@ -516,6 +521,34 @@ own `mcp__<server>__` prefix, reached the model over stdio.
 **So:** `envoy/tests/6_codex_sdk/settings.py` asserts the call on no alias, and says why.
 The Python, TypeScript and Claude SDK clients read the same list without complaint. **Do
 not proxy the field away** — that is a shim. Re-check when Codex or the aigw image moves.
+
+### 5.8 Envoy cannot route a rerank to TEI — upstream, on both sides
+
+**Symptom.** `tei-bge-reranker-m3` answers on 24000 and does not exist on 26000.
+`envoy/tests/2_openai_client/08_rerank.py` passes by checking that absence, and its
+`settings.py` declares `reranks: False`.
+
+**The cause is measured, 2026-10-08, aigw `:latest`, TEI 1.9.4.** Three routes were tried
+against the same TEI on 27001, and `envoy/config/tei.yaml` keeps the record:
+
+| Route | Result |
+|:--|:--|
+| `/cohere/v2/rerank` on a `Cohere`-schema backend, Cohere body | TEI's own **422** `missing field texts` — the path reached `/rerank`, the body is not TEI's |
+| the same route, TEI's body (`texts`) | Envoy **500** `failed to unmarshal body: Mismatch type cohere.RerankV2Response with value array` |
+| a plain `HTTPRoute` `/tei/rerank`, then the same on a second listener | **404** `unsupported path` from the AI filter, which covers every listener. A second Gateway: `multiple gateways are not supported` |
+
+The translator, `internal/translator/cohere_rerank_v2.go`, passes the request through and
+decodes every reply into Cohere's object. TEI replies with a bare array. **Neither side is
+wrong by its own spec**, so nothing here is a gateway bug to fix.
+
+**Not a fix: a Lua or ExtProc filter that rewrites `documents` and `texts`.** That is a shim,
+and this repo proves a gap rather than faking past it.
+
+**What would close it:** TEI serving a Cohere-shaped rerank —
+huggingface/text-embeddings-inference#683, open, PR #797 open, milestone v1.10.0. **To
+re-check**, upgrade TEI, put the rule and the `Cohere` backend from `envoy/config/tei.yaml`'s
+comment back, and call `/cohere/v2/rerank`. If it answers, flip `reranks` in Envoy's
+`settings.py` and `08_rerank.py` will check the ranking instead.
 
 ---
 

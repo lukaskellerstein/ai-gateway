@@ -121,7 +121,7 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   check that stopping one leaves the other serving. **Then put them both back the way you found
   them**, including each project's `GATEWAY_ENGINE`.
 - **You touched either `config/all.yaml`** — prove BOTH modes on that gateway. Bring it up on
-  `all` and confirm the full alias list on `/v1/models` (**21** on 24000, **35** on 26000),
+  `all` and confirm the full alias list on `/v1/models` (**22** on 24000, **35** on 26000),
   then bring it up on ONE engine and confirm the short list. A default config that serves
   everything hides a broken per-engine file, and the other way round.
 - **You added an alias to `envoy/config/<engine>.yaml`** — confirm it answers under BOTH
@@ -131,13 +131,23 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   prove the volume is still attached:
   `podman compose exec -T postgres psql -U postgres -d litellm -c 'SELECT count(*) FROM "LiteLLM_VerificationToken";'`
   A count of 0 on a machine that had keys means the volume was detached.
+- **You touched `tei/` or a `tei-*` alias** — `curl -fsS localhost:27000/health` and the same
+  on 27001, check that each log in `/tmp/ai-gateway-tei-*.log` says `Metal`, then run
+  `07_embeddings.py` and `08_rerank.py` in BOTH `tests/2_openai_client`. On Envoy `08` must
+  pass by proving the absence; if it goes red there, Envoy can rerank now — flip `reranks`.
+  **If you touched `tei/tei.sh` or a `tei` service**, drive the lifecycle, not just one `up`:
+  Envoy alone starts the embedder only; LiteLLM's `up` then adds the reranker and restarts no
+  container; `podman compose down tei` in `litellm/` stops the reranker and keeps the embedder
+  for Envoy; Envoy's `down` stops the last one; `GATEWAY_ENGINE=lms` starts nothing. Then put
+  both projects back — and LiteLLM's `up -d` again, or its `tei-*` aliases stay dark.
 - **You touched `benchmark/`** — run it. It is the only thing that calls both ports, so a
   wrong URL or a stale gateway name there is invisible until someone runs it.
-- **You touched `envoy/`** — prove all three LOCAL engines with a real completion. The two
+- **You touched `envoy/`** — prove all three LOCAL chat engines with a real completion, and
+  TEI with an embedding. The two
   PAID ones can only be brought up and checked for their aliases on `/v1/models`, because a
   completion through either bills a real account. Check `AIGW_DEBUG` still defaults to
-  `false` and not to empty, or the container crash-loops on a bool parse. **Each local engine
-  file must also keep its two `<alias>-anthropic` rules and its `Anthropic`-schema
+  `false` and not to empty, or the container crash-loops on a bool parse. **Each local chat
+  engine file must also keep its two `<alias>-anthropic` rules and its `Anthropic`-schema
   `AIServiceBackend`**, or `tests/5_claude_agent_sdk` exits on that engine — by design, and
   the message names the file.
 - **You touched the prompt path** — an alias's provider, a callback, a Claude Code setting,

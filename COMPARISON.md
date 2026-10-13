@@ -66,6 +66,7 @@ about a gigabyte of Python. A data plane needs none of them.
 |:--|:--|:--|
 | `POST /v1/chat/completions` | yes | yes |
 | `POST /v1/embeddings` | yes | yes |
+| Rerank — a local cross-encoder, `tei-bge-reranker-m3` | **yes**, Cohere-shaped on `/rerank` | **no** — its `/cohere/v2/rerank` cannot read TEI's reply ([`envoy/config/tei.yaml`](envoy/config/tei.yaml)) |
 | `POST /v1/responses` — the Codex SDK needs it | yes | yes |
 | `GET /v1/models` | yes | yes |
 | The Anthropic route — Claude Code needs it | `/v1/messages`, on the plain alias | `/anthropic/v1/messages`, on an `<alias>-anthropic` alias |
@@ -396,6 +397,7 @@ of the same day: LiteLLM turned Codex's `reasoning` object into a malformed fiel
 | asking "what did this month cost?" | **LiteLLM** | `/spend/logs` records a cost per request; Envoy records nothing |
 | handing a project a scoped credential | **LiteLLM** | virtual keys with a budget and an expiry |
 | about to deploy this to Kubernetes | **Envoy** | its config *is* the cluster's config. LiteLLM's YAML is not |
+| reranking search results with a local model | **LiteLLM** | the only one that can route a rerank to TEI, measured 2026-10-08 |
 | putting MCP servers behind one endpoint | **LiteLLM** | both serve `/mcp`, and only LiteLLM checks who calls a tool |
 | feeding Prometheus or an OTel collector | **Envoy** | metrics and spans are built in; LiteLLM's `/metrics` is a 404 here |
 | running many gateways, or on a small machine | **Envoy** | 130 MB and a 1.3 s start, against 1 GB and a database |
@@ -434,8 +436,6 @@ Worth knowing before you expect it from the wrong one.
   gateway, and nothing catches a missed one.
 - **Neither is exposed beyond localhost**, and Envoy in particular must not be — it
   authenticates no caller at all.
-- **Neither covers embeddings in its test suite.** Both routes work — verified 2026-09-05, 768
-  dimensions on each — but no test folder exercises them.
 
 ---
 

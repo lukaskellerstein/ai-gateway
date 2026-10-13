@@ -10,10 +10,10 @@
 #
 # ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
 #
-#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai | cerebras
+#   GATEWAY_ENGINE   all | lms | unsloth | ollama | tei | openrouter | openai | cerebras
 #                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 20 aliases, one gateway.
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 22 aliases, one gateway.
 # Name a single engine instead and only that engine's aliases exist, which is how
 # you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -95,20 +95,22 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one file per engine, plus one that joins them:
     #
-    #   config/all.yaml         20 aliases: everything below         THE DEFAULT
+    #   config/all.yaml         22 aliases: everything below         THE DEFAULT
     #   config/lms.yaml          5 aliases: 4 chat, 1 embedder      free
-    #   config/unsloth.yaml      6 aliases: 4 chat, 2 embedders     free
+    #   config/unsloth.yaml      6 aliases: 5 chat, 1 embedder      free
     #   config/ollama.yaml       3 aliases: 2 chat, 1 embedder      free
+    #   config/tei.yaml          2 aliases: 1 embedder, 1 reranker  free
     #   config/openrouter.yaml   3 aliases: 3 chat                  PAID
     #   config/openai.yaml       2 aliases: 1 chat, 1 embedder      PAID
     #   config/cerebras.yaml     1 alias:  1 chat                   PAID
     #
     # Each engine file includes config/settings.yaml for the three settings blocks
     # and then declares its own model_list. all.yaml includes settings.yaml AND all
-    # six engine files and COPIES NOTHING: LiteLLM extends a list across included
-    # files, so the six model_lists join into one. Verified 2026-09-06 against
+    # seven engine files and COPIES NOTHING: LiteLLM extends a list across included
+    # files, so the seven model_lists join into one. Verified 2026-09-06 against
     # ghcr.io/berriai/litellm:main-stable — 13 aliases in /v1/models; 14 with
-    # cerebras.yaml, 2026-09-28.
+    # cerebras.yaml, 2026-09-28; 23 with tei.yaml and 22 without the Unsloth sidecar,
+    # 2026-10-08.
     #
     # A TYPO IS A CLEAN CRASH: the file does not exist and litellm exits saying so.
     # (It was NOT clean before 2026-08-31, when this mounted a single file: compose
@@ -170,6 +172,11 @@ services:
       # the Authorization header at all. The literal `sk-ollama` in the config is
       # there only because LiteLLM's `openai/` provider needs some key string.
       OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://host.containers.internal:11434/v1}
+      # TEI: TWO processes, because it serves one model each — the embedder speaks
+      # OpenAI under /v1, the reranker its own /rerank at the root. Native too, for
+      # the Metal GPU; the `tei` service below starts them. No key: TEI reads none.
+      TEI_EMBED_API_BASE: ${TEI_EMBED_API_BASE:-http://host.containers.internal:27000/v1}
+      TEI_RERANK_API_BASE: ${TEI_RERANK_API_BASE:-http://host.containers.internal:27001}
       # The three PAID engines. With GATEWAY_ENGINE=all — the default — all ARE in
       # the running config, and that costs nothing: registering an alias is free
       # and only a completion bills. Name a single free engine and the hosted
@@ -191,6 +198,29 @@ services:
       retries: 12
       # First boot runs the LiteLLM schema migrations against an empty database.
       start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # TEI — the embedder and the reranker, on the HOST and not in a container.
+  # ---------------------------------------------------------------------------
+  # A provider service: compose runs ../tei/tei.sh on the Mac instead of starting a
+  # container, because TEI reaches the GPU only through Metal and a container here
+  # gets Vulkan alone. `up` starts each model whose port does not answer; `down`
+  # stops a model once no gateway that asked for it is left. A config that names no
+  # TEI alias (GATEWAY_ENGINE=lms, …) starts nothing. ../tei/tei.sh is the one file
+  # the two gateways share, and it carries the measurements.
+  #
+  # RUN COMPOSE FROM THIS FOLDER: the path is relative to where you stand, so
+  # `-f litellm/compose.yml` from the repo root fails. `compose restart` does not
+  # call it either — after a restart or a reboot, `up -d` again brings TEI back.
+  #
+  # NOTHING DEPENDS ON IT, ON PURPOSE: if TEI fails, `up` exits 1 and says why, and
+  # litellm starts anyway — only the tei-* aliases are missing.
+  tei:
+    provider:
+      type: ../tei/tei.sh
+      options:
+        engine: ${GATEWAY_ENGINE:-all}
+        models: embed,rerank            # both: this gateway routes the reranker
 
 volumes:
   # Resolves to `ai-gateway_postgres_data` — see the note on `name:` above.

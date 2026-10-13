@@ -33,8 +33,8 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
 
   | Folder | Project name | Port | Services |
   |:--|:--|:--|:--|
-  | `litellm/` | **`ai-gateway`** | 24000 | `postgres`, `litellm` |
-  | `envoy/` | `ai-gateway-envoy` | 26000, 26064 | `envoy` — **one service, no database** |
+  | `litellm/` | **`ai-gateway`** | 24000 | `postgres`, `litellm`, and `tei` — a provider, no container |
+  | `envoy/` | `ai-gateway-envoy` | 26000, 26064 | `envoy` — **one container, no database** — and `tei`, a provider |
 
   Only `litellm/` runs a postgres, and it does not publish a port. `envoy/` is `aigw run`,
   Envoy AI Gateway's standalone mode: a real Envoy data plane from one config file, no
@@ -50,6 +50,21 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   stay as independent as before. It times ONE HTTP request against both ports with the engine,
   model, body and `max_tokens` held identical, and it is the closest thing here to the
   cross-gateway check that went away at the split. Results live in `COMPARISON.md`.
+
+  **`tei/` (added 2026-10-08) IS NOT A PROJECT EITHER: `tei.sh` and a README.** TEI —
+  Hugging Face Text Embeddings Inference, Homebrew 1.9.4 — runs NATIVELY, like the other three
+  local engines, because a Podman container on a Mac gets Vulkan and TEI speaks only CUDA and
+  Metal. One model per process: the embedder on **27000** (`tei-nomic-embed`), the reranker on
+  **27001** (`tei-bge-reranker-m3`). **`podman compose up` STARTS THEM**: each `compose.yml`
+  has a service `tei` that is a Compose PROVIDER, not a container — Docker Compose v5.3.1
+  behind `podman compose` runs `../tei/tei.sh` ON THE HOST. LiteLLM asks for both models,
+  Envoy for the embedder alone; a config naming no TEI alias (`lms`, …) starts nothing; `down`
+  stops a model once no gateway that asked for it is left (state in `/tmp/ai-gateway-tei/`).
+  Measured 2026-10-08, and three things in it bite: **`restart`, `start` and a container's
+  restart after a reboot do NOT call the provider** — the gateway is back and TEI is not, so
+  `up -d` again; **the path resolves from where you STAND**, so `-f litellm/compose.yml` from
+  the root fails; and **nothing depends on `tei`**, so a TEI failure makes `up` exit 1 while
+  the gateway starts anyway.
 - **`name: ai-gateway` IN `litellm/compose.yml` IS LOAD-BEARING.** The volume resolves to
   `<project>_postgres_data`, so that word is what keeps it attached to
   `ai-gateway_postgres_data` — every virtual key, spend log and budget ceiling ever issued.
@@ -61,7 +76,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
 
   | Variable | Values | Default | Picks | In |
   |:--|:--|:--|:--|:--|
-  | `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras` | **`all`** | which engines | both |
+  | `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras` | **`all`** | which engines | both |
   | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 - **THE TWO PROJECTS CAN SERVE DIFFERENT ENGINES, and nothing notices.** Each has its own
@@ -79,22 +94,22 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   another renderer and the aigw image is distroless with no Python to run one in.
 - **`all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE** (since 2026-09-06). `GATEWAY_ENGINE`
   names ONE FILE — `<project>/config/<word>.yaml` — and `all.yaml` is a real file, not a list
-  you write. LiteLLM's is **seven `include:` lines that copy nothing**; Envoy's **COPIES the six
+  you write. LiteLLM's is **eight `include:` lines that copy nothing**; Envoy's **COPIES the seven
   engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
-  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 21 aliases on `all`, Envoy 35
+  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 22 aliases on `all`, Envoy 35
   route rules (Cerebras added 2026-09-28, Qwen 3.8 on three more engines 2026-09-29, Gemma 4
-  12B on `lms` and `unsloth` 2026-10-03, `unsloth-gemma4-26b-fast` 2026-10-04).
+  12B on `lms` and `unsloth` 2026-10-03, `unsloth-gemma4-26b-fast` 2026-10-04, TEI 2026-10-08).
 - **`GATEWAY_ENGINE` NAMES ANY FILE IN `config/`, AND TWO OF THEM ARE GITIGNORED.**
   `<project>/config/lukas.yaml` is the user's PERSONAL config — every chat and embedding model
-  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **48 aliases on
-  LiteLLM, 60 route rules on Envoy** (five `AIGatewayRoute`s, 15-alias cap; `lms-1`,
-  `unsloth-1` and `unsloth-2` are full). No Ollama, no
+  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **49 aliases on
+  LiteLLM, 60 route rules on Envoy** (six `AIGatewayRoute`s, 15-alias cap; `lms-1`,
+  `unsloth-1` and `unsloth-2` are full; TEI's own since 2026-10-08). No Ollama, no
   hosted engine, and none of Unsloth's four image models — so **it cannot spend money**, and a
   chat route that could not work was never written. **YOU WILL BE ASKED TO ADD MODELS TO IT**
   ("I downloaded a new model in unsloth"): that is TWO edits, `litellm/config/lukas.yaml` and
   `envoy/config/lukas.yaml`, and on Envoy the new rule must go in a route with room. Both files
   are in `.gitignore` and **must never be committed** — they describe one disk. LiteLLM's
-  includes `settings.yaml`, `lms.yaml` and `unsloth.yaml`, so the short names keep answering;
+  includes `settings.yaml`, `lms.yaml`, `unsloth.yaml` and `tei.yaml`, so the short names keep answering;
   Envoy's copies those rules, as `all.yaml` does. **A SECOND QUANT OF A REPO UNSLOTH ALREADY
   SERVES CHANGES WHAT A BARE NAME LOADS** (2026-10-02): Unsloth picks the first quant on disk in
   its `GGUF_QUANT_PREFERENCE`, which starts at `UD-Q4_K_XL`, so downloading that file moved
@@ -105,10 +120,14 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   is correct. That is the only way to get a gateway that cannot reach a paid provider. On `all`
   the two paid engines are REGISTERED, which costs nothing: registering is free, only a
   completion bills, and no alias falls back to another.
-- **NOTHING IS SHARED BETWEEN THE FOLDERS.** Each carries everything it needs, so either can
-  be deleted whole — which is exactly what happened to `mlflow/` on 2026-09-04, and nothing
-  else stopped working. `discover/gateway_discovery.py` existed twice for that reason, and both
-  copies are gone now.
+- **NOTHING IS SHARED BETWEEN THE FOLDERS — EXCEPT `tei/tei.sh`.** Each carries everything it
+  needs, so either can be deleted whole — which is exactly what happened to `mlflow/` on
+  2026-09-04, and nothing else stopped working. `discover/gateway_discovery.py` existed twice
+  for that reason, and both copies are gone now. **`tei/tei.sh` is the one exception, by the
+  user's choice (2026-10-08)**: both `compose.yml` run it, so TEI's start flags live once.
+  Either gateway folder can still be deleted whole; deleting `tei/` makes `up` exit 1 in both
+  while each gateway still serves everything but its `tei-*` aliases. Do not take the
+  exception as licence for a second shared file.
 - **ENVOY'S OWN TRAPS, all measured 2026-09-04 unless dated otherwise:**
   - **AN `AIGatewayRoute` HOLDS AT MOST 15 ALIASES** (measured 2026-09-06). It becomes a Gateway
     API `HTTPRoute`, whose `spec.rules` the CRD caps at **16 items**, and aigw adds one of its
@@ -135,20 +154,21 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   "fix" this by making one project read another's files, or by generating one of them.
 - **Every alias names its engine AND its model** — `<engine>-<model>-<size>`:
   `lms-gemma4-26b`, `unsloth-qwen38-27b`, `openai-gpt54-mini`, `ollama-nomic-embed`. The
-  engine is one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. There is no
+  engine is one of `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras`. There is no
   engine-neutral name (`local` was removed), no capability name (`cheap`, `standard`,
   `frontier` were removed) and, **since 2026-09-29, no size-only name** (`lms-26b` and the
   rest, renamed with NO fallback — old names 404): the first hid which engine answered, the
   second who was billed, the third which model family. The suffix is the SAME across engines
   for the same model, so a switch of engine is a change of prefix. The old → new table is in
-  root `README.md` § The aliases. **The prefix is the money warning** — the three local engines
+  root `README.md` § The aliases. **The prefix is the money warning** — the four local engines
   are free; `openrouter`, `openai` and `cerebras` bill a real account. **No alias falls back to
   another**, so a request costs money only when a caller names a route that costs money.
 - **Local routes are shadow-priced** — free, but carrying a cloud twin's rate so budget
   ceilings still trip. Anything summing `/spend/logs` must say whether it reports money
   billed or the cost of the same workload in the cloud.
-- **NO CODE AT ALL OUTSIDE `tests/` AND `benchmark/`, since 2026-09-06.** Two `compose.yml`,
-  eight YAML in `litellm/config/`, seven YAML in `envoy/config/`, four `README.md`. Every image is
+- **NO CODE AT ALL OUTSIDE `tests/`, `benchmark/` AND `tei/tei.sh`, since 2026-09-06.** Two `compose.yml`,
+  nine YAML in `litellm/config/`, eight YAML in `envoy/config/`, one shell script in `tei/`,
+  five `README.md`. Every image is
   stock and there is no build step. Deleting `mlflow/` removed about 1200 lines of Python on
   2026-09-04 and removing `discover/` took the last 561 on 2026-09-06.
 - **EACH `tests/` IS SEVEN FOLDERS, ONE PER WAY OF CALLING THE GATEWAY** (added 2026-09-04):
@@ -330,7 +350,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   A caller gets one URL; the gateway renames each tool by server and forwards the call. LiteLLM:
   `litellm/config/settings.yaml` § `mcp_servers`, tools `<server>-<tool>`, the caller's key
   checked in `x-litellm-api-key`. Envoy: an `MCPRoute` + `Backend` closing EVERY
-  `envoy/config/*.yaml` — **eight identical copies**, `lukas.yaml` included — tools
+  `envoy/config/*.yaml` — **nine identical copies**, `lukas.yaml` included — tools
   `<backend>__<tool>`, no caller check. **`--mcp-config` is IGNORED** when `aigw run` gets a
   config path. **ENVOY SENDS `Host` WITH NO PORT**, so an MCP SDK server answers `421` unless
   it allows the bare container name. The one server is the test `bench_hardware` /
@@ -355,9 +375,24 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
 - **`max_tokens` MUST BE SENT EXPLICITLY IN ANY COMPARISON.** LiteLLM stores a route default
   and Envoy stores none, so a body without a ceiling asks LiteLLM to do LESS WORK. That one
   control is the difference between a benchmark and a number.
+- **TEI RERANKS ON LITELLM ONLY, AND ENVOY'S GAP IS MEASURED, NOT ASSUMED** (2026-10-08).
+  LiteLLM's `huggingface/` provider takes Cohere's `documents` on `/rerank`, `/v1/rerank` and
+  `/v2/rerank`, sends TEI's `texts`, and maps the bare `[{index, score}]` back — but **drops
+  `top_n`**, so every document comes back. Envoy's only rerank route, `/cohere/v2/rerank`,
+  reaches TEI and then cannot decode its array (`500 Mismatch type cohere.RerankV2Response`);
+  a plain `HTTPRoute` beside it gets `404 unsupported path`, because the AI filter covers every
+  listener. `envoy/config/tei.yaml` keeps all three attempts, and `08_rerank.py` checks the
+  ABSENCE there (`reranks: False` in `CONTRACT`). **A Lua or ExtProc rewrite would be a shim —
+  do not build one.** TEI #683 (a Cohere-shaped route, milestone v1.10.0) is what would close
+  it; re-check when TEI upgrades. **TEI caps a request at 32 inputs** and answers `422` above
+  it, so `tei.sh` raises it — 128 documents per rerank, 2048 inputs per embed. **Its first
+  start downloads the model**: 651 s for the reranker's 2.3 GB here. **Rerank time is linear in
+  the documents**, about 40 ms per 179-token one: 20 in 0.76 s on an idle GPU, ~1.0 s while
+  Unsloth held it 84% busy — it shares the GPU with the chat engines.
 - **Ports 24000 / 26000 are deliberate.** The failure avoided is not a bind error but the
   silent one: a health probe against `localhost:4000` that another stack answers, going
-  green. 25000 is now free — it was the deleted MLflow gateway's. **EVERY PORT IS PUBLISHED ON
+  green. 25000 is now free — it was the deleted MLflow gateway's. 27000 / 27001 are TEI's,
+  bound to `127.0.0.1` by its own `--hostname`. **EVERY PORT IS PUBLISHED ON
   `127.0.0.1` ONLY** (since 2026-10-07): a bare `"24000:4000"` answered on the Mac's network
   address, and Envoy checks no caller. Containers still reach both as
   `host.containers.internal`. `2_openai_client/04_gateway_contract.py` goes red if a port opens.
@@ -422,7 +457,7 @@ and `duration` ≤ `7d`.
 - Setting `lms-gemma4-26b`'s `*_cost_per_token` to `0`. It silently disables every budget ceiling
   for local traffic.
 - **Re-coupling the projects** — a shared module, a shared `.env`, a root `compose.yml`, or
-  anything in one folder that reads a file in another. The separation was asked for
+  anything in one folder that reads a file in another. `tei/tei.sh` is the one agreed exception. The separation was asked for
   explicitly; its costs are known and documented.
 - `git push`, force-push, branch deletes. **Never commit unless the user explicitly asks.**
 - Anything touching secrets, TLS material or credential files →

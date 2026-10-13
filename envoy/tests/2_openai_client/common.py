@@ -71,6 +71,10 @@ class Gateway:
         None when the gateway stores none and the template's own `xhigh` applies.
         05_reasoning_effort.py checks it, not 04 — the default alias is a Gemma,
         whose template ignores the level.
+    reranks
+        True: `settings.RERANK_URL` takes a Cohere-shaped rerank for
+        `settings.RERANK_MODEL`. False: the gateway cannot route one there, and
+        08_rerank.py proves the absence instead.
     """
 
     name: str
@@ -83,6 +87,7 @@ class Gateway:
     exposes_route_limits: bool
     loopback_only: bool
     default_effort: str | None
+    reranks: bool
 
 
 def gateway_for(model: str) -> Gateway:
@@ -156,15 +161,21 @@ def parse_args(description: str) -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(scenario: Callable[[Gateway, str], str], description: str) -> int:
-    """Drive one scenario against this gateway. Returns a process exit code."""
-    args = parse_args(description)
-    gateway = gateway_for(args.model)
+def run(scenario: Callable[[Gateway, str], str], description: str, alias: str | None = None) -> int:
+    """Drive one scenario against this gateway. Returns a process exit code.
 
-    print(f"\n{'=' * 70}\n{description}\n{gateway.name} -> {gateway.base_url}  model={args.model}\n{'=' * 70}")
+    `alias` is for a script that tests a fixed alias of ANOTHER KIND — an embedder, a
+    reranker — named in settings.py. It replaces `--model`, which run_all.py sets to a
+    chat alias that could not embed or rerank anything.
+    """
+    args = parse_args(description)
+    model = alias or args.model
+    gateway = gateway_for(model)
+
+    print(f"\n{'=' * 70}\n{description}\n{gateway.name} -> {gateway.base_url}  model={model}\n{'=' * 70}")
     started = time.perf_counter()
     try:
-        summary, passed = scenario(gateway, args.model), True
+        summary, passed = scenario(gateway, model), True
     except Exception as error:  # noqa: BLE001 — a failing test reports, it does not crash
         # The class name matters: CheckFailed is a wrong answer, anything else is
         # a transport or gateway failure, and they are fixed in different places.

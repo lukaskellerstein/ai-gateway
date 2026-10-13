@@ -9,8 +9,8 @@
 #   Unsloth Studio  free   unsloth-gemma4-e4b     unsloth-gemma4-12b     unsloth-gemma4-26b
 #                          unsloth-gemma4-26b-fast
 #                          unsloth-qwen38-27b     unsloth-nomic-embed
-#                          unsloth-nomic-embed-sidecar
 #   Ollama          free   ollama-gemma4-e4b      ollama-gemma4-26b      ollama-nomic-embed
+#   TEI             free   tei-nomic-embed        (its reranker is LiteLLM-only — tei.yaml)
 #   OpenRouter      PAID   openrouter-gemma4-26b  openrouter-qwen38-27b
 #   OpenAI          PAID   openai-gpt54-mini      openai-embed3-small
 #   Cerebras        PAID   cerebras-qwen38-27b
@@ -23,7 +23,7 @@
 # wrong diagnosis.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# SIX AIGatewayRoutes, NOT ONE, AND THAT IS A HARD UPSTREAM LIMIT.
+# SEVEN AIGatewayRoutes, NOT ONE, AND THAT IS A HARD UPSTREAM LIMIT.
 #
 # An AIGatewayRoute becomes a Gateway API `HTTPRoute`, and `HTTPRoute.spec.rules`
 # is capped at **16 items** by the Gateway API CRD itself. aigw adds one rule of
@@ -35,20 +35,20 @@
 #   most 16 items
 #
 # Measured 2026-09-06. So each engine keeps its OWN route — `aigw-run-<engine>` —
-# and all six attach to the same Gateway through `parentRefs`. Several HTTPRoutes
+# and all seven attach to the same Gateway through `parentRefs`. Several HTTPRoutes
 # on one Gateway is ordinary Gateway API, every match here is an exact header
-# value, and all 35 values are distinct, so nothing is ambiguous.
+# value, and all 36 values are distinct, so nothing is ambiguous.
 #
-# IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Six engines at
+# IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Seven engines at
 # 15 aliases each is fine; one engine at 16 is not. The fullest today are
 # `aigw-run-unsloth` at 12 and `aigw-run-lms` at 9.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# THIS FILE IS A COPY OF THE OTHER SIX, AND THAT IS THE PRICE OF ENVOY.
+# THIS FILE IS A COPY OF THE OTHER SEVEN, AND THAT IS THE PRICE OF ENVOY.
 #
 # `aigw run` takes ONE file path. Not a directory, not a repeated flag — checked
 # against `aigw run --help`, 2026-09-06 — and Envoy's config has no `include:`
-# mechanism the way LiteLLM's does. So where ../../litellm/config/all.yaml is seven
+# mechanism the way LiteLLM's does. So where ../../litellm/config/all.yaml is eight
 # include lines that copy nothing, this file has to carry the rules and backends
 # themselves.
 #
@@ -60,11 +60,11 @@
 #
 # NOTHING CHECKS THAT YOU DID ALL THREE. Miss step 3 and the alias answers when
 # .env names its engine and 404s on the default config, with nothing in any log to
-# say why. The six per-engine files stay the place the comments and the reasoning
+# say why. The seven per-engine files stay the place the comments and the reasoning
 # live; this file is where they are assembled, so copy a rule across rather than
 # writing a new one here.
 #
-# WHAT WAS MERGED, AND HOW. Four resources are identical in all six engine files
+# WHAT WAS MERGED, AND HOW. Four resources are identical in all seven engine files
 # — GatewayClass, Gateway, EnvoyProxy and ClientTrafficPolicy — so they appear once
 # below, taken from lms.yaml because it carries the fullest comments. Each engine's
 # AIGatewayRoute is carried over whole with only its `metadata.name` changed.
@@ -403,18 +403,6 @@ spec:
           modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
       timeouts:
         request: 60m
-    # Studio's own embedder, run beside the chat model — evicts nothing while it is the
-    # `Settings -> embedding model`. Not interchangeable with the GGUF above.
-    - matches:
-        - headers:
-            - type: Exact
-              name: x-ai-eg-model
-              value: unsloth-nomic-embed-sidecar
-      backendRefs:
-        - name: unsloth
-          modelNameOverride: nomic-ai/nomic-embed-text-v1.5
-      timeouts:
-        request: 60m
     # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
     #
     # THESE EXIST FOR CLAUDE CODE, AND ONLY AN AGENT NEEDS THEM. The plain
@@ -610,6 +598,49 @@ spec:
       backendRefs:
         - name: ollama-anthropic
           modelNameOverride: gemma4:26b
+      timeouts:
+        request: 60m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# TEI — free, native on the host, port 27000. EMBEDDINGS ONLY on this gateway: the
+# reranker on 27001 cannot be routed by `aigw run` — config/tei.yaml says why.
+# Copied from config/tei.yaml. Keep the two in step.
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  # Its OWN route: HTTPRoute.spec.rules caps at 16 and aigw adds one, so a
+  # single route holds at most 15 aliases. See the header.
+  name: aigw-run-tei
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST. One rule per alias, matched EXACTLY on `x-ai-eg-model` —
+  # which the gateway fills in from the request body's `model` field before
+  # routing. `modelNameOverride` is what actually goes upstream, so the caller
+  # says the alias and the engine sees its own model id.
+  rules:
+    # The same nomic-embed-text v1.5 as `lms-nomic-embed` and the other two, but the
+    # safetensors weights. VECTORS DO NOT MIX ACROSS BUILDS — ../../litellm/config/lms.yaml.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: tei-nomic-embed
+      backendRefs:
+        - name: tei-embed
+          modelNameOverride: nomic-ai/nomic-embed-text-v1.5
       timeouts:
         request: 60m
   # What lands in the access log above. Without these the token fields are empty.
@@ -1164,6 +1195,40 @@ spec:
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
 metadata:
+  name: tei-embed
+  namespace: default
+spec:
+  endpoints:
+    # TEI's embedder runs NATIVELY on the host for the GPU and binds 127.0.0.1 only.
+    # compose.yml maps host.docker.internal to the host gateway so this resolves.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 27000
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: tei-embed
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have to
+    # be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 60m
+  schema:
+    # TEI serves OpenAI's /v1/embeddings, so nothing is translated. No key: TEI reads
+    # none, so there is no BackendSecurityPolicy.
+    name: OpenAI
+  backendRef:
+    name: tei-embed
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
   name: openrouter
   namespace: default
 spec:
@@ -1424,7 +1489,7 @@ spec:
 ---
 # =============================================================================
 # THE MCP SERVERS BEHIND THIS GATEWAY — /mcp on 26000. A TOOL SERVER IS NOT AN
-# ENGINE, so this same block closes EVERY file in this directory: the six engine
+# ENGINE, so this same block closes EVERY file in this directory: the seven engine
 # files, all.yaml and the personal lukas.yaml. `aigw run` reads one file and
 # Envoy has no `include:`, so a copy in each is the only way /mcp answers
 # whatever GATEWAY_ENGINE says. Keep the copies identical — `tail` two files
