@@ -378,7 +378,7 @@ spec:
 ---
 # =============================================================================
 # THE MCP SERVERS BEHIND THIS GATEWAY — /mcp on 26000. A TOOL SERVER IS NOT AN
-# ENGINE, so this same block closes EVERY file in this directory: the six engine
+# ENGINE, so this same block closes EVERY file in this directory: the seven engine
 # files, all.yaml and the personal lukas.yaml. `aigw run` reads one file and
 # Envoy has no `include:`, so a copy in each is the only way /mcp answers
 # whatever GATEWAY_ENGINE says. Keep the copies identical — `tail` two files

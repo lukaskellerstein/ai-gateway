@@ -20,8 +20,9 @@ curl http://localhost:24000/v1/chat/completions \
   -d '{"model":"lms-gemma4-e4b","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-It supports six engines: **LMStudio, Unsloth Studio and Ollama** on your own machine, and
-**OpenRouter, OpenAI and Cerebras** in the cloud. An engine is an engine — the alias prefix says
+It supports seven engines: **LMStudio, Unsloth Studio, Ollama and TEI** on your own machine, and
+**OpenRouter, OpenAI and Cerebras** in the cloud. TEI is the one that embeds and reranks, and it
+does no chat. An engine is an engine — the alias prefix says
 which is which, and the rest names the model: `openrouter-gemma4-26b` is the same weights as
 `lms-gemma4-26b` on hardware you do not own.
 
@@ -35,14 +36,17 @@ the word and `up -d` again: the names differ only in the prefix.
   Both answer the same alias names, so a caller moves between them unchanged.
 - **Virtual keys, spend logs and budget ceilings** — on LiteLLM, backed by its own postgres.
   Local routes are shadow-priced, so a ceiling still trips on free traffic.
-- **Every calling style is a worked example** — 29 test scenarios per gateway, from raw
+- **Every calling style is a worked example** — 37 test scenarios per gateway, from raw
   `urllib` to the Claude Agent SDK, Codex, OpenCode, LangGraph and DeepAgents.
 - **Every engine at once, or exactly one** — the default config on both gateways serves all
-  six engines. Name a single engine instead and every other alias is absent, which is how you
+  seven engines. Name a single engine instead and every other alias is absent, which is how you
   get a gateway that cannot reach a paid provider.
+- **A local reranker** — `tei-bge-reranker-m3`, Cohere-shaped on LiteLLM's `/rerank`. Envoy
+  cannot route one, and its tests prove that rather than fake it.
 - **A measured overhead of 10–20 ms**, flat, on both gateways —
   [`benchmark/`](benchmark/README.md) is the proof.
-- **No build step and almost no code** — stock images, two `compose.yml`, fifteen config files.
+- **No build step and almost no code** — stock images, two `compose.yml`, seventeen config files
+  and one shell script that starts TEI.
   There is no Dockerfile in this repo.
 
 ## One repo, separate projects
@@ -97,8 +101,9 @@ flowchart LR
     engine{{"GATEWAY_ENGINE<br/>one per project"}}
 
     lms["<b>LMStudio</b> · :1234<br/>lms-gemma4-e4b · lms-gemma4-12b · lms-gemma4-26b · lms-nomic-embed"]
-    uns["<b>Unsloth</b> · :8888<br/>unsloth-gemma4-e4b · unsloth-gemma4-12b · unsloth-gemma4-26b · unsloth-nomic-embed · unsloth-nomic-embed-sidecar"]
+    uns["<b>Unsloth</b> · :8888<br/>unsloth-gemma4-e4b · unsloth-gemma4-12b · unsloth-gemma4-26b · unsloth-nomic-embed"]
     oll["<b>Ollama</b> · :11434<br/>ollama-gemma4-e4b · ollama-gemma4-26b · ollama-nomic-embed"]
+    tei["<b>TEI</b> · :27000 · :27001<br/>tei-nomic-embed · tei-bge-reranker-m3 (24000 only)"]
     orr["<b>OpenRouter</b> · cloud<br/>openrouter-gemma4-26b · openrouter-gemma4-26b-free"]
     oai["<b>OpenAI</b> · cloud<br/>openai-gpt54-mini · openai-embed3-small"]
     cer["<b>Cerebras</b> · cloud<br/>cerebras-qwen38-27b"]
@@ -107,7 +112,7 @@ flowchart LR
     callers -.->|"/v1/chat/completions<br/>/anthropic/v1/messages · /mcp"| env
     litellm --> engine
     env --> engine
-    engine -.-> lms & uns & oll
+    engine -.-> lms & uns & oll & tei
     engine -.-> orr & oai & cer
 
     classDef onhost stroke-width:3px
@@ -149,7 +154,7 @@ curl -fsS http://localhost:24000/health/readiness   # -> {"status":"healthy","db
 ```
 
 Then get the models for **whichever engines you actually run** — three each. The default config
-registers all six engines, and an alias whose engine is not running simply fails when called;
+registers all seven engines, and an alias whose engine is not running simply fails when called;
 nothing else breaks. To serve one engine only, set `GATEWAY_ENGINE` to its name.
 The commands are in that engine's config file, which also carries every trap it has:
 [`litellm/config/lms.yaml`](litellm/config/lms.yaml),
@@ -191,7 +196,7 @@ commented, and this table is the short version.
 
 | Variable | Values | Default | In | Decides |
 |:--|:--|:--|:--|:--|
-| `GATEWAY_ENGINE` | `all` · `lms` · `unsloth` · `ollama` · `openrouter` · `openai` | `all` | both | which engines run, and so which aliases exist. `all` is a real file, `config/all.yaml`, not a list you write |
+| `GATEWAY_ENGINE` | `all` · `lms` · `unsloth` · `ollama` · `tei` · `openrouter` · `openai` · `cerebras` | `all` | both | which engines run, and so which aliases exist. `all` is a real file, `config/all.yaml`, not a list you write |
 | `AIGW_DEBUG` | `false` · `true` — **never empty** | `false` | `envoy/` | per-request logging. An empty value crash-loops the container: aigw parses it as a bool |
 | `LITELLM_MASTER_KEY` | any string | `sk-litellm-master` | `litellm/` | the admin credential that mints virtual keys |
 | `UNSLOTH_API_KEY` | a key | *empty* | both | Unsloth answers `401` on every route without it |
@@ -209,8 +214,8 @@ registered and answers `401` when something calls it.
 **`GATEWAY_ENGINE` names any file in `config/`, including one you never commit.** That is how
 you serve *your* machine's models without putting a model list in the repo: write
 `config/<yourname>.yaml`, add it to `.gitignore`, and set the word. This laptop has
-`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio, 48
-aliases on 24000 and 60 route rules on 26000, and no hosted route at all so it cannot spend.
+`lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio plus TEI's,
+49 aliases on 24000 and 60 route rules on 26000, and no hosted route at all so it cannot spend.
 Each gateway needs its own copy; neither reads the other's.
 
 ## Endpoints
@@ -223,12 +228,13 @@ it returns — are in [`litellm/README.md`](litellm/README.md#call-it) and
 |:--|:--|:--|
 | the OpenAI route | `POST /v1/chat/completions` | same |
 | embeddings, on the engine's `*-embed` alias | `POST /v1/embeddings` | same |
+| rerank, Cohere-shaped, on `tei-bge-reranker-m3` | `POST /rerank` · `/v1/rerank` · `/v2/rerank` | **none** — [`envoy/config/tei.yaml`](envoy/config/tei.yaml) has the three attempts |
 | the Responses API — the Codex SDK needs it | `POST /v1/responses` | same |
 | which aliases are being served right now | `GET /v1/models` | same |
 | the Anthropic route — Claude Code drives it | `POST /v1/messages`, on the plain alias | `POST /anthropic/v1/messages`, on `<alias>-anthropic` |
 | the health probe | `GET /health/readiness` | `GET /v1/models` |
 
-All six verified on both ports on 2026-09-05, engine `unsloth`. **On 26000 the Anthropic route
+All six verified on both ports on 2026-09-05, engine `unsloth`; rerank on 2026-10-08, engine `tei`. **On 26000 the Anthropic route
 needs the `-anthropic` name** — `unsloth-gemma4-e4b-anthropic`, not `unsloth-gemma4-e4b`. That
 alias is the same model on the same engine, reached through a backend that speaks Anthropic
 natively so nothing is translated; [the tests section](#what-has-actually-been-run) says what happens when
@@ -256,23 +262,24 @@ Call these names, never a model name. **Both gateways use the same names**, whic
 whole reason more than one of them exists.
 
 **Every alias names its engine** — `lms-*` is LMStudio, `unsloth-*` is Unsloth, `ollama-*` is
-Ollama, `openrouter-*` is OpenRouter, `openai-*` is OpenAI, `cerebras-*` is Cerebras. There is deliberately no
+Ollama, `tei-*` is TEI, `openrouter-*` is OpenRouter, `openai-*` is OpenAI, `cerebras-*` is Cerebras. There is deliberately no
 engine-neutral name and no capability name, so a caller always knows which engine answered
 and, just as importantly, **who is being billed**. The first three are this machine and free;
 the last three are the cloud and cost money.
 
-|  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) | OpenRouter | OpenAI | Cerebras |
-|:--|:--|:--|:--|:--|:--|:--|
-| **Gemma 4 E4B** — chat, small | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — |
-| **Gemma 4 12B** — chat, dense | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — |
-| **Gemma 4 26B** — chat, large | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
-| **Qwen 3.8 27B** — chat, large | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
-| **Other chat** | — | — | — | — | `openai-gpt54-mini` | — |
-| **Embed** | `lms-nomic-embed` | `unsloth-nomic-embed` · `unsloth-nomic-embed-sidecar` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
-| **Costs** | free | free | free | **paid** | **paid** | **paid** |
+|  | LMStudio (`:1234`) | Unsloth (`:8888`) | Ollama (`:11434`) | TEI (`:27000` `:27001`) | OpenRouter | OpenAI | Cerebras |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| **Gemma 4 E4B** — chat, small | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — | — |
+| **Gemma 4 12B** — chat, dense | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — | — |
+| **Gemma 4 26B** — chat, large | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | — | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
+| **Qwen 3.8 27B** — chat, large | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
+| **Other chat** | — | — | — | — | — | `openai-gpt54-mini` | — |
+| **Embed** | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | `tei-nomic-embed` | — | `openai-embed3-small` | — |
+| **Rerank** | — | — | — | `tei-bge-reranker-m3` (24000 only) | — | — | — |
+| **Costs** | free | free | free | free | **paid** | **paid** | **paid** |
 
 That is every alias this repo defines **by hand**. `GATEWAY_ENGINE` selects **one column**, so
-a gateway serves one to seven names at a time — never the whole table. The rows are the point:
+a gateway serves one to six names at a time — never the whole table. The rows are the point:
 the same model sits across a row, so changing the engine word and re-running the tests
 measures the engine and nothing else. You do not need every engine — name the one you have,
 and the rest are not in the config at all.
@@ -295,10 +302,11 @@ differently on `/v1/messages`. `litellm/README.md` § Provider × route has the 
 | `unsloth-gemma4-26b-fast` | `unsloth/gemma-4-26B-A4B-it-qat-GGUF` | `openai/` | both | 253952 | QAT | **the fast route**: the same file with thinking **off**, stored on the route — see below |
 | `unsloth-qwen38-27b` | `unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL` | `openai/` | both | 253952 | **UD-Q8_K_XL** | same model as `lms-qwen38-27b`, **not the same build**: Unsloth serves its Anthropic route for GGUF only, and the MLX build answered 503 there |
 | `unsloth-nomic-embed` | `second-state/Nomic-embed-text-v1.5-Embedding-GGUF` | `openai/` | both | 2048 | Q8_0 | 768 dims |
-| `unsloth-nomic-embed-sidecar` | `nomic-ai/nomic-embed-text-v1.5` | `openai/` | both | 512 | nomic-ai release | 768 dims. Studio's own `Settings -> embedding model`, run **beside** the chat model, so it evicts nothing — every other Unsloth alias does. Not interchangeable with `unsloth-nomic-embed` |
 | `ollama-gemma4-e4b` | `gemma4:e4b` | `openai/` | both | 122880 | **Q4_K_M** | not QAT — see below |
 | `ollama-gemma4-26b` | `gemma4:26b` | `openai/` | both | 253952 | **Q4_K_M** | not QAT |
 | `ollama-nomic-embed` | `nomic-embed-text` | `openai/` | both | 2048 | **F16** | 768 dims, the heaviest of the three |
+| `tei-nomic-embed` | `nomic-ai/nomic-embed-text-v1.5` | `openai/` | both | 8192 | safetensors | 768 dims, on Metal; the one nomic alias with an 8192 window |
+| `tei-bge-reranker-m3` | `BAAI/bge-reranker-v2-m3` | `huggingface/` | **24000 only** | 8192 | safetensors | **rerank**, not chat: a 568M multilingual cross-encoder. Cohere-shaped on `/rerank`; ignores `top_n` |
 | `openrouter-gemma4-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | both | 245760 | not stated | **$0.07 · $0.34** per 1M in·out |
 | `openrouter-gemma4-26b-free` | `google/gemma-4-26b-a4b-it:free` | `openrouter/` | **24000 only** | 229376 | not stated | free, rate-limited — see below |
 | `openrouter-qwen38-27b` | `qwen/qwen3.8-27b` | `openrouter/` | both | 245760 | not stated | **$0.025–$0.45 · $1.875–$4.40** per 1M in·out, by provider. LiteLLM logs OpenRouter's own `usage.cost`; the configured $0.45 · $4.40 is only the fallback. **It reasons** |
@@ -320,8 +328,8 @@ auto-discovery service in `litellm/` used to add every model an engine held on d
 removed on 2026-09-06 — see [What was removed](#what-was-removed).
 
 **The default config serves all of them at once.** `GATEWAY_ENGINE=all` reads `config/all.yaml`
-in either project. On LiteLLM that file is seven `include:` lines and copies nothing; on Envoy
-it copies the six engine files, because `aigw run` takes one file path and Envoy's config has
+in either project. On LiteLLM that file is eight `include:` lines and copies nothing; on Envoy
+it copies the seven engine files, because `aigw run` takes one file path and Envoy's config has
 no include mechanism. **So adding an alias to Envoy is two edits there, not one.**
 
 **The names changed on 2026-09-29, and the old ones now 404.** Until then an alias carried only
@@ -426,6 +434,12 @@ Each engine's config file carries its own load commands and every trap it has, n
 aliases they apply to — [`litellm/config/lms.yaml`](litellm/config/lms.yaml),
 [`litellm/config/unsloth.yaml`](litellm/config/unsloth.yaml),
 [`litellm/config/ollama.yaml`](litellm/config/ollama.yaml). Read the one you are running.
+
+**TEI loads nothing on a call, and `up` starts it for you.** It runs one fixed model per process —
+the embedder on 27000, the reranker on 27001 — and each gateway's `compose.yml` has a `tei`
+service that starts the ones it needs on `podman compose up` and stops them on `down` once no
+gateway uses them. **`compose restart` does not**: after a restart or a reboot, run `up -d`
+again. [`tei/README.md`](tei/README.md) has the install and the checks.
 
 ## Tests
 
@@ -582,10 +596,10 @@ ai-gateway/
 ├── TESTING.md                  the handover: versions, the coverage matrix, every OPEN
 │                               bug with a reproduction, every FIXED one with the dead ends
 ├── litellm/                    compose project `ai-gateway`            PORT 24000
-│   ├── compose.yml                 postgres · litellm
+│   ├── compose.yml                 postgres · litellm · tei (runs ../tei/tei.sh)
 │   ├── .env.example                tracked; the key lines are blank BY DESIGN
 │   ├── config/                     the alias list — YAML, one file per engine,
-│   │                               plus all.yaml which INCLUDES all five
+│   │                               plus all.yaml which INCLUDES all seven
 │   ├── tests/                      SEVEN folders: raw HTTP, the OpenAI client, 5 agent SDKs.
 │   │                               Each: settings.py (edit it when you copy the folder),
 │   │                               run_benchmark.py and RESULTS.md (cache and speed, per model)
@@ -593,18 +607,24 @@ ai-gateway/
 ├── benchmark/                  what the GATEWAY itself costs — the only thing here
 │                               that calls both ports. No dependencies
 ├── envoy/                      compose project `ai-gateway-envoy`      PORT 26000
-│   ├── compose.yml                 ONE service: aigw. No database
+│   ├── compose.yml                 ONE container: aigw. No database · tei (../tei/tei.sh)
 │   ├── .env.example
 │   ├── config/                     the alias list — Kubernetes custom resources,
-│   │                               plus all.yaml which COPIES all five
+│   │                               plus all.yaml which COPIES all seven
 │   ├── tests/                      the same SEVEN, all of them working
+│   └── README.md
+├── tei/                        NOT a compose project: TEI runs natively, for the Metal GPU
+│   ├── tei.sh                      THE ONE FILE BOTH GATEWAYS SHARE: their `tei` service
+│   │                               runs it on `up` and `down` — embedder 27000, reranker 27001
 │   └── README.md
 └── .claude/                    the working contract for AI agents in this repo
 ```
 
-**Nothing is shared between the folders.** Each carries everything it needs, including its own
-copy of anything a sibling also uses, so either can be deleted whole. That is not a theory:
-`mlflow/` was deleted on 2026-09-04 and nothing else stopped working.
+**Nothing is shared between the gateway folders but `tei/tei.sh`.** Each carries everything it
+needs, including its own copy of anything a sibling also uses, so either can be deleted whole.
+That is not a theory: `mlflow/` was deleted on 2026-09-04 and nothing else stopped working.
+`tei/tei.sh` is the one file both `compose.yml` run, so TEI's start flags live once; without
+`tei/`, `up` exits 1 and each gateway still serves everything but its `tei-*` aliases.
 
 ## Design decisions
 
@@ -723,6 +743,13 @@ non-empty rather than to its meaning, so **`GATEWAY_DISCOVERY=off` switched disc
 once", and `GATEWAY_ENGINE=all` does that from files you can read without running anything.
 What is genuinely lost is the models on your disk that no alias names — those now need a
 hand-written entry, which is the point.
+
+**`unsloth-nomic-embed-sidecar` went on 2026-10-08, with no fallback.** It was Unsloth
+Studio's own embedder (`Settings -> embedding model`), which runs beside the chat model and so
+evicts nothing — the reason it existed. `tei-nomic-embed` does the same job better: the same
+nomic-ai weights and the same vectors (cosine 0.999998), an 8192-token window against Studio's
+512, and no Studio setting that silently turns it back into a model swap. Its two callers,
+`ai-agent-rag` and `ai-agent-memory`, had already moved to `tei-nomic-embed`.
 
 ## License
 

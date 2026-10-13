@@ -7,7 +7,7 @@
 #
 #   cd envoy && podman compose up -d
 #
-# ONE SERVICE, ONE STOCK IMAGE, NO DATABASE. This is `aigw run` — Envoy AI
+# ONE CONTAINER, ONE STOCK IMAGE, NO DATABASE. This is `aigw run` — Envoy AI
 # Gateway's STANDALONE MODE, which runs a real Envoy data plane from a config
 # file with no Kubernetes and no Envoy Gateway install. The image ships the Envoy
 # binary already downloaded, so there is no build step and nothing is fetched at
@@ -15,10 +15,10 @@
 #
 # ONE WORD IN ./.env DECIDES WHAT THIS SERVES:
 #
-#   GATEWAY_ENGINE   all | lms | unsloth | ollama | openrouter | openai | cerebras
+#   GATEWAY_ENGINE   all | lms | unsloth | ollama | tei | openrouter | openai | cerebras
 #                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 22 route rules, one
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 35 route rules, one
 # gateway. Name a single engine instead and only that engine's rules exist, which
 # is how you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -65,19 +65,20 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one self-contained file per engine:
     #
-    #   config/all.yaml         33 rules: everything below       THE DEFAULT
+    #   config/all.yaml         35 rules: everything below       THE DEFAULT
     #   config/lms.yaml         5 aliases: 4 chat, 1 embedder      free
-    #   config/unsloth.yaml     6 aliases: 4 chat, 2 embedders     free
+    #   config/unsloth.yaml     6 aliases: 5 chat, 1 embedder      free
     #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
+    #   config/tei.yaml         1 alias:  1 embedder               free
     #   config/openrouter.yaml  2 aliases: 2 chat                  PAID
     #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
     #   config/cerebras.yaml    1 alias:  1 chat                   PAID
     #
-    # Plus an `-anthropic` rule for every chat alias — 14 in all.yaml.
+    # Plus an `-anthropic` rule for every chat alias — 15 in all.yaml.
     #
     # `aigw run` TAKES ONE FILE PATH — not a directory, not a repeated flag
     # (checked against `aigw run --help`, 2026-09-06) — and Envoy's config has no
-    # `include:` mechanism. So config/all.yaml COPIES the six files rather than
+    # `include:` mechanism. So config/all.yaml COPIES the seven files rather than
     # referencing them, and AN ALIAS IS THREE EDITS: the other gateway's list,
     # this engine's file, and all.yaml. Nothing checks that you did all three.
     #
@@ -137,3 +138,26 @@ services:
       # before it reads one line of config. The other variables here are strings
       # and are happy blank; this one is not.
       AIGW_DEBUG: ${AIGW_DEBUG:-false}
+
+  # ---------------------------------------------------------------------------
+  # TEI — the embedder, on the HOST and not in a container.
+  # ---------------------------------------------------------------------------
+  # A provider service: compose runs ../tei/tei.sh on the Mac instead of starting a
+  # container, because TEI reaches the GPU only through Metal and a container here
+  # gets Vulkan alone. `up` starts each model whose port does not answer; `down`
+  # stops a model once no gateway that asked for it is left. A config that names no
+  # TEI alias (GATEWAY_ENGINE=lms, …) starts nothing. ../tei/tei.sh is the one file
+  # the two gateways share, and it carries the measurements.
+  #
+  # RUN COMPOSE FROM THIS FOLDER: the path is relative to where you stand, so
+  # `-f envoy/compose.yml` from the repo root fails. `compose restart` does not
+  # call it either — after a restart or a reboot, `up -d` again brings TEI back.
+  #
+  # NOTHING DEPENDS ON IT, ON PURPOSE: if TEI fails, `up` exits 1 and says why, and
+  # envoy starts anyway — only the tei-* alias are missing.
+  tei:
+    provider:
+      type: ../tei/tei.sh
+      options:
+        engine: ${GATEWAY_ENGINE:-all}
+        models: embed                   # not rerank: aigw cannot route one to TEI, config/tei.yaml

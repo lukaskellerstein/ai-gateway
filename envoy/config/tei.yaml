@@ -1,0 +1,266 @@
+# TEI — Hugging Face Text Embeddings Inference, on this machine — 1 alias, free.
+#
+#   tei-nomic-embed   nomic-ai/nomic-embed-text-v1.5   embeddings, 768 dims
+#
+# TEI RUNS NATIVELY ON THE HOST, for the Metal GPU — ../../tei/README.md starts it. It serves
+# one model per process: the embedder on 27000, the reranker on 27001.
+#
+# THE RERANKER IS NOT HERE, AND IN `aigw run` IT CANNOT BE — measured 2026-10-08.
+# `tei-bge-reranker-m3` answers on ../../litellm (24000) and nowhere on this gateway. Three ways
+# were tried against the same TEI on 27001:
+#
+#   1. The AI rerank route, /cohere/v2/rerank, on a `Cohere`-schema backend. The PATH works —
+#      no `version` sends it upstream as /rerank — and the body passes through untouched, but
+#        a Cohere body (`documents`) gets TEI's own 422: `missing field texts`;
+#        a TEI body (`texts`) gets Envoy's 500: `failed to unmarshal body: Mismatch type
+#        cohere.RerankV2Response with value array`.
+#      The translator (internal/translator/cohere_rerank_v2.go) decodes every reply into
+#      Cohere's object, and TEI answers with a bare JSON array.
+#   2. A plain Gateway API HTTPRoute, /tei/rerank → TEI /rerank, with no AI layer at all. The
+#      AI filter covers the whole listener and answers 404 `unsupported path: /tei/rerank` first.
+#   3. The same HTTPRoute on a SECOND LISTENER (1976), with the AI route bound to the first
+#      only: the same 404. A second Gateway is refused outright — `multiple gateways are not
+#      supported`.
+#
+# WHAT WOULD CHANGE IT: TEI serving a Cohere-shaped rerank (huggingface/text-embeddings-inference
+# #683, open, milestone v1.10.0). Then way 1 works with a rule and a backend and no other edit.
+# What is NOT acceptable is a Lua or ExtProc filter rewriting `documents` <-> `texts`: that is a
+# shim, and this repo proves a gap rather than faking past it. GUARDED BY:
+# ../tests/2_openai_client/08_rerank.py, which reads the gap from settings.py and checks it.
+#
+# THE SHAPE OF THIS FILE: lms.yaml's resources minus the Secret and BackendSecurityPolicy —
+# TEI reads no key — and minus an `-anthropic` twin, because an embedder has no chat to pass
+# through.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      # 1975 INSIDE the container; compose publishes it on 26000. Changing this
+      # number means changing compose.yml's port mapping too.
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      # `error` keeps the container log to access lines plus real failures. Raise
+      # to `debug` and Envoy dumps request headers — INCLUDING the Authorization
+      # header the extproc injects with the backend key. Upstream's own template
+      # pins http and ext_proc back to `info` for exactly that reason.
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        # One JSON line per LLM request, carrying TOKEN COUNTS AND TIMINGS ONLY —
+        # never the prompt or the response.
+        #
+        # IT ONLY REACHES `compose logs` WHEN AIGW_DEBUG=true. Envoy runs as a
+        # child of aigw, and with debug off its stdout goes to a file inside the
+        # container (~/.local/state/aigw/envoy-runs/0/stdout.log) that no shell
+        # can reach — the image is distroless. Verified 2026-09-04: a call with
+        # AIGW_DEBUG unset logged nothing; the same call with it true logged
+        # `{"gen_ai.request.model":"ollama-gemma4-e4b", ... "response_code":200}`.
+        #
+        # AIGW_DEBUG=true ALSO DUMPS FULL REQUEST AND RESPONSE BODIES — prompts
+        # and replies included, with only the Authorization header redacted. That
+        # is the closest thing here to LiteLLM's Logs tab, and the reason not to
+        # leave it on.
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              # These dynamic-metadata keys must match the llmRequestCosts names
+              # declared on the AIGatewayRoute below, or they log as empty.
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              request.path: "%REQ(:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # THE ALIAS LIST — one rule, matched EXACTLY on the `x-ai-eg-model` header, which the
+  # gateway fills in from the request body's `model` field. `modelNameOverride` is what goes
+  # upstream; TEI serves one model and ignores the name, so it is set only to keep the access
+  # log honest.
+  rules:
+    # The same nomic-embed-text v1.5 as `lms-nomic-embed` and the other two, but the
+    # safetensors weights. VECTORS DO NOT MIX ACROSS BUILDS — ../../litellm/config/lms.yaml.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: tei-nomic-embed
+      backendRefs:
+        - name: tei-embed
+          modelNameOverride: nomic-ai/nomic-embed-text-v1.5
+      timeouts:
+        request: 60m
+  # What lands in the access log above. Without these the token fields are empty.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: tei-embed
+  namespace: default
+spec:
+  endpoints:
+    # TEI's embedder runs NATIVELY on the host for the GPU and binds 127.0.0.1 only.
+    # compose.yml maps host.docker.internal to the host gateway so this resolves.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 27000
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: tei-embed
+  namespace: default
+spec:
+  timeouts:
+    # The per-BACKEND ceiling, separate from the per-ROUTE one above. Both have to
+    # be raised: whichever is smaller wins, and upstream's default here is 3m.
+    request: 60m
+  schema:
+    # TEI serves OpenAI's /v1/embeddings, so nothing is translated. No key: TEI reads
+    # none, so there is no BackendSecurityPolicy.
+    name: OpenAI
+  backendRef:
+    name: tei-embed
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    # ENVOY'S DEFAULT IS 32 KiB AND THAT IS TOO SMALL FOR AI TRAFFIC. A base64
+    # image or a long agent transcript exceeds it and the request fails before it
+    # reaches the model. Upstream ships this same 50Mi policy in its own example.
+    bufferLimit: 50Mi
+---
+# =============================================================================
+# THE MCP SERVERS BEHIND THIS GATEWAY — /mcp on 26000. A TOOL SERVER IS NOT AN
+# ENGINE, so this same block closes EVERY file in this directory: the seven engine
+# files, all.yaml and the personal lukas.yaml. `aigw run` reads one file and
+# Envoy has no `include:`, so a copy in each is the only way /mcp answers
+# whatever GATEWAY_ENGINE says. Keep the copies identical — `tail` two files
+# and compare.
+#
+# A caller connects to ONE endpoint and gets the tools of every backend below,
+# each renamed `<backend>__<tool>`. It never learns where a server runs, so
+# moving one changes nothing that calls the gateway.
+#
+# NOTHING CHECKS THE CALLER, the same as on the LLM routes: anything that
+# reaches 26000 can list and call these tools. `securityPolicy.apiKeyAuth` on
+# the MCPRoute is the lever when a server with real side effects goes here. It
+# is not set, because the test server's two tools return fixed strings.
+#
+# `bench-hardware` IS THE TEST SERVER, AND IT RUNS ONLY WHILE A TEST RUNS: each
+# agent folder in ../tests starts its own `mcp_server.py --http 26090` for one
+# scenario and stops it after. 26090 and not LiteLLM's 24090, so both suites
+# can run at the same time.
+#
+# SO /mcp ANSWERS 500 BETWEEN TEST RUNS, and that is correct. With no backend
+# up, `initialize` gets `failed to create MCP session to any backend` (measured
+# 2026-10-07). LiteLLM answers at the same moment with an empty tool list.
+#
+# NOT `--mcp-config`. aigw reads that flag ONLY when no config file is given
+# (cmd/aigw/config.go, `readConfig`), and compose always passes one, so the flag
+# would be ignored without an error. An MCPRoute in this file is read by the
+# same code path as the AIGatewayRoutes above (cmd/aigw/translate.go,
+# `case "MCPRoute"`).
+#
+# GUARDED BY: ../tests/4_deepagents/08_gateway_mcp.py and the same scenario in
+# folders 3, 5, 6 and 7. Delete this block and every one of them goes red.
+# =============================================================================
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: aigw-run-mcp
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  path: /mcp
+  backendRefs:
+    # The backend's NAME is the tool prefix, and a Kubernetes name allows no
+    # underscore — hence `bench-hardware`, where LiteLLM says `bench_hardware`.
+    - name: bench-hardware
+      kind: Backend
+      group: gateway.envoyproxy.io
+      path: /mcp
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: bench-hardware
+  namespace: default
+spec:
+  endpoints:
+    # The test server binds 127.0.0.1 on the HOST. compose.yml maps
+    # host.docker.internal to the host gateway, as it does for the engines.
+    - fqdn:
+        hostname: host.docker.internal
+        port: 26090

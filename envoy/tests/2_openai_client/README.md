@@ -1,10 +1,11 @@
 # 2 — OpenAI client
 
 The gateway driven through **OpenAI's own Python client** — the way most
-projects will call it. Six scripts against **26000**: three prove a kind of
+projects will call it. Eight scripts against **26000**: three prove a kind of
 call works, the fourth proves this gateway's calling contract is still what
-`settings.py` says it is, the fifth that the thinking level reaches the model, and
-the sixth that a `-fast` alias answers with thinking off.
+`settings.py` says it is, the fifth that the thinking level reaches the model, the
+sixth that a `-fast` alias answers with thinking off, and the last two embed and
+rerank.
 
 This is folder 2 of seven. The index, and the six other ways in, are in
 [`../README.md`](../README.md).
@@ -17,7 +18,9 @@ This is folder 2 of seven. The index, and the six other ways in, are in
 | `04_gateway_contract.py` | **this gateway's contract**, and that `settings.py`'s table still describes it |
 | `05_reasoning_effort.py` | `reasoning_effort` reaches a Qwen 3.8 template; "not applicable" on any other alias |
 | `06_thinking_off.py` | a `-fast` alias answers with no thinking where its base alias thinks, on chat and `/v1/responses` — **and is the example of calling one: only the name changes**. "Not applicable" on any other alias |
-| `run_all.py` | runs all six and prints a pass/fail table |
+| `07_embeddings.py` | an embedding alias (`settings.EMBED_MODEL`) returns one vector per input, and the query lands nearer its answer than an unrelated passage |
+| `08_rerank.py` | **the declared absence**: `tei-bge-reranker-m3` is not listed and `/cohere/v2/rerank` answers 404 — `aigw run` cannot route a rerank to TEI. Goes red the day it can |
+| `run_all.py` | runs all eight and prints a pass/fail table |
 | `run_benchmark.py` | times the shared three-turn task — never run by `run_all.py` |
 
 Every script prints the **full** response and then the extracted text, so it
@@ -56,6 +59,7 @@ eventually assumes away.
 | `echoes_alias` | **False** — `response.model` is `google/gemma-4-e4b`; `modelNameOverride` rewrote it and nothing undoes that |
 | `exposes_route_limits` | **False** — no `/model/info` route, and a route rule carries a timeout but no token ceiling |
 | `loopback_only` | **True** — this Mac's network address refuses 26000; `../../compose.yml` publishes on `127.0.0.1` |
+| `reranks` | **False** — no rule sends the reranker to `/cohere/v2/rerank`; `../../config/tei.yaml` has the three attempts. `08_rerank.py` checks it |
 
 **THIS GATEWAY IS NOT A COPY OF THE OTHER ONE.** It lists its models like LiteLLM,
 and then checks no caller key at all and echoes the upstream model id rather than the
@@ -196,8 +200,10 @@ without depending on how wordy the model is.
 
 ## Adding a test
 
-Name it `06_something.py`, write one `scenario(gateway, model)` function, and end
-it with `sys.exit(run(scenario, "Test 6 — ..."))`. `run_all.py` globs `NN_*.py`,
+Name it `09_something.py`, write one `scenario(gateway, model)` function, and end
+it with `sys.exit(run(scenario, "Test 9 — ..."))`. A test of a fixed alias of
+another kind — an embedder, a reranker — passes it as `run(..., alias=...)`, because
+`run_all.py` hands every script a chat alias. `run_all.py` globs `NN_*.py`,
 so it picks the new file up with no edit.
 
 **Send `**gateway.body_extras` in every request.** On this gateway it carries the
@@ -207,8 +213,6 @@ same scenario file be copied to the LiteLLM project unchanged — every file but
 
 ## What is NOT tested here
 
-- **Embeddings.** The `*-embed` aliases route fine, but the OpenAI chat client
-  these scripts share does not drive `/v1/embeddings`.
 - **`/anthropic/v1/messages`.** This gateway HAS it, translated onto the same
   backend, and the OpenAI client cannot speak it. Untested here.
 - **`/mcp`.** An agent's surface, not this client's: folders 3 to 7 each call a tool

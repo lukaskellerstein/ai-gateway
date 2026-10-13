@@ -1,0 +1,74 @@
+# TEI — Hugging Face Text Embeddings Inference (ports 27000 and 27001) — the whole config for
+# this engine.
+#
+# ONE ENGINE RUNS AT A TIME. `GATEWAY_ENGINE=tei` in .env points compose at THIS file, and the
+# two aliases below are then the entire vocabulary the gateway serves.
+#
+# THIS FILE IS SELF-CONTAINED: it includes settings.yaml for the three settings blocks and
+# declares its own aliases.
+#
+# THE ONE ENGINE HERE THAT RERANKS. TEI serves an embedder and a cross-encoder reranker, and
+# nothing else — no chat. Four notes:
+#
+#   TWO PROCESSES, TWO PORTS. TEI serves exactly one model per process, so the embedder is on
+#   27000 and the reranker on 27001. TEI runs NATIVELY on the host for the Metal GPU, like the
+#   other local engines, because a Podman container gets only a Vulkan GPU and TEI has no
+#   Vulkan backend. The `tei` service in ../compose.yml starts both on `up` — a provider
+#   service that runs ../../tei/tei.sh on the host — and stops them on `down` once no gateway
+#   uses them.
+#
+#   RERANK IS COHERE-SHAPED HERE AND TEI-SHAPED UPSTREAM. A caller POSTs /rerank (or /v1/rerank,
+#   /v2/rerank) with `query` + `documents`; the `huggingface/` provider rewrites that to TEI's
+#   own `query` + `texts` and maps TEI's bare `[{index, score}]` back to Cohere's `results`.
+#   ../../envoy does no such translation — see envoy/config/tei.yaml.
+#
+#   THE KEY IS IGNORED, AND ONE IS SET ANYWAY. TEI is started without --api-key and reads no
+#   Authorization header. `sk-tei` is here because LiteLLM's providers want SOME key string.
+#
+#   BOTH ROUTES ARE PRICED AT 0, like every local embedder. A rerank is billed per query by the
+#   cloud (`input_cost_per_query`), and 0 is stated so it cannot read as unpriced.
+#
+# Start the two jobs before calling either alias — ../../tei/README.md.
+
+include:
+  - settings.yaml
+
+model_list:
+  # The same nomic-embed-text v1.5 the other three local engines serve, at 768 dimensions —
+  # but the safetensors weights, not a GGUF build. TEI also allows 8192 tokens per input where
+  # LMStudio and Ollama stop at 2048 (TEI's own log: `Maximum number of tokens per request: 8192`).
+  #
+  # VECTORS DO NOT MIX ACROSS BUILDS — see the note in lms.yaml. An index built with
+  # `ollama-nomic-embed` and queried with this alias returns quietly worse neighbours.
+  #
+  # NOMIC WANTS A TASK PREFIX ON EVERY INPUT — `search_query: ` or `search_document: ` — and TEI
+  # adds none. That is the caller's job, on every engine.
+  - model_name: tei-nomic-embed
+    litellm_params:
+      model: openai/nomic-ai/nomic-embed-text-v1.5
+      api_base: os.environ/TEI_EMBED_API_BASE
+      api_key: "sk-tei"                   # ignored by TEI; see the note above
+      input_cost_per_token: 0             # free, stated so it cannot read as unpriced
+      output_cost_per_token: 0
+    model_info:
+      max_input_tokens: 8192
+
+  # bge-reranker-v2-m3: a multilingual cross-encoder, XLM-RoBERTa large, 568M parameters. It
+  # scores each (query, document) pair; it embeds nothing.
+  #
+  # MEASURED 2026-10-08 on the M5 Max, 179-token documents: one 31 ms, 20 0.76 s, 32 1.28 s,
+  # 128 5.5 s on an idle GPU — about 40 ms a document — and ~1.3x that while another engine
+  # kept the GPU 84% busy. The ranking was right — the relevant passage 0.989, every off-topic
+  # one 0.0001.
+  #
+  # AT MOST 128 DOCUMENTS PER CALL. TEI's own default is 32 and answers 422 above it; the
+  # start flags in ../../tei/tei.sh raise it to 128 for a top-100 rerank.
+  - model_name: tei-bge-reranker-m3
+    litellm_params:
+      model: huggingface/BAAI/bge-reranker-v2-m3
+      api_base: os.environ/TEI_RERANK_API_BASE
+      api_key: "sk-tei"
+      input_cost_per_query: 0
+    model_info:
+      mode: rerank
+      max_input_tokens: 8192

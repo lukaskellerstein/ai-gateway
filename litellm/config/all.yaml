@@ -1,19 +1,21 @@
 # EVERY ENGINE AT ONCE — the default config, and the one this gateway serves unless
 # .env names a single engine instead.
 #
-# THIS FILE COPIES NOTHING. It is seven include lines and no model_list of its own.
-# LiteLLM merges an included file key by key and EXTENDS a list, so the six engine
+# THIS FILE COPIES NOTHING. It is eight include lines and no model_list of its own.
+# LiteLLM merges an included file key by key and EXTENDS a list, so the seven engine
 # files' model_lists join into one and the settings arrive from settings.yaml. Add
 # an alias to config/lms.yaml and it appears here on the next `up -d` with no edit
 # to this file.
 #
-# 17 ALIASES, three of the engines free and three of them PAID:
+# 22 ALIASES, four of the engines free and three of them PAID:
 #
-#   LMStudio        free   lms-gemma4-e4b         lms-gemma4-26b         lms-qwen38-27b
-#                          lms-nomic-embed
-#   Unsloth Studio  free   unsloth-gemma4-e4b     unsloth-gemma4-26b     unsloth-qwen38-27b
+#   LMStudio        free   lms-gemma4-e4b         lms-gemma4-12b         lms-gemma4-26b
+#                          lms-qwen38-27b         lms-nomic-embed
+#   Unsloth Studio  free   unsloth-gemma4-e4b     unsloth-gemma4-12b     unsloth-gemma4-26b
+#                          unsloth-gemma4-26b-fast                       unsloth-qwen38-27b
 #                          unsloth-nomic-embed
 #   Ollama          free   ollama-gemma4-e4b      ollama-gemma4-26b      ollama-nomic-embed
+#   TEI             free   tei-nomic-embed        tei-bge-reranker-m3
 #   OpenRouter      PAID   openrouter-gemma4-26b  openrouter-qwen38-27b
 #                          openrouter-gemma4-26b-free
 #   OpenAI          PAID   openai-gpt54-mini      openai-embed3-small
@@ -23,10 +25,10 @@
 # completion through one bills a real account. Nothing here falls back to anything
 # else, so a request costs money only when a caller names a paid alias by hand. If
 # you want a gateway that CANNOT spend, put a single free engine in .env:
-# `GATEWAY_ENGINE=lms` serves four aliases and has no hosted route at all.
+# `GATEWAY_ENGINE=lms` serves five aliases and has no hosted route at all.
 #
 # THE ORDER MATTERS ONLY FOR settings.yaml, and it is first for a reason: LiteLLM
-# REPLACES a non-list key, so the last file to set one wins. The six engine files
+# REPLACES a non-list key, so the last file to set one wins. The seven engine files
 # set no settings blocks, so nothing overrides it today — but a file added below
 # that did would silently win.
 #
@@ -34,11 +36,12 @@
 # recurse: the `include: [settings.yaml]` inside each engine file is merged as data
 # and dropped. That is harmless HERE only because settings.yaml is listed directly
 # above them. Verified 2026-09-29 against ghcr.io/berriai/litellm:main-stable — all
-# 17 aliases in /v1/models, and the local Qwen calls logged at exactly their prices.
+# 17 aliases in /v1/models, and the local Qwen calls logged at exactly their prices;
+# 23 on 2026-10-08 after tei.yaml joined, 22 once the Unsloth sidecar went the same day.
 #
 # ../envoy HAS ITS OWN all.yaml AND IT IS NOT THIS SHAPE. Envoy's config is
 # Kubernetes custom resources and `aigw run` takes one file with no include
-# mechanism at all, so that file COPIES its six engine files. An alias is
+# mechanism at all, so that file COPIES its seven engine files. An alias is
 # therefore three edits: here-or-the-engine-file, envoy/config/<engine>.yaml, and
 # envoy/config/all.yaml. Nothing checks that you did all three.
 include:
@@ -46,6 +49,7 @@ include:
   - lms.yaml
   - unsloth.yaml
   - ollama.yaml
+  - tei.yaml
   - openrouter.yaml
   - openai.yaml
   - cerebras.yaml

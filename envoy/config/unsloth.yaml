@@ -1,4 +1,4 @@
-# Unsloth Studio, on this machine — 7 aliases, free.
+# Unsloth Studio, on this machine — 6 aliases, free.
 #
 #   unsloth-gemma4-e4b    unsloth/gemma-4-E4B-it-qat-GGUF                     chat
 #   unsloth-gemma4-12b    lmstudio-community/gemma-4-12B-it-QAT-GGUF          chat, 12B dense, Q4_0
@@ -6,7 +6,6 @@
 #   unsloth-gemma4-26b-fast  the same file, thinking OFF                      chat, the fast route
 #   unsloth-qwen38-27b    unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL                 chat, 27B dense, Q8
 #   unsloth-nomic-embed   second-state/Nomic-embed-text-v1.5-Embedding-GGUF   embeddings
-#   unsloth-nomic-embed-sidecar  nomic-ai/nomic-embed-text-v1.5          embeddings, beside chat
 #
 # The same weights as the `lms-*` routes, on a different engine — that is the
 # point of the naming, and the reason ../tests can measure one against the other.
@@ -21,10 +20,10 @@
 # evicts `unsloth-gemma4-26b` and the next chat call swaps it back — 13-17 s. Two gateways
 # pointed at Unsloth at once will thrash it. TWO EXCEPTIONS: a model pre-loaded in Studio
 # with `Keep other models loaded` stays beside the active one and answers with no reload
-# (Studio v0.1.903-beta, measured 2026-10-07) — no gateway call can load one that way; and
-# Studio's own `Settings -> embedding model` runs in its own process beside the chat model,
-# so `unsloth-nomic-embed-sidecar` evicts nothing while that setting names its exact id
-# (measured 2026-10-03). ../../litellm/config/unsloth.yaml has the numbers for both.
+# (Studio v0.1.903-beta, measured 2026-10-07) — no gateway call can load one that way. For an
+# embedder that evicts nothing, call `tei-nomic-embed`: `unsloth-nomic-embed-sidecar`, Studio's
+# own embedder, was removed for it on 2026-10-08 — the same vectors and no Studio setting.
+# ../../litellm/config/unsloth.yaml has the numbers.
 #
 # `Settings -> API -> Model auto-switch` MUST BE ON, or the first call to a model
 # that is not resident returns `400 No model loaded`.
@@ -206,18 +205,6 @@ spec:
       backendRefs:
         - name: unsloth
           modelNameOverride: second-state/Nomic-embed-text-v1.5-Embedding-GGUF
-      timeouts:
-        request: 60m
-    # Studio's own embedder, run beside the chat model — evicts nothing while it is the
-    # `Settings -> embedding model`. Not interchangeable with the GGUF above.
-    - matches:
-        - headers:
-            - type: Exact
-              name: x-ai-eg-model
-              value: unsloth-nomic-embed-sidecar
-      backendRefs:
-        - name: unsloth
-          modelNameOverride: nomic-ai/nomic-embed-text-v1.5
       timeouts:
         request: 60m
     # ── The `-anthropic` aliases: PASS-THROUGH, not translation ──────────────
@@ -434,7 +421,7 @@ spec:
 ---
 # =============================================================================
 # THE MCP SERVERS BEHIND THIS GATEWAY — /mcp on 26000. A TOOL SERVER IS NOT AN
-# ENGINE, so this same block closes EVERY file in this directory: the six engine
+# ENGINE, so this same block closes EVERY file in this directory: the seven engine
 # files, all.yaml and the personal lukas.yaml. `aigw run` reads one file and
 # Envoy has no `include:`, so a copy in each is the only way /mcp answers
 # whatever GATEWAY_ENGINE says. Keep the copies identical — `tail` two files

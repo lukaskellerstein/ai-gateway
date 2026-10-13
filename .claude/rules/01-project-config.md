@@ -23,6 +23,13 @@ model, body and `max_tokens` held identical — see
 [`../../benchmark/README.md`](../../benchmark/README.md). Its results are in
 [`../../COMPARISON.md`](../../COMPARISON.md) § What they cost per request.
 
+`tei/` (2026-10-08) is **not a project either**: `tei.sh` and a README. TEI runs on the host
+for the Metal GPU, as two processes — one model each. **Each gateway's `podman compose up`
+starts what it needs** through a `tei` provider service that runs `../tei/tei.sh` on the host,
+and `down` stops a model no gateway uses any more. `tei.sh` is **the one file the two gateways
+share** — the user's choice, so TEI's start flags live once.
+[`../../tei/README.md`](../../tei/README.md) has the table of what starts when.
+
 Both images are stock: **no Dockerfile and no build step**. A `litellm/Dockerfile` returns
 the day a callback needs a package the base image lacks.
 
@@ -68,7 +75,7 @@ failure avoided is not a loud bind error but the silent one: a probe against
 |:--|:--|
 | `~/Projects/Github/lukaskellerstein/mlflow-tutorial` | 3000, 4000, 5432, 5555, 6333/4, 7233, 8080, 9090 |
 | `~/Projects/Github/lukaskellerstein/ai-agent-platform` | 1xxxx |
-| `ai-gateway` | **2xxxx** — 24000, 26000, 26064, and 24090 / 26090 for the test MCP server while a test runs. 25000 is free again since 2026-09-04 |
+| `ai-gateway` | **2xxxx** — 24000, 26000, 26064, 27000 / 27001 for TEI, and 24090 / 26090 for the test MCP server while a test runs. 25000 is free again since 2026-09-04 |
 
 ## The words, per project
 
@@ -77,18 +84,18 @@ reads its **own** `.env`:
 
 | Variable | Values | Default | Picks | In |
 |:--|:--|:--|:--|:--|
-| `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras` | **`all`** | which engines | both |
+| `GATEWAY_ENGINE` | `all`, `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras` | **`all`** | which engines | both |
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 **`all` IS THE DEFAULT AND IS A REAL FILE**, `config/all.yaml`, not a list you write. It
-serves every engine at once: 21 aliases on LiteLLM, 35 route rules on Envoy — the latter split
-across **six `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
+serves every engine at once: 22 aliases on LiteLLM, 35 route rules on Envoy — the latter split
+across **seven `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
 (`HTTPRoute.spec.rules` allows 16 and aigw uses one). The two files are
 built differently and the difference matters when you add an alias:
 
 | | `litellm/config/all.yaml` | `envoy/config/all.yaml` |
 |:--|:--|:--|
-| shape | seven `include:` lines | the six engine files MERGED |
+| shape | eight `include:` lines | the seven engine files MERGED |
 | copies aliases | **no** | **yes** |
 | adding an alias needs it edited | no | **yes** |
 
@@ -130,7 +137,7 @@ Each `litellm/config/<engine>.yaml` carries `include: [settings.yaml]` and then 
 nested `include:` is merged as data and dropped.
 
 `config/all.yaml` lives with that rather than around it: it lists `settings.yaml` **directly
-and first**, then the six engine files, whose own `include: [settings.yaml]` is then dropped
+and first**, then the seven engine files, whose own `include: [settings.yaml]` is then dropped
 harmlessly. Verified 2026-09-29 — 17 aliases in `/v1/models`, prices and windows intact. The
 rule still bites anywhere else: include a file that carries an `include:` you were relying on,
 and the settings vanish silently and the proxy boots with no master key.
@@ -140,15 +147,16 @@ and the settings vanish silently and the proxy boots with no master key.
 Callers name an **alias**, never a model — the model behind a name is expected to change.
 `README.md` carries the full table with models and prices.
 
-|  | LMStudio :1234 | Unsloth :8888 | Ollama :11434 | OpenRouter | OpenAI | Cerebras |
-|:--|:--|:--|:--|:--|:--|:--|
-| Gemma 4 E4B | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — |
-| Gemma 4 12B | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — |
-| Gemma 4 26B | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
-| Qwen 3.8 27B | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
-| other chat | — | — | — | — | `openai-gpt54-mini` | — |
-| embed | `lms-nomic-embed` | `unsloth-nomic-embed` · `unsloth-nomic-embed-sidecar` | `ollama-nomic-embed` | — | `openai-embed3-small` | — |
-| costs | free | free | free | **paid** | **paid** | **paid** |
+|  | LMStudio :1234 | Unsloth :8888 | Ollama :11434 | TEI :27000 :27001 | OpenRouter | OpenAI | Cerebras |
+|:--|:--|:--|:--|:--|:--|:--|:--|
+| Gemma 4 E4B | `lms-gemma4-e4b` | `unsloth-gemma4-e4b` | `ollama-gemma4-e4b` | — | — | — | — |
+| Gemma 4 12B | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — | — |
+| Gemma 4 26B | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | — | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
+| Qwen 3.8 27B | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
+| other chat | — | — | — | — | — | `openai-gpt54-mini` | — |
+| embed | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | `tei-nomic-embed` | — | `openai-embed3-small` | — |
+| rerank | — | — | — | `tei-bge-reranker-m3` — **LiteLLM only** | — | — | — |
+| costs | free | free | free | free | **paid** | **paid** | **paid** |
 
 **Names are `<engine>-<model>-<size>` since 2026-09-29**, and the suffix is the same on every
 engine for the same model. The size-only names before it (`lms-26b`, `cerebras-27b`, …) were
@@ -181,7 +189,8 @@ is incomplete" is the wrong diagnosis.
   separate lists and neither reads the other's. Three causes now: the alias was added on one
   side only, the `.env` files name different engines, or — since 2026-09-06 — it was added to
   `envoy/config/<engine>.yaml` but not to `envoy/config/all.yaml`, which copies rather than
-  includes. **No test catches any of the three.**
+  includes. **No test catches any of the three.** One alias is absent on 26000 by design:
+  `tei-bge-reranker-m3` — Envoy cannot route a rerank to TEI, and `08_rerank.py` checks that.
 - **Envoy answering `OK` on 26064 while 26000 refuses.** The admin server starts before
   Envoy's listener. Probe `26000/v1/models`, not `26064/health`.
 - **Nothing in `compose logs envoy` after a request.** `AIGW_DEBUG` is `false`, so Envoy's
@@ -199,10 +208,10 @@ is incomplete" is the wrong diagnosis.
   model loaded with `Keep other models loaded`, or `"alongside": true` on
   `POST /api/inference/load`, answers a gateway call with no reload. **No gateway call can
   load one that way**: auto-switch replaces only the active model, never a held one, even the
-  least recently used. `GET /api/inference/loaded-models` lists them. **Studio's own
-  `Settings -> embedding model`** also runs beside the chat model:
-  `unsloth-nomic-embed-sidecar` evicts nothing while that setting names
-  `nomic-ai/nomic-embed-text-v1.5` (measured 2026-10-03: 0.04 s, the 26B stayed loaded).
+  least recently used. `GET /api/inference/loaded-models` lists them. **For an embedder that evicts nothing,
+  call `tei-nomic-embed`.** `unsloth-nomic-embed-sidecar` — Studio's own embedder, run beside
+  the chat model — was removed for it on 2026-10-08: the same vectors (cosine 0.999998), an
+  8192-token window against 512, and no Studio setting to keep right.
 - **LMStudio JIT-loads at 8192 context with a 1 h TTL**, ignoring hand-load flags. A
   session that worked this morning fails this afternoon with nothing changed.
   `lms ps --json` is the truth, not the UI.
@@ -214,12 +223,13 @@ is incomplete" is the wrong diagnosis.
 | LMStudio | host :1234, via `host.containers.internal` / `host.docker.internal` | `lms-*` |
 | Unsloth Studio | host :8888, same. **Requires `UNSLOTH_API_KEY`** — every route 401s without it | `unsloth-*` |
 | Ollama | host :11434, same. Ignores the Authorization header | `ollama-*` |
+| TEI | host :27000 (embed) and :27001 (rerank), same. Started by each gateway's `up` through `tei/tei.sh`, one fixed model per process; ignores the key | `tei-*` |
 | OpenRouter | `OPENROUTER_API_KEY` | `openrouter-*` — **real spend** |
 | OpenAI | `OPENAI_API_KEY` | `openai-*` — **real spend** |
 | Cerebras | `CEREBRAS_API_KEY` | `cerebras-*` — **real spend**. `qwen-3.8-27b`, which reasons: send `reasoning_effort` on long-output prompts |
 
-The three local engines run **natively on the host**, not in containers — they need the
-Apple-Silicon GPU. All three bind 127.0.0.1 only, and the containers still reach them
+The four local engines run **natively on the host**, not in containers — they need the
+Apple-Silicon GPU. All four bind 127.0.0.1 only, and the containers still reach them
 through `host.containers.internal` (verified from inside the container, 2026-08-26).
 Every `compose.yml` declares both hostnames so Podman and Docker behave identically.
 `HF_TOKEN` backed nothing and was removed at the split.
@@ -258,12 +268,13 @@ boots, which is why an auth failure usually means the shell that ran `up -d` had
   | `echoes_alias` | yes | no |
   | `exposes_route_limits` | yes | no |
   | `loopback_only` | yes | **yes** |
+  | `reranks` | yes | no |
   | caller must send `max_tokens` | no | yes |
   | `/v1/responses` — Codex needs it | **yes** | **yes** |
   | an Anthropic route — the Claude SDK needs it | `/v1/messages` | `/anthropic/v1/messages`, on a pass-through alias |
   | SSE streaming | yes | yes |
 
-  The first six rows are declared in each `tests/2_openai_client/settings.py` § `CONTRACT` and
-  checked by `04_gateway_contract.py`; the last three are what folders 1, 5 and 6 exercise.
-  **Only two of the first six match** — the listing and the loopback binding — which is why
+  The first seven rows are declared in each `tests/2_openai_client/settings.py` § `CONTRACT` and
+  checked by `04_gateway_contract.py` — `reranks` by `08_rerank.py`; the last three are what
+  folders 1, 5 and 6 exercise. **Only two of the first seven match** — the listing and the loopback binding — which is why
   neither project reads the other's table.

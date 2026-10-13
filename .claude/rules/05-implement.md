@@ -23,7 +23,7 @@ every number carries a comment saying where it came from.
 | a model the user just downloaded, for their own use | `litellm/config/lukas.yaml` **and** `envoy/config/lukas.yaml` — two files, both **gitignored**. Never commit them |
 | a LiteLLM settings block (`router_settings`, `general_settings`, …) | `litellm/config/settings.yaml` — once; every engine file includes it |
 | how an engine is chosen | the `--config` path in `litellm/compose.yml`, and `AIGW_CONFIG` in `envoy/compose.yml` |
-| an MCP server behind the gateway | `litellm/config/settings.yaml` § `mcp_servers`, **and** the `MCPRoute` + `Backend` that close EVERY `envoy/config/*.yaml` — eight files, `lukas.yaml` included, all identical |
+| an MCP server behind the gateway | `litellm/config/settings.yaml` § `mcp_servers`, **and** the `MCPRoute` + `Backend` that close EVERY `envoy/config/*.yaml` — nine files, `lukas.yaml` included, all identical |
 | an Envoy route, backend, timeout or buffer limit | `envoy/config/<engine>.yaml` **and** `envoy/config/all.yaml` — Kubernetes custom resources, self-contained per engine |
 | services, ports, healthchecks, env | that project's `compose.yml` — never several in one edit unless the change is genuinely several |
 | anything a caller reads | the README of the gateway it concerns, or `README.md` if it is shared |
@@ -47,7 +47,7 @@ with the split. Call it on **both** ports afterwards — [`06-testing.md`](06-te
 6. the alias table in `README.md` — a route nobody documents is a route nobody calls
 
 **The alias name must carry its engine and its model** — `<engine>-<model>-<size>`, such as
-`lms-qwen38-27b`. Engines: `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. No
+`lms-qwen38-27b`. Engines: `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras`. No
 engine-neutral name, no capability name, no size-only name. Reuse the suffix the same model
 already has on another engine, so the row stays one suffix.
 
@@ -57,12 +57,17 @@ They were split on 2026-09-03 at the user's explicit request, and 2026-09-04 tes
 both ways: `envoy/` was **added** without touching either existing folder, and `mlflow/` was
 **deleted** without breaking anything left. **Do not re-couple them.** No shared module, no
 shared `.env`, no root `compose.yml`, and nothing in one folder that reads a file in another.
+
+**One exception, agreed on 2026-10-08: `tei/tei.sh`.** Both `compose.yml` run it as a Compose
+provider, so TEI's start flags live in one place. What each gateway asks for is data in its
+own `compose.yml` (`models: embed,rerank` or `embed`), never a branch in the script. It does
+not license a second shared file.
 The costs are known and written down; they are not a defect to fix.
 
 Duplication between the folders is the price of that, and it is the right price. When
 `mlflow/` existed, `discover/gateway_discovery.py` sat in two copies for exactly this reason —
 and when the folder went, its copy went with it and nothing had to be untangled. The same logic
-now applies to `envoy/config/all.yaml`: it duplicates the six engine files, and that
+now applies to `envoy/config/all.yaml`: it duplicates the seven engine files, and that
 duplication is the price of `aigw run` taking one path. **Do not "fix" it with a generator** —
 that was considered on 2026-09-06 and rejected, because it needs a second image in a project
 whose whole point is one stock service.
@@ -163,7 +168,7 @@ you measure one — including the negative result.
 ## `envoy/` — gateway 2, and the only one you could deploy
 
 `config/<engine>.yaml` is the same Kubernetes custom-resource API a cluster would read, so
-what is proven here is what would ship. Six files: one per engine, each self-contained, plus
+what is proven here is what would ship. Eight files: one per engine, each self-contained, plus
 `all.yaml` which merges them and is the default.
 
 - **The alias mechanism is an `AIGatewayRoute` rule**: an exact `x-ai-eg-model` header match
@@ -174,7 +179,7 @@ what is proven here is what would ship. Six files: one per engine, each self-con
   image); `logging.level: error` (at `debug` Envoy dumps request headers).
 - **It has no database, and no project here generates config.** Envoy never could — another
   renderer, and the aigw image is distroless — and `litellm/` stopped on 2026-09-06.
-- **`config/all.yaml` is the default and is a MERGE of the other six.** Four resources are
+- **`config/all.yaml` is the default and is a MERGE of the other seven.** Four resources are
   identical everywhere (`GatewayClass`, `Gateway`, `EnvoyProxy`, `ClientTrafficPolicy`) and
   appear once, taken from `lms.yaml` because it has the fullest comments; every other resource
   is already named per engine. Keep the per-engine grouping when you edit it — it is what makes
@@ -256,16 +261,17 @@ tests/
   pass-through alias. **A skip is for what the gateway cannot do, never for what is merely
   flaky** — fix the flake instead.
 - **The differences go in `settings.py`, as data — never in a scenario.** The vocabulary is
-  shared between the projects; the calling contract is not. Five things differ (the API key,
-  the model listing, what `response.model` echoes, whether a route stores a `max_tokens`, and
-  whether a Qwen route stores a thinking level), and all five are declared once in that
+  shared between the projects; the calling contract is not. Six things differ (the API key,
+  the model listing, what `response.model` echoes, whether a route stores a `max_tokens`,
+  whether a Qwen route stores a thinking level, and whether it can rerank), and all six are declared once in that
   project's `2_openai_client/settings.py` § `CONTRACT`. A scenario applies the contract by
   spreading `**gateway.body_extras` into its request and reads nothing else.
-- **Every script in `2_openai_client` is byte-identical across both projects**, `04` and `05`
-  included. They never name a gateway, so a scenario written for one can be copied to the
+- **Every script in `2_openai_client` is byte-identical across both projects**, `04`, `05` and
+  `08` included. A script that tests an embedder or a reranker takes its alias from
+  `settings.py` through `run(..., alias=…)`, because `run_all.py` hands every script a chat alias. They never name a gateway, so a scenario written for one can be copied to the
   other unchanged. Keep it that way — a scenario that reads `gateway.name` has stopped being
   portable.
-- **The two contracts are genuinely different, and only TWO of the five lines match** — the
+- **The two contracts are genuinely different, and only TWO of the seven lines match** — the
   listing and the loopback binding. Envoy lists its models like LiteLLM, and then checks no caller key and echoes the upstream model
   id rather than the alias. Anything written as "LiteLLM or not-LiteLLM" is wrong about it.
 - **`04_gateway_contract.py` is the ONE script that is about its gateway**, and even it does
@@ -281,13 +287,13 @@ tests/
   suite-level `run_all.py` one level up uses an explicit `FOLDERS` tuple instead, because
   the order is the teaching order and a glob would not preserve it.
 
-## The four `README.md`, and the two root documents beside them
+## The five `README.md`, and the two root documents beside them
 
 **`README.md` at the root is the front door**, written for a stranger: what the repo is,
 which gateway to pick, the shared alias table, the host-engine facts, the design decisions,
 and § What was removed. Each gateway's own `README.md` carries everything specific to it — its
 endpoints, its configuration table, its troubleshooting, its layout.
-`benchmark/README.md` is the fourth.
+`benchmark/README.md` is the fourth and `tei/README.md` the fifth.
 
 **Two root documents are NOT READMEs and must not be folded into one.**
 `COMPARISON.md` answers *which gateway and when* — features, observability, measured
@@ -314,17 +320,19 @@ ai-gateway/
 ├── TESTING.md              the testing handover: versions, coverage, open bugs
 ├── benchmark/              what the gateway itself costs. Calls both ports;
 │                            reads no project's files. No dependencies
+├── tei/                    NOT a project: tei.sh + README. Both gateways' `tei`
+│                            service runs tei.sh on `up` — embedder :27000, reranker :27001
 ├── litellm/                compose project `ai-gateway`         PORT 24000
-│   ├── compose.yml             postgres · litellm. name: DO NOT RENAME
+│   ├── compose.yml             postgres · litellm · tei (a provider). name: DO NOT RENAME
 │   ├── .env.example            tracked; the key lines are blank BY DESIGN
 │   ├── config/                 settings.yaml + <engine>.yaml + all.yaml, read-only
 │   ├── tests/                  SEVEN uv projects, one per way of calling the gateway
 │   └── README.md
 ├── envoy/                  compose project `ai-gateway-envoy`   PORT 26000/26064
-│   ├── compose.yml             ONE service, no database
+│   ├── compose.yml             ONE container, no database · tei (a provider)
 │   ├── .env.example
 │   ├── config/                 <engine>.yaml — Kubernetes custom resources
-│   │                            + all.yaml, THE DEFAULT, which COPIES all five
+│   │                            + all.yaml, THE DEFAULT, which COPIES all seven
 │   ├── tests/                  the same SEVEN, all working
 │   └── README.md
 └── .claude/                this contract

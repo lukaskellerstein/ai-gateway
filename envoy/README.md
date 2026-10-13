@@ -14,7 +14,7 @@ curl -fsS http://localhost:26000/v1/models        # the alias list
 
 This is [Envoy AI Gateway](https://aigateway.envoyproxy.io/docs) in **standalone mode**
 (`aigw run`): a real Envoy data plane driven by a config file, with **no Kubernetes and no
-Envoy Gateway install**. One stock image, one service, no database, no build step — the image
+Envoy Gateway install**. One stock image, one container, no database, no build step — the image
 ships the Envoy binary already downloaded.
 
 **The same alias names as `../litellm`.** The table of what they point at is
@@ -33,7 +33,12 @@ in a cluster — what is proven on this laptop is what would ship.
 | **`:26064/metrics`** — Prometheus | no |
 | **OpenTelemetry tracing** with OpenInference spans, into Arize Phoenix with one variable | no |
 
-**What it does not have, and cannot in standalone mode: virtual keys, budgets and spend
+**What it does not have, and cannot in standalone mode: a rerank route to TEI.** Its one rerank
+route, `/cohere/v2/rerank`, reaches TEI but cannot read TEI's reply, and a plain `HTTPRoute`
+beside it is caught by the AI filter — [`config/tei.yaml`](config/tei.yaml) has the three
+attempts (2026-10-08). `tei-bge-reranker-m3` answers on `../litellm` only.
+
+**Nor virtual keys, budgets and spend
 logs.** `QuotaPolicy` and token rate limiting need Redis plus an Envoy Gateway install
 configured for it — the Kubernetes path. `aigw run` writes an Envoy Gateway config with no
 rate-limit block at all. `../litellm` remains the only gateway here with spend controls.
@@ -58,7 +63,8 @@ The OpenAI client needs *some* `api_key` string, and this gateway never reads it
 | Port | Path | What |
 |:--|:--|:--|
 | 26000 | `/v1/chat/completions` | the OpenAI route |
-| 26000 | `/v1/embeddings` | the running engine's `*-embed` alias |
+| 26000 | `/v1/embeddings` | the running engine's `*-embed` alias, `tei-nomic-embed` included |
+| 26000 | `/cohere/v2/rerank` | the Cohere rerank route — **but no rule here uses it**: TEI's reply does not fit it ([`config/tei.yaml`](config/tei.yaml)) |
 | 26000 | `/v1/models` | the alias list, built from the AIGatewayRoute rules |
 | 26000 | `/v1/completions` | the legacy completions route |
 | 26000 | `/anthropic/v1/messages` | the Anthropic API, translated onto the same backend |
@@ -184,7 +190,7 @@ GATEWAY_ENGINE=all        # the default: every engine at once, 35 route rules
 
 | Variable | Default | Used by |
 |:--|:--|:--|
-| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `openrouter`, `openai`, `cerebras`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../litellm` has its own, and nothing checks that they agree |
+| `GATEWAY_ENGINE` | `all` | **which engine this gateway serves** — `all`, or one of `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras`. Not a list of your own: `all` is a real file, `config/all.yaml`. It is this project's alone — `../litellm` has its own, and nothing checks that they agree |
 | `AIGW_DEBUG` | `false` | per-request logging. **Never leave it empty** — aigw parses it as a bool and crash-loops on `""` before reading any config. See below |
 | `UNSLOTH_API_KEY` | *(blank)* | **required** by every `unsloth-*` alias. Blank substitutes empty and every call 401s at request time |
 | `OPENROUTER_API_KEY` | *(blank)* | every `openrouter-*` alias. **Real spend** |
@@ -237,21 +243,22 @@ is the client that defeats it; the two settings that fix it are in `../litellm/R
 
 ## One file per engine, and one that holds them all
 
-`config/` carries seven files. Six are one engine each; `all.yaml` is the default and holds
-every one of them.
+`config/` carries eight tracked files. Seven are one engine each; `all.yaml` is the default and
+holds every one of them.
 
 | `GATEWAY_ENGINE` | Reads | Serves |
 |:--|:--|:--|
 | `all` *(default)* | `config/all.yaml` | **35 route rules** — 20 model aliases and 15 `-anthropic` aliases |
 | `lms` | that engine's file | 5 aliases plus its 4 `-anthropic` ones |
-| `unsloth` | that engine's file | 7 aliases plus its 5 `-anthropic` ones |
+| `unsloth` | that engine's file | 6 aliases plus its 5 `-anthropic` ones |
 | `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
+| `tei` | that engine's file | 1 alias, the embedder. No `-anthropic`, and no rerank — see above |
 | `openrouter` `openai` `cerebras` | that engine's file | 1–2 aliases plus an `-anthropic` for each chat one, **paid** |
 
-**`all.yaml` copies the other six, and that is the price of this gateway.** `aigw run` takes
+**`all.yaml` copies the other seven, and that is the price of this gateway.** `aigw run` takes
 **one file path** — not a directory, not a repeated flag; checked against `aigw run --help` on
 2026-09-06 — and Envoy's config has no `include:` mechanism the way LiteLLM's does. So where
-`../litellm/config/all.yaml` is six include lines that copy nothing, this one carries the rules
+`../litellm/config/all.yaml` is eight include lines that copy nothing, this one carries the rules
 and the backends themselves.
 
 **So an alias is three edits, not two:**
@@ -261,14 +268,14 @@ and the backends themselves.
 3. `config/all.yaml` — this gateway, the default
 
 **Nothing checks that you did all three.** Miss step 3 and the alias answers when `.env` names
-its engine and 404s on the default config, with nothing in any log to say why. The six
+its engine and 404s on the default config, with nothing in any log to say why. The seven
 per-engine files stay the place the comments and the reasoning live; `all.yaml` is where they
 are assembled, so copy a rule across rather than writing a new one there.
 
-What the merge did, for anyone diffing it: four resources are identical in all six engine
+What the merge did, for anyone diffing it: four resources are identical in all seven engine
 files — `GatewayClass`, `Gateway`, `EnvoyProxy` and `ClientTrafficPolicy` — so they appear once,
 taken from `lms.yaml` because it carries the fullest comments. Each engine keeps its **own**
-`AIGatewayRoute`, renamed `aigw-run-<engine>`, all six attached to the same `Gateway`.
+`AIGatewayRoute`, renamed `aigw-run-<engine>`, all seven attached to the same `Gateway`.
 Everything else is already named per engine and needed no change.
 
 > **An `AIGatewayRoute` holds at most 15 aliases, and this is a hard upstream limit.** It
@@ -280,7 +287,7 @@ Everything else is already named per engine and needed no change.
 > HTTPRoute "aigw-run" is invalid: spec.rules: Too many: 21: must have at most 16 items
 > ```
 >
-> Hence one route per engine. **Watch that ceiling per route, not in total** — six engines at 15 aliases
+> Hence one route per engine. **Watch that ceiling per route, not in total** — seven engines at 15 aliases
 > each is fine; one engine at 16 is not.
 
 ### A personal config that is not committed
@@ -293,12 +300,12 @@ GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 ```
 
 `config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **60 route
-rules** over every model downloaded in LMStudio and Unsloth Studio, plus the short names
-and twelve `-anthropic` twins. It has no hosted backend at all, so **it cannot spend
+rules** over every model downloaded in LMStudio and Unsloth Studio, plus the short names,
+the `-anthropic` twins and TEI's embedder. It has no hosted backend at all, so **it cannot spend
 money**.
 
-**It needs five `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 60 rules
-means at least four, and the split by engine makes it five. When you add a model, add it to a route that has room — the ceiling is per route,
+**It needs six `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 60 rules
+means at least four, the split by engine makes it five, and TEI keeps its own sixth. When you add a model, add it to a route that has room — the ceiling is per route,
 not per file, and going over crash-loops aigw before it serves anything.
 
 **`../litellm/config/lukas.yaml` is the same vocabulary for the other gateway**, and neither
@@ -392,18 +399,20 @@ What is deliberately not covered is in [`tests/README.md`](tests/README.md).
 
 ```text
 envoy/
-├── compose.yml             ONE service. name: ai-gateway-envoy
+├── compose.yml             ONE container · tei. name: ai-gateway-envoy
+│                            tei is a provider: it runs ../tei/tei.sh on the host
 ├── .env.example            tracked; the key lines are blank BY DESIGN
 ├── config/                 mounted at /etc/aigw, read-only
-│   ├── <engine>.yaml           lms · unsloth · ollama · openrouter · openai
+│   ├── <engine>.yaml           lms · unsloth · ollama · tei · openrouter · openai · cerebras
 │   │                            Kubernetes custom resources, ~300 lines each
-│   └── all.yaml                THE DEFAULT. All five merged — it COPIES them
+│   └── all.yaml                THE DEFAULT. All seven merged — it COPIES them
 └── tests/                  SEVEN folders, one per way of calling this gateway
     ├── run_all.py              runs every folder, one row each
     │                            EVERY FOLDER: settings.py (edit it when you copy the
     │                            folder), run_benchmark.py and RESULTS.md (cache and speed)
     ├── 1_http_client/          urllib, NO dependencies
-    ├── 2_openai_client/        openai — 4 call kinds + the contract test
+    ├── 2_openai_client/        openai — chat, tools, vision, thinking, embed, the rerank
+    │                            gap + the contract test
     ├── 3_langchain_langgraph/  LangChain's agent, and the same loop by hand
     ├── 4_deepagents/           a deep agent. EIGHT scenarios + its own run_all.py
     ├── 5_claude_agent_sdk/     the ANTHROPIC surface, /anthropic/v1/messages.
