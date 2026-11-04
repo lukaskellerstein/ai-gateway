@@ -7,7 +7,7 @@
 # an alias to config/lms.yaml and it appears here on the next `up -d` with no edit
 # to this file.
 #
-# 22 ALIASES, four of the engines free and three of them PAID:
+# 23 ALIASES, four of the engines free and three of them PAID:
 #
 #   LMStudio        free   lms-gemma4-e4b         lms-gemma4-12b         lms-gemma4-26b
 #                          lms-qwen38-27b         lms-nomic-embed
@@ -18,7 +18,7 @@
 #   TEI             free   tei-nomic-embed        tei-bge-reranker-m3
 #   OpenRouter      PAID   openrouter-gemma4-26b  openrouter-qwen38-27b
 #                          openrouter-gemma4-26b-free
-#   OpenAI          PAID   openai-gpt54-mini      openai-embed3-small
+#   OpenAI          PAID   openai-gpt6-luna       openai-gpt61-terra     openai-embed3-small
 #   Cerebras        PAID   cerebras-qwen38-27b
 #
 # SERVING A PAID ROUTE COSTS NOTHING. Registering an alias is free; only a

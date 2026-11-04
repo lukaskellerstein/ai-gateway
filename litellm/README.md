@@ -179,7 +179,7 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 22 aliases
+GATEWAY_ENGINE=all        # the default: every engine at once, 23 aliases
 ```
 
 **There is no `COMPOSE_PROFILES` line.** It went with the split: the directory you stand in is
@@ -188,7 +188,7 @@ now the choice of gateway, and `up -d` here starts this one whether or not `.env
 **Which engine.** One word names one file, `config/<engine>.yaml`. A typo is a clean crash:
 the file does not exist and `litellm` exits saying so.
 
-**`all` is the default and serves every engine at once** — 22 aliases from one gateway.
+**`all` is the default and serves every engine at once** — 23 aliases from one gateway.
 `config/all.yaml` is eight `include:` lines and copies nothing, so the per-engine files stay the
 one place an alias is written. **The seven engine words are for isolation**: name one and every
 other alias is absent from the running config, not disabled, and a 404 on it is correct.
@@ -371,11 +371,11 @@ GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 ```
 
 `config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it. It includes
-`settings.yaml`, `lms.yaml`, `unsloth.yaml` and `tei.yaml` and then declares every other model
-downloaded in LMStudio and Unsloth — **49 aliases**, with the short names (`lms-gemma4-e4b`,
+`settings.yaml`, `lms.yaml`, `unsloth.yaml`, `tei.yaml` and `openai.yaml` and then declares every
+other model downloaded in LMStudio and Unsloth — **52 aliases**, with the short names (`lms-gemma4-e4b`,
 `unsloth-qwen38-27b`, …) still answering because it *includes* those files rather than
-replacing them. It has no hosted
-route at all, so **it cannot spend money**.
+replacing them. Since 2026-11-04 it
+carries the three `openai-*` aliases, so **it can spend money** — only when a caller names one.
 
 It is not tracked because it describes one disk. On another machine it would be wrong, and a
 model list is not something two people can share. Keep the same shape for your own: name it

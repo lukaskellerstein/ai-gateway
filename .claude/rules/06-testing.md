@@ -121,7 +121,7 @@ embeddings, budgets or keys, and **neither compares the gateways**.
   check that stopping one leaves the other serving. **Then put them both back the way you found
   them**, including each project's `GATEWAY_ENGINE`.
 - **You touched either `config/all.yaml`** — prove BOTH modes on that gateway. Bring it up on
-  `all` and confirm the full alias list on `/v1/models` (**22** on 24000, **35** on 26000),
+  `all` and confirm the full alias list on `/v1/models` (**23** on 24000, **37** on 26000),
   then bring it up on ONE engine and confirm the short list. A default config that serves
   everything hides a broken per-engine file, and the other way round.
 - **You added an alias to `envoy/config/<engine>.yaml`** — confirm it answers under BOTH

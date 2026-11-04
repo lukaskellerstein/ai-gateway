@@ -105,7 +105,7 @@ flowchart LR
     oll["<b>Ollama</b> · :11434<br/>ollama-gemma4-e4b · ollama-gemma4-26b · ollama-nomic-embed"]
     tei["<b>TEI</b> · :27000 · :27001<br/>tei-nomic-embed · tei-bge-reranker-m3 (24000 only)"]
     orr["<b>OpenRouter</b> · cloud<br/>openrouter-gemma4-26b · openrouter-gemma4-26b-free"]
-    oai["<b>OpenAI</b> · cloud<br/>openai-gpt54-mini · openai-embed3-small"]
+    oai["<b>OpenAI</b> · cloud<br/>openai-gpt6-luna · openai-gpt61-terra · openai-embed3-small"]
     cer["<b>Cerebras</b> · cloud<br/>cerebras-qwen38-27b"]
 
     callers -->|"/v1/chat/completions<br/>/v1/messages"| litellm
@@ -215,7 +215,8 @@ registered and answers `401` when something calls it.
 you serve *your* machine's models without putting a model list in the repo: write
 `config/<yourname>.yaml`, add it to `.gitignore`, and set the word. This laptop has
 `lukas.yaml` in both projects — every model downloaded in LMStudio and Unsloth Studio plus TEI's,
-49 aliases on 24000 and 60 route rules on 26000, and no hosted route at all so it cannot spend.
+52 aliases on 24000 and 65 route rules on 26000. It has no OpenRouter route, but since 2026-11-04
+it carries the OpenAI aliases, so it can spend.
 Each gateway needs its own copy; neither reads the other's.
 
 ## Endpoints
@@ -273,7 +274,7 @@ the last three are the cloud and cost money.
 | **Gemma 4 12B** — chat, dense | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — | — |
 | **Gemma 4 26B** — chat, large | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | — | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
 | **Qwen 3.8 27B** — chat, large | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
-| **Other chat** | — | — | — | — | — | `openai-gpt54-mini` | — |
+| **GPT 6** — chat, hosted | — | — | — | — | — | `openai-gpt6-luna` · `openai-gpt61-terra` | — |
 | **Embed** | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | `tei-nomic-embed` | — | `openai-embed3-small` | — |
 | **Rerank** | — | — | — | `tei-bge-reranker-m3` (24000 only) | — | — | — |
 | **Costs** | free | free | free | free | **paid** | **paid** | **paid** |
@@ -310,10 +311,11 @@ differently on `/v1/messages`. `litellm/README.md` § Provider × route has the 
 | `openrouter-gemma4-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | both | 245760 | not stated | **$0.07 · $0.34** per 1M in·out |
 | `openrouter-gemma4-26b-free` | `google/gemma-4-26b-a4b-it:free` | `openrouter/` | **24000 only** | 229376 | not stated | free, rate-limited — see below |
 | `openrouter-qwen38-27b` | `qwen/qwen3.8-27b` | `openrouter/` | both | 245760 | not stated | **$0.025–$0.45 · $1.875–$4.40** per 1M in·out, by provider. LiteLLM logs OpenRouter's own `usage.cost`; the configured $0.45 · $4.40 is only the fallback. **It reasons** |
-| `openai-gpt54-mini` | `gpt-5.4-mini` | `openai/` | both | — | — | **paid**; **it does have vision** — 4/4 on the multimodal scenario, 2026-09-05 |
+| `openai-gpt6-luna` | `gpt-6-luna` | `openai/` | both | 922000 | — | **$0.10 · $0.50** per 1M in·out, the cheapest tier; **it reasons**; **on 26000 send `max_completion_tokens`** — Envoy forwards `max_tokens` and GPT 6 rejects it; LiteLLM rewrites it from v1.102.0 |
+| `openai-gpt61-terra` | `gpt-6.1-terra` | `openai/` | both | 922000 | — | **$1.00 · $5.00** per 1M in·out, the cheapest GPT 6.1 — there is no 6.1 Luna; **it reasons**; the same `max_completion_tokens` rule on 26000 |
 | `openai-embed3-small` | `text-embedding-3-small` | `openai/` | both | 8191 | — | **paid**, 1536 dims |
 | `cerebras-qwen38-27b` | `qwen-3.8-27b` | `cerebras/` | both | 49152 | FP16/FP8 | **$0.99 · $1.49** per 1M in·out; ~1000 tok/s; vision (base64 only), tools; **it reasons** — send `reasoning_effort` on long-output prompts or the thinking can eat all of `max_tokens` |
-| `<alias>-anthropic` | the same model as `<alias>` | — | **26000 only** | — | — | the Anthropic route for the Claude Agent SDK. Chat aliases only. **Pass-through** for `lms-*`, `unsloth-*`, `ollama-*` and `openrouter-*`, whose backends speak Anthropic natively; **translated** for `openai-gpt54-mini` and `cerebras-qwen38-27b`, because api.openai.com and api.cerebras.ai do not — and the `openai-gpt54-mini` route then hits an upstream `thinking` bug, see `TESTING.md` §5.2 |
+| `<alias>-anthropic` | the same model as `<alias>` | — | **26000 only** | — | — | the Anthropic route for the Claude Agent SDK. Chat aliases only. **Pass-through** for `lms-*`, `unsloth-*`, `ollama-*` and `openrouter-*`, whose backends speak Anthropic natively; **translated** for `openai-*` and `cerebras-qwen38-27b`, because api.openai.com and api.cerebras.ai do not — and the `openai-*` routes then hit an upstream `thinking` bug: `400 Unknown parameter: 'thinking'`, re-measured on `openai-gpt6-luna-anthropic` 2026-11-04, see `TESTING.md` §5.2 |
 
 Builds measured 2026-08-31 with `lms ls --json` and `ollama show`; the Unsloth figure is the
 one its model card states.
@@ -341,7 +343,7 @@ apart. There is no fallback from an old name to a new one — change the caller:
 | `lms-4b` | `lms-gemma4-e4b` | | `ollama-embed` | `ollama-nomic-embed` |
 | `lms-26b` | `lms-gemma4-26b` | | `openrouter-26b` | `openrouter-gemma4-26b` |
 | `lms-embed` | `lms-nomic-embed` | | `openrouter-free` | `openrouter-gemma4-26b-free` |
-| `unsloth-4b` | `unsloth-gemma4-e4b` | | `openai-mini` | `openai-gpt54-mini` |
+| `unsloth-4b` | `unsloth-gemma4-e4b` | | `openai-mini` | `openai-gpt54-mini` — **removed 2026-11-04**, use `openai-gpt6-luna` |
 | `unsloth-26b` | `unsloth-gemma4-26b` | | `openai-embed` | `openai-embed3-small` |
 | `unsloth-embed` | `unsloth-nomic-embed` | | `cerebras-27b` | `cerebras-qwen38-27b` |
 | `ollama-4b` | `ollama-gemma4-e4b` | | `<old>-anthropic` | `<new>-anthropic` |
@@ -472,7 +474,7 @@ translation puts a `thinking` block into the OpenAI body and the **engine** reje
 same 400 comes back with no gateway in the path. **All five engine configs carry those
 aliases now**, and four of the five are true pass-throughs: the three local engines and
 OpenRouter all serve the Anthropic Messages API natively, so nothing is translated.
-`openai-gpt54-mini-anthropic` is the exception and must be translated, which is where the folder
+The `openai-*-anthropic` aliases are the exception and must be translated, which is where the folder
 fails on that one engine. The folder resolves the alias and refuses to run without it. See
 `envoy/tests/5_claude_agent_sdk/README.md`.
 
@@ -518,6 +520,10 @@ scenarios — against that engine on that port.
 | `openrouter` | `openrouter-gemma4-26b` | **7/7** | **7/7** |
 | `openai` | `openai-gpt54-mini` | **7/7** | **5/7** — two upstream bugs, below |
 
+`openai-gpt54-mini` was removed on 2026-11-04, so the `openai` row is history. The GPT 6 aliases
+that replaced it have not been through the seven folders — `litellm/config/openai.yaml` has what
+was measured.
+
 The whole local matrix — six cells, 42 folder runs — went green in one uninterrupted pass.
 **Proving the two paid engines cost a few cents**: OpenRouter billed **$0.0516** for the entire
 session, agent loops included. That is worth knowing before anyone skips them again.
@@ -533,7 +539,7 @@ session, agent loops included. That is worth knowing before anyone skips them ag
   which is why the same folder is green there. It is an open OpenCode bug with nothing on this
   side to change.
 
-The first is the reason the alias table marks `openai-gpt54-mini-anthropic` **translated** rather than
+The first is the reason the alias table marks the `openai-*-anthropic` aliases **translated** rather than
 pass-through: api.openai.com serves no Anthropic route, so translation is the only option there.
 Neither bug touches the three local engines or OpenRouter, whose backends speak Anthropic
 natively.

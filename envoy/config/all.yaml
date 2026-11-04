@@ -1,7 +1,7 @@
 # EVERY ENGINE AT ONCE — the default config, and what this gateway serves unless
 # .env names a single engine instead.
 #
-# 35 ROUTE RULES: 20 model aliases, and an `-anthropic` twin for each of the 15
+# 37 ROUTE RULES: 21 model aliases, and an `-anthropic` twin for each of the 16
 # chat ones.
 #
 #   LMStudio        free   lms-gemma4-e4b         lms-gemma4-12b         lms-gemma4-26b
@@ -12,7 +12,7 @@
 #   Ollama          free   ollama-gemma4-e4b      ollama-gemma4-26b      ollama-nomic-embed
 #   TEI             free   tei-nomic-embed        (its reranker is LiteLLM-only — tei.yaml)
 #   OpenRouter      PAID   openrouter-gemma4-26b  openrouter-qwen38-27b
-#   OpenAI          PAID   openai-gpt54-mini      openai-embed3-small
+#   OpenAI          PAID   openai-gpt6-luna       openai-gpt61-terra     openai-embed3-small
 #   Cerebras        PAID   cerebras-qwen38-27b
 #
 # `openrouter-gemma4-26b-free` IS DELIBERATELY ABSENT, here as in openrouter.yaml.
@@ -37,7 +37,7 @@
 # Measured 2026-09-06. So each engine keeps its OWN route — `aigw-run-<engine>` —
 # and all seven attach to the same Gateway through `parentRefs`. Several HTTPRoutes
 # on one Gateway is ordinary Gateway API, every match here is an exact header
-# value, and all 36 values are distinct, so nothing is ambiguous.
+# value, and all 37 values are distinct, so nothing is ambiguous.
 #
 # IF YOU ADD ALIASES, WATCH THAT CEILING PER ROUTE, not in total. Seven engines at
 # 15 aliases each is fine; one engine at 16 is not. The fullest today are
@@ -706,7 +706,7 @@ spec:
     # same `Backend`, with the body going upstream UNTRANSLATED.
     #
     # It is the better of the two shapes and it is not always available — the
-    # `openai-gpt54-mini-anthropic` rule in openai.yaml has to translate instead, because
+    # `openai-gpt6-luna-anthropic` rule in openai.yaml has to translate instead, because
     # api.openai.com serves no Anthropic route at all. Both satisfy
     # `tests/5_claude_agent_sdk`, which resolves `<alias>-anthropic` at runtime.
     - matches:
@@ -766,10 +766,20 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-gpt54-mini
+              value: openai-gpt6-luna
       backendRefs:
         - name: openai
-          modelNameOverride: gpt-5.4-mini
+          modelNameOverride: gpt-6-luna
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-gpt61-terra
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-6.1-terra
       timeouts:
         request: 10m
     - matches:
@@ -795,9 +805,13 @@ spec:
     # path fails on turn two: it passes `thinking` blocks straight into an OpenAI
     # body, where a `content` part may only be `text` or `image_url`, and the ENGINE
     # answers `400 messages.N.content.str`. OpenAI's own API accepts what Envoy
-    # produces. Verified 2026-09-05, before this rule existed: a one-shot call to
-    # /anthropic/v1/messages on the PLAIN `openai-gpt54-mini` returned a normal Anthropic
-    # message, and `max_tokens` was translated correctly on the way through.
+    # produces. Verified 2026-11-04 on `openai-gpt6-luna-anthropic` and
+    # `openai-gpt61-terra-anthropic`: /anthropic/v1/messages returned a normal Anthropic
+    # message, and Anthropic's `max_tokens` reached OpenAI as `max_completion_tokens`.
+    # BUT A BODY CARRYING `thinking` STILL 400s — `Unknown parameter: 'thinking'`, the
+    # translator passes it through and api.openai.com has no such field (re-measured
+    # 2026-11-04 on openai-gpt6-luna-anthropic; ../../TESTING.md §5.2). Claude Code sends it
+    # unless MAX_THINKING_TOKENS=0.
     #
     # SO WHY A SECOND NAME AT ALL? Because `tests/5_claude_agent_sdk` resolves
     # `<alias>-anthropic` at runtime and refuses to run without it. Keeping the name
@@ -807,10 +821,20 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-gpt54-mini-anthropic
+              value: openai-gpt6-luna-anthropic
       backendRefs:
         - name: openai
-          modelNameOverride: gpt-5.4-mini
+          modelNameOverride: gpt-6-luna
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-gpt61-terra-anthropic
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-6.1-terra
       timeouts:
         request: 10m
   # What lands in the access log above. Without these the token fields are empty.
@@ -858,7 +882,7 @@ spec:
         request: 10m
     # ── The `-anthropic` alias: TRANSLATED, because Cerebras has no Anthropic API ──
     #
-    # SAME SHAPE AS `openai-gpt54-mini-anthropic`, NOT AS THE LOCAL ENGINES. It points at
+    # SAME SHAPE AS `openai-gpt6-luna-anthropic`, NOT AS THE LOCAL ENGINES. It points at
     # the plain `cerebras` backend, and Envoy translates Anthropic in to OpenAI out.
     # There is nothing to pass through TO: `POST https://api.cerebras.ai/v1/messages`
     # answered 404 on 2026-09-28.

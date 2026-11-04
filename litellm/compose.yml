@@ -13,7 +13,7 @@
 #   GATEWAY_ENGINE   all | lms | unsloth | ollama | tei | openrouter | openai | cerebras
 #                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 22 aliases, one gateway.
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 23 aliases, one gateway.
 # Name a single engine instead and only that engine's aliases exist, which is how
 # you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -95,13 +95,13 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one file per engine, plus one that joins them:
     #
-    #   config/all.yaml         22 aliases: everything below         THE DEFAULT
+    #   config/all.yaml         23 aliases: everything below         THE DEFAULT
     #   config/lms.yaml          5 aliases: 4 chat, 1 embedder      free
     #   config/unsloth.yaml      6 aliases: 5 chat, 1 embedder      free
     #   config/ollama.yaml       3 aliases: 2 chat, 1 embedder      free
     #   config/tei.yaml          2 aliases: 1 embedder, 1 reranker  free
     #   config/openrouter.yaml   3 aliases: 3 chat                  PAID
-    #   config/openai.yaml       2 aliases: 1 chat, 1 embedder      PAID
+    #   config/openai.yaml       3 aliases: 2 chat, 1 embedder      PAID
     #   config/cerebras.yaml     1 alias:  1 chat                   PAID
     #
     # Each engine file includes config/settings.yaml for the three settings blocks
@@ -110,7 +110,7 @@ services:
     # files, so the seven model_lists join into one. Verified 2026-09-06 against
     # ghcr.io/berriai/litellm:main-stable — 13 aliases in /v1/models; 14 with
     # cerebras.yaml, 2026-09-28; 23 with tei.yaml and 22 without the Unsloth sidecar,
-    # 2026-10-08.
+    # 2026-10-08; 23 with GPT 6 in place of gpt-5.4-mini, 2026-11-04.
     #
     # A TYPO IS A CLEAN CRASH: the file does not exist and litellm exits saying so.
     # (It was NOT clean before 2026-08-31, when this mounted a single file: compose

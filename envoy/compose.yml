@@ -18,7 +18,7 @@
 #   GATEWAY_ENGINE   all | lms | unsloth | ollama | tei | openrouter | openai | cerebras
 #                    default all
 #
-# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 35 route rules, one
+# `all` IS THE DEFAULT AND SERVES EVERY ENGINE AT ONCE — 37 route rules, one
 # gateway. Name a single engine instead and only that engine's rules exist, which
 # is how you get a gateway that CANNOT reach a paid provider even by mistake.
 #
@@ -65,16 +65,16 @@ services:
     # WHICH ALIASES THIS GATEWAY SERVES, in one filename built from ONE word in
     # .env. config/ carries one self-contained file per engine:
     #
-    #   config/all.yaml         35 rules: everything below       THE DEFAULT
+    #   config/all.yaml         37 rules: everything below       THE DEFAULT
     #   config/lms.yaml         5 aliases: 4 chat, 1 embedder      free
     #   config/unsloth.yaml     6 aliases: 5 chat, 1 embedder      free
     #   config/ollama.yaml      3 aliases: 2 chat, 1 embedder      free
     #   config/tei.yaml         1 alias:  1 embedder               free
     #   config/openrouter.yaml  2 aliases: 2 chat                  PAID
-    #   config/openai.yaml      2 aliases: 1 chat, 1 embedder      PAID
+    #   config/openai.yaml      3 aliases: 2 chat, 1 embedder      PAID
     #   config/cerebras.yaml    1 alias:  1 chat                   PAID
     #
-    # Plus an `-anthropic` rule for every chat alias — 15 in all.yaml.
+    # Plus an `-anthropic` rule for every chat alias — 16 in all.yaml.
     #
     # `aigw run` TAKES ONE FILE PATH — not a directory, not a repeated flag
     # (checked against `aigw run --help`, 2026-09-06) — and Envoy's config has no

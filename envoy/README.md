@@ -185,7 +185,7 @@ One word in `.env` decides what this gateway serves. Compose interpolates from t
 environment first**, then `.env`.
 
 ```bash
-GATEWAY_ENGINE=all        # the default: every engine at once, 35 route rules
+GATEWAY_ENGINE=all        # the default: every engine at once, 37 route rules
 ```
 
 | Variable | Default | Used by |
@@ -248,12 +248,12 @@ holds every one of them.
 
 | `GATEWAY_ENGINE` | Reads | Serves |
 |:--|:--|:--|
-| `all` *(default)* | `config/all.yaml` | **35 route rules** — 20 model aliases and 15 `-anthropic` aliases |
+| `all` *(default)* | `config/all.yaml` | **37 route rules** — 21 model aliases and 16 `-anthropic` aliases |
 | `lms` | that engine's file | 5 aliases plus its 4 `-anthropic` ones |
 | `unsloth` | that engine's file | 6 aliases plus its 5 `-anthropic` ones |
 | `ollama` | that engine's file | 3 aliases plus its 2 `-anthropic` ones |
 | `tei` | that engine's file | 1 alias, the embedder. No `-anthropic`, and no rerank — see above |
-| `openrouter` `openai` `cerebras` | that engine's file | 1–2 aliases plus an `-anthropic` for each chat one, **paid** |
+| `openrouter` `openai` `cerebras` | that engine's file | 1–3 aliases plus an `-anthropic` for each chat one, **paid** |
 
 **`all.yaml` copies the other seven, and that is the price of this gateway.** `aigw run` takes
 **one file path** — not a directory, not a repeated flag; checked against `aigw run --help` on
@@ -299,13 +299,13 @@ machine without committing it:
 GATEWAY_ENGINE=lukas          # reads config/lukas.yaml
 ```
 
-`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **60 route
+`config/lukas.yaml` is that file on this laptop, and `.gitignore` carries it: **65 route
 rules** over every model downloaded in LMStudio and Unsloth Studio, plus the short names,
-the `-anthropic` twins and TEI's embedder. It has no hosted backend at all, so **it cannot spend
-money**.
+the `-anthropic` twins, TEI's embedder and — since 2026-11-04 — the OpenAI route, so **it can
+spend money** when a caller names an `openai-*` alias.
 
-**It needs six `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so 60 rules
-means at least four, the split by engine makes it five, and TEI keeps its own sixth. When you add a model, add it to a route that has room — the ceiling is per route,
+**It needs seven `AIGatewayRoute`s**, for the reason above: 15 aliases per route, so the 60
+local rules mean at least four, the split by engine makes it five, and TEI and OpenAI keep their own. When you add a model, add it to a route that has room — the ceiling is per route,
 not per file, and going over crash-loops aigw before it serves anything.
 
 **`../litellm/config/lukas.yaml` is the same vocabulary for the other gateway**, and neither

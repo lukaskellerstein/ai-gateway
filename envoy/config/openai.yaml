@@ -1,18 +1,21 @@
-# OpenAI — 2 aliases. PAID: EVERY CALL BILLS A REAL ACCOUNT.
+# OpenAI — 3 aliases. PAID: EVERY CALL BILLS A REAL ACCOUNT.
 #
-#   openai-gpt54-mini    gpt-5.4-mini              chat. NO VISION
+#   openai-gpt6-luna     gpt-6-luna                chat. The cheapest tier
+#   openai-gpt61-terra   gpt-6.1-terra             chat. The cheapest 6.1
 #   openai-embed3-small   text-embedding-3-small    embeddings, 1536 dims
+#
+# GPT 6 OR NEWER ONLY, by the owner's choice (2026-11-04): `openai-gpt54-mini` was
+# removed that day. THERE IS NO `gpt-6.1-luna` (404 on 2026-11-04), so Luna comes
+# from GPT 6. ../../litellm/config/openai.yaml carries the prices and the measurement.
 #
 # Selecting this engine is the only way this gateway can spend money, and there
 # is no fallback anywhere here.
 #
-# SEND `max_completion_tokens`, NOT `max_tokens`. The gpt-5 family rejects
-# `max_tokens` outright. ../../litellm translates one to the other; this gateway
-# forwards the parameter as sent, so the same body that works on 24000 400s here.
-#
-# `openai-gpt54-mini` HAS NO VISION, so it is not a drop-in for the local chat aliases:
-# ../tests/03_multimodal.py cannot pass against it, and `common.py` maps this
-# engine to no default alias for that reason.
+# SEND `max_completion_tokens`, NOT `max_tokens`. gpt-6-luna and gpt-6.1-terra
+# reject `max_tokens` outright (2026-11-04), as the gpt-5 family did. This gateway
+# forwards the parameter as sent, so a body carrying it 400s here. LiteLLM on 24000
+# rewrites it from v1.102.0 on (1.108.0 since 2026-11-04) — its openai.yaml has the
+# measurement.
 #
 # REQUIRES OPENAI_API_KEY in the shell. A blank value substitutes empty and every
 # call 401s.
@@ -120,10 +123,20 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-gpt54-mini
+              value: openai-gpt6-luna
       backendRefs:
         - name: openai
-          modelNameOverride: gpt-5.4-mini
+          modelNameOverride: gpt-6-luna
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-gpt61-terra
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-6.1-terra
       timeouts:
         request: 10m
     - matches:
@@ -149,9 +162,13 @@ spec:
     # path fails on turn two: it passes `thinking` blocks straight into an OpenAI
     # body, where a `content` part may only be `text` or `image_url`, and the ENGINE
     # answers `400 messages.N.content.str`. OpenAI's own API accepts what Envoy
-    # produces. Verified 2026-09-05, before this rule existed: a one-shot call to
-    # /anthropic/v1/messages on the PLAIN `openai-gpt54-mini` returned a normal Anthropic
-    # message, and `max_tokens` was translated correctly on the way through.
+    # produces. Verified 2026-11-04 on `openai-gpt6-luna-anthropic` and
+    # `openai-gpt61-terra-anthropic`: /anthropic/v1/messages returned a normal Anthropic
+    # message, and Anthropic's `max_tokens` reached OpenAI as `max_completion_tokens`.
+    # BUT A BODY CARRYING `thinking` STILL 400s — `Unknown parameter: 'thinking'`, the
+    # translator passes it through and api.openai.com has no such field (re-measured
+    # 2026-11-04 on openai-gpt6-luna-anthropic; ../../TESTING.md §5.2). Claude Code sends it
+    # unless MAX_THINKING_TOKENS=0.
     #
     # SO WHY A SECOND NAME AT ALL? Because `tests/5_claude_agent_sdk` resolves
     # `<alias>-anthropic` at runtime and refuses to run without it. Keeping the name
@@ -161,10 +178,20 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: openai-gpt54-mini-anthropic
+              value: openai-gpt6-luna-anthropic
       backendRefs:
         - name: openai
-          modelNameOverride: gpt-5.4-mini
+          modelNameOverride: gpt-6-luna
+      timeouts:
+        request: 10m
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: openai-gpt61-terra-anthropic
+      backendRefs:
+        - name: openai
+          modelNameOverride: gpt-6.1-terra
       timeouts:
         request: 10m
   # What lands in the access log above. Without these the token fields are empty.

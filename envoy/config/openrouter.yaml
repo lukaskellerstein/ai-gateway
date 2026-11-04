@@ -151,7 +151,7 @@ spec:
     # same `Backend`, with the body going upstream UNTRANSLATED.
     #
     # It is the better of the two shapes and it is not always available — the
-    # `openai-gpt54-mini-anthropic` rule in openai.yaml has to translate instead, because
+    # `openai-gpt6-luna-anthropic` rule in openai.yaml has to translate instead, because
     # api.openai.com serves no Anthropic route at all. Both satisfy
     # `tests/5_claude_agent_sdk`, which resolves `<alias>-anthropic` at runtime.
     - matches:
