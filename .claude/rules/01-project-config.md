@@ -88,7 +88,7 @@ reads its **own** `.env`:
 | `AIGW_DEBUG` | `false`, `true` — **never empty** | `false` | per-request logging | `envoy/` |
 
 **`all` IS THE DEFAULT AND IS A REAL FILE**, `config/all.yaml`, not a list you write. It
-serves every engine at once: 22 aliases on LiteLLM, 35 route rules on Envoy — the latter split
+serves every engine at once: 23 aliases on LiteLLM, 37 route rules on Envoy — the latter split
 across **seven `AIGatewayRoute`s**, one per engine, because a single route caps at 15 aliases
 (`HTTPRoute.spec.rules` allows 16 and aigw uses one). The two files are
 built differently and the difference matters when you add an alias:
@@ -153,7 +153,7 @@ Callers name an **alias**, never a model — the model behind a name is expected
 | Gemma 4 12B | `lms-gemma4-12b` | `unsloth-gemma4-12b` | — | — | — | — | — |
 | Gemma 4 26B | `lms-gemma4-26b` | `unsloth-gemma4-26b` · `unsloth-gemma4-26b-fast` | `ollama-gemma4-26b` | — | `openrouter-gemma4-26b` · `openrouter-gemma4-26b-free` | — | — |
 | Qwen 3.8 27B | `lms-qwen38-27b` | `unsloth-qwen38-27b` | — | — | `openrouter-qwen38-27b` | — | `cerebras-qwen38-27b` |
-| other chat | — | — | — | — | — | `openai-gpt54-mini` | — |
+| GPT 6 | — | — | — | — | — | `openai-gpt6-luna` · `openai-gpt61-terra` | — |
 | embed | `lms-nomic-embed` | `unsloth-nomic-embed` | `ollama-nomic-embed` | `tei-nomic-embed` | — | `openai-embed3-small` | — |
 | rerank | — | — | — | `tei-bge-reranker-m3` — **LiteLLM only** | — | — | — |
 | costs | free | free | free | free | **paid** | **paid** | **paid** |
@@ -167,15 +167,15 @@ selects **one column**, and the rows are the point: the same weights sit across 
 changing the word and re-running that project's `tests/` measures the engine and nothing else.
 A comparison run still wants one column, because `all` leaves the caller free to pick.
 
-**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — FIFTEEN OF THEM, ONE PER CHAT
+**ENVOY ADDS `-anthropic` NAMES THAT LITELLM DOES NOT HAVE — SIXTEEN OF THEM, ONE PER CHAT
 ALIAS** (`lms-gemma4-26b-anthropic`, `openrouter-qwen38-27b-anthropic`, …). They are the SAME
-model on the SAME engine. Thirteen of the fifteen reach an `Anthropic`-schema `AIServiceBackend`, so
+model on the SAME engine. Thirteen of the sixteen reach an `Anthropic`-schema `AIServiceBackend`, so
 the body is NOT translated — the only way Claude Code can hold a conversation through Envoy.
-**`openai-gpt54-mini-anthropic` and `cerebras-qwen38-27b-anthropic` are the exceptions**:
+**The two `openai-*-anthropic` aliases and `cerebras-qwen38-27b-anthropic` are the exceptions**:
 neither vendor serves `/v1/messages` (Cerebras answered 404, 2026-09-28), so those rules point
 at the plain `OpenAI`-schema backend and still translate. They are plumbing, not vocabulary:
 LiteLLM does not need them, and nothing but `envoy/tests/5_claude_agent_sdk` calls them.
-**20 model aliases + 15 `-anthropic` = the 35 rules in `envoy/config/all.yaml`.** Full note:
+**21 model aliases + 16 `-anthropic` = the 37 rules in `envoy/config/all.yaml`.** Full note:
 `envoy/README.md`.
 
 **`openrouter-gemma4-26b-free` is deliberately absent on 26000.** Envoy has no equivalent of

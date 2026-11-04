@@ -96,20 +96,24 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   names ONE FILE — `<project>/config/<word>.yaml` — and `all.yaml` is a real file, not a list
   you write. LiteLLM's is **eight `include:` lines that copy nothing**; Envoy's **COPIES the seven
   engine files**, because `aigw run` takes one path and Envoy has no `include:` mechanism
-  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 22 aliases on `all`, Envoy 35
+  (checked against `aigw run --help`, 2026-09-06). LiteLLM serves 23 aliases on `all`, Envoy 37
   route rules (Cerebras added 2026-09-28, Qwen 3.8 on three more engines 2026-09-29, Gemma 4
-  12B on `lms` and `unsloth` 2026-10-03, `unsloth-gemma4-26b-fast` 2026-10-04, TEI 2026-10-08).
+  12B on `lms` and `unsloth` 2026-10-03, `unsloth-gemma4-26b-fast` 2026-10-04, TEI 2026-10-08,
+  GPT 6 in place of `openai-gpt54-mini` 2026-11-04 — **OpenAI aliases are GPT 6 or newer
+  only**, by the user's choice; never add an older one back).
 - **`GATEWAY_ENGINE` NAMES ANY FILE IN `config/`, AND TWO OF THEM ARE GITIGNORED.**
   `<project>/config/lukas.yaml` is the user's PERSONAL config — every chat and embedding model
-  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **49 aliases on
-  LiteLLM, 60 route rules on Envoy** (six `AIGatewayRoute`s, 15-alias cap; `lms-1`,
-  `unsloth-1` and `unsloth-2` are full; TEI's own since 2026-10-08). No Ollama, no
-  hosted engine, and none of Unsloth's four image models — so **it cannot spend money**, and a
-  chat route that could not work was never written. **YOU WILL BE ASKED TO ADD MODELS TO IT**
+  downloaded in LMStudio and Unsloth Studio on this laptop, built 2026-09-08. **52 aliases on
+  LiteLLM, 65 route rules on Envoy** (seven `AIGatewayRoute`s, 15-alias cap; `lms-1`,
+  `unsloth-1` and `unsloth-2` are full; TEI's own since 2026-10-08, OpenAI's since
+  2026-11-04). No Ollama, no OpenRouter, and none of Unsloth's four image models. **SINCE 2026-11-04 IT CAN SPEND MONEY** —
+  it carries the three `openai-*` aliases, asked for — and a chat route that could not work was
+  never written. **YOU WILL BE ASKED TO ADD MODELS TO IT**
   ("I downloaded a new model in unsloth"): that is TWO edits, `litellm/config/lukas.yaml` and
   `envoy/config/lukas.yaml`, and on Envoy the new rule must go in a route with room. Both files
   are in `.gitignore` and **must never be committed** — they describe one disk. LiteLLM's
-  includes `settings.yaml`, `lms.yaml`, `unsloth.yaml` and `tei.yaml`, so the short names keep answering;
+  includes `settings.yaml`, `lms.yaml`, `unsloth.yaml`, `tei.yaml` and `openai.yaml`, so the
+  short names keep answering;
   Envoy's copies those rules, as `all.yaml` does. **A SECOND QUANT OF A REPO UNSLOTH ALREADY
   SERVES CHANGES WHAT A BARE NAME LOADS** (2026-10-02): Unsloth picks the first quant on disk in
   its `GGUF_QUANT_PREFERENCE`, which starts at `UD-Q4_K_XL`, so downloading that file moved
@@ -153,7 +157,7 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   why. The shared test suite that used to catch cross-gateway drift went with the split. Do not
   "fix" this by making one project read another's files, or by generating one of them.
 - **Every alias names its engine AND its model** — `<engine>-<model>-<size>`:
-  `lms-gemma4-26b`, `unsloth-qwen38-27b`, `openai-gpt54-mini`, `ollama-nomic-embed`. The
+  `lms-gemma4-26b`, `unsloth-qwen38-27b`, `openai-gpt6-luna`, `ollama-nomic-embed`. The
   engine is one of `lms`, `unsloth`, `ollama`, `tei`, `openrouter`, `openai`, `cerebras`. There is no
   engine-neutral name (`local` was removed), no capability name (`cheap`, `standard`,
   `frontier` were removed) and, **since 2026-09-29, no size-only name** (`lms-26b` and the
@@ -202,10 +206,10 @@ read-only) · [`lsp.md`](rules/lsp.md) (no `lsp-*` plugin here, so use `grep`) �
   `reasoning_content` on some replies and not others. **The cure is `<alias>-anthropic` on an
   `Anthropic`-schema `AIServiceBackend`**, present for all three local engines AND for
   `openrouter`: every one serves `POST /v1/messages` natively, so nothing is translated and
-  nothing is mangled. `openai-gpt54-mini-anthropic` and `cerebras-qwen38-27b-anthropic` EXIST
+  nothing is mangled. The `openai-*-anthropic` and `cerebras-qwen38-27b-anthropic` rules EXIST
   BUT ARE NOT THIS — neither vendor serves `/v1/messages`, so those rules point at the plain
-  `OpenAI`-schema backend and still translate. **Fifteen `-anthropic` rules in all, one per chat
-  alias**, which is why `envoy/config/all.yaml` has 35 and not 20. `tests/5_claude_agent_sdk`
+  `OpenAI`-schema backend and still translate. **Sixteen `-anthropic` rules in all, one per chat
+  alias**, which is why `envoy/config/all.yaml` has 37 and not 21. `tests/5_claude_agent_sdk`
   RESOLVES THAT ALIAS AND REFUSES TO RUN WITHOUT IT.
   **`MAX_THINKING_TOKENS=0` IS NO LONGER NEEDED** — it existed for `400 thinking.type` from
   the same translator, and the pass-through path accepts the field as sent.

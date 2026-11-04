@@ -91,7 +91,7 @@ newer build", and none of it can be answered without them.**
 
 | Component | Identifier | Notes |
 |:--|:--|:--|
-| **LiteLLM** | **1.99.1** | image `ghcr.io/berriai/litellm:main-stable`, built **2026-09-02**, digest `sha256:2d0f1079…`. Upgraded from 1.95.0 (built 2026-08-02) on 2026-09-05 |
+| **LiteLLM** | **1.108.0** | image `ghcr.io/berriai/litellm:main-stable`, built **2026-11-04**, digest `sha256:b3d32691…`. Upgraded from 1.99.1 (built 2026-09-02, digest `sha256:2d0f1079…`) on 2026-11-04, so GPT 6 takes `max_tokens`; the old image is kept as `:rollback-1.99.1`. Before that, from 1.95.0 on 2026-09-05 |
 | **Envoy AI Gateway** | **`dev`** — see below | image `docker.io/envoyproxy/ai-gateway-cli:latest`, built **2026-08-28**, digest `sha256:f5702fe9dc7ce75ba79cfc2de64d61943e0994d7d071e4e33ca00dff48952c86` |
 | Nearest aigw release | **v1.1.0**, 2026-08-21 | the last tagged release before that image was built |
 | `claude` CLI | whatever npm has | `npm install -g @anthropic-ai/claude-code` |
@@ -131,7 +131,8 @@ unchanged**.
 | `tei-nomic-embed` | `nomic-ai/nomic-embed-text-v1.5` | `openai/` | TEI, host :27000 |
 | `tei-bge-reranker-m3` | `BAAI/bge-reranker-v2-m3` | `huggingface/` | TEI, host :27001 — **LiteLLM only**, §5.8 |
 | `openrouter-gemma4-26b` | `google/gemma-4-26b-a4b-it` | `openrouter/` | OpenRouter — **paid** |
-| `openai-gpt54-mini` | `gpt-5.4-mini` | `openai/` | OpenAI — **paid**, **HAS VISION** |
+| `openai-gpt6-luna` | `gpt-6-luna` | `openai/` | OpenAI — **paid**, since 2026-11-04 |
+| `openai-gpt61-terra` | `gpt-6.1-terra` | `openai/` | OpenAI — **paid**, since 2026-11-04 |
 | `openai-embed3-small` | `text-embedding-3-small` | `openai/` | OpenAI — **paid** |
 
 **THE PROVIDER PREFIX COLUMN IS NOT DECORATION.** LiteLLM routes on it, and `/v1/messages`
@@ -153,6 +154,10 @@ behaves differently for `openai/` than for the others — §6.1.
 | **unsloth** | ✅ **7/7** | ✅ **7/7** | `unsloth-gemma4-e4b` | all seven folders | 2026-09-05 00:21 |
 | **openrouter** | ✅ **7/7** | ✅ **7/7** | `openrouter-gemma4-26b` | all seven folders | 2026-09-05 02:05 |
 | **openai** | ✅ **7/7** | **5/7** — §5.2 and §5.3 | `openai-gpt54-mini` | all seven folders | 2026-09-05 02:10 |
+
+`openai-gpt54-mini` was removed on 2026-11-04, so the `openai` row is history. The GPT 6 aliases
+that replaced it have not been through the seven folders — `litellm/config/openai.yaml` has what
+was measured.
 
 **THE LOCAL MATRIX IS COMPLETE AND GREEN — six cells, 7/7 each, 42 folder-runs**, in one
 uninterrupted pass on LiteLLM 1.99.1, 00:06 to 00:27, with nothing else touching the machine.
@@ -239,6 +244,7 @@ in §10.
 | Envoy `/v1/responses` | works with Codex 0.147 and 0.155.1 (folder 6 passes, re-run 2026-09-21) |
 | `openrouter-gemma4-26b` through Codex | called an MCP tool correctly on the first try — Envoy 2026-09-04; **both gateways 2026-09-23**, with the §6.11 key, asserted by `04_mcp.py` |
 | LiteLLM upgrade 1.95.0 → 1.99.1 | no pending migrations, no data loss, **did not fix §6.1 on its own** |
+| LiteLLM upgrade 1.99.1 → 1.108.0, 2026-11-04 | 63 migrations (157 → 220), no data loss — 9 keys and 46565 spend rows before and after, every provider key the same. **Fixed GPT 6**: chat `max_tokens`, `/v1/messages` with `thinking`, and OpenCode, all 400 on 1.99.1. `run_all.py` 6/7 on `lms-gemma4-e4b`: folder 6 hit LMStudio's 8192 JIT context — the SAME engine error on 1.99.1, measured on a copy of the folder — and passed on `unsloth-gemma-4-26b-qat` |
 
 ---
 

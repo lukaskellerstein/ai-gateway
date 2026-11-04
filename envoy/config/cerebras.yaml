@@ -125,7 +125,7 @@ spec:
         request: 10m
     # ── The `-anthropic` alias: TRANSLATED, because Cerebras has no Anthropic API ──
     #
-    # SAME SHAPE AS `openai-gpt54-mini-anthropic`, NOT AS THE LOCAL ENGINES. It points at
+    # SAME SHAPE AS `openai-gpt6-luna-anthropic`, NOT AS THE LOCAL ENGINES. It points at
     # the plain `cerebras` backend, and Envoy translates Anthropic in to OpenAI out.
     # There is nothing to pass through TO: `POST https://api.cerebras.ai/v1/messages`
     # answered 404 on 2026-09-28.
